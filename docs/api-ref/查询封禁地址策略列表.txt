@@ -1,0 +1,669 @@
+/api/xdr/v1/responses/blockiprule/list
+查询封禁地址策略列表
+更新时间：2024-06-13 10:08:52
+OpenAPI：
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+startTimestamp
+[long]
+-	起始时间	1679315129	收缩	
+参数限制：
+64位时间戳,时间范围不传默认返回最近7天的数据
+数据字典：
+1679315129	| [long]
+|
+默认为最近7天，例如系统时间为2023-03-20 20:30:00，则起始时间为2023-03-13 20:30:00，时间戳为1678710600
+| 默认值
+参数示例：
+1679315129
+最小长度：
+最大长度：
+最小值：
+最大值：
+endTimestamp
+[long]
+-	结束时间	1679327999	收缩	
+参数限制：
+64位时间戳， 时间范围不传默认返回最近7天的数据
+数据字典：
+1679327999	| [long]
+|
+默认为当天结束时间，例如系统时间为2023-03-20 20:30:00，则结束时间为2023-03-20 23:59:59，时间戳为1679327999
+| 默认值
+参数示例：
+1679327999
+最小长度：
+最大长度：
+最小值：
+最大值：
+pageSize
+[int]
+是	页面大小	10	收缩	
+参数限制：
+枚举值 10,20,50,100
+数据字典：
+10	| [int]
+|
+每页展示封禁地址策略条数
+| 默认值
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+page
+[int]
+是	页码	1	收缩	
+参数限制：
+最小值1，默认1
+数据字典：
+1	| [int]
+|
+页码
+| 默认值
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+status
+[array]
+-	封禁状态列表	[block success,block failed,unblocked]	收缩	
+参数限制：
+传null或者[]表示全部block success已封禁, block failed封禁失败, unblocked已解封, part block success部分封禁成功, part unblock success部分解封成功, block ip in deal封禁中, unblock ip in deal解封中
+数据字典：
+[]	| [array]
+|
+表示全部
+| 默认值
+[block success]	| [array]
+|
+已封禁
+[block failed]	| [array]
+|
+封禁失败
+[unblocked]	| [array]
+|
+已解封
+[block success,block failed,unblocked]	| [array]
+|
+已封禁，封禁失败, 已解封
+参数示例：
+[block success,block failed,unblocked]
+最小长度：
+最大长度：
+最小值：
+最大值：
+ΘsortInfo
+[object]
+-	排序信息		收缩	
+最小长度：
+最大长度：
+最小值：
+最大值：
+name
+[string]
+-	排序字段名字	createUser	收缩	
+参数限制：
+枚举：[ createUser, createTime, updateTime ]，不传默认 updateTime
+数据字典：
+createUser	| [string]
+|
+处置人
+| 默认值
+createTime	| [string]
+|
+创建时间
+updateTime	| [string]
+|
+更新时间
+参数示例：
+createUser
+最小长度：
+最大长度：
+最小值：
+最大值：
+sort
+[string]
+-	排序方式	asc	收缩	
+参数限制：
+枚举值：desc降序， asc升序，不传默认desc
+数据字典：
+desc	| [string]
+|
+降序
+| 默认值
+asc	| [string]
+|
+升序
+参数示例：
+asc
+最小长度：
+最大长度：
+最小值：
+最大值：
+ΘsearchInfos
+[array]
+-	搜索信息			
+fieldName
+[string]
+-	搜索字段	name	收缩	
+参数限制：
+枚举：[ name,createUser,reason, view ]name:规则名称 createUser:处置人 reason :备注 view:封禁资产 这几个字段都是模糊搜索
+数据字典：
+name	| [string]
+|
+规则名称
+| 默认值
+createUser	| [string]
+|
+处置人
+reason	| [string]
+|
+备注
+view	| [string]
+|
+封禁资产
+dealId	| [string]
+|
+封禁返回的taskId
+source	| [string]
+|
+封禁来源，比如mss，gpt
+参数示例：
+name
+最小长度：
+最大长度：
+最小值：
+最大值：
+fieldValue
+[string]
+-	搜索字段的值	test1	收缩	
+参数限制：
+正则："^[^*<>()\"'%\\[\\]+&\\\\]*$" ，最大长度128
+参数示例：
+test1
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	状态码	Success	收缩	
+参数示例：
+Success
+最小长度：
+最大长度：
+最小值：
+最大值：
+message
+[string]
+是	响应消息	OK	收缩	
+参数限制：
+OK
+参数示例：
+OK
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θdata
+[object]
+-				
+Θitem
+[array]
+是				
+Θdevices
+[array]
+-	联动设备列表			
+devId
+[int]
+-	设备ID	123456	收缩	
+参数示例：
+123456
+devType
+[string]
+-	设备类型	AF	收缩	
+参数限制：
+枚举值 [AF,SIP,EDR,MIRROR,STA,CWPP,EDR LITE,LOCAL XDR,SIR，SAAS EDR LITE，SAAS EDR]
+参数示例：
+AF
+最小长度：
+最大长度：
+最小值：
+最大值：
+devVersion
+[string]
+-	设备版本	8.0.15	收缩	
+参数示例：
+8.0.15
+devName
+[string]
+-	设备名称	AF_001	收缩	
+参数示例：
+AF_001
+devIp
+[string]
+-	设备ip	1.2.3.4	收缩	
+参数示例：
+1.2.3.4
+最小长度：
+最大长度：
+最小值：
+最大值：
+failMessage
+[string]
+-	失败信息	非url格式	收缩	
+参数示例：
+非url格式
+最小长度：
+最大长度：
+最小值：
+最大值：
+ΘblockIpRule
+[object]
+-	封禁实体			
+type
+[string]
+-	封禁实体类型	SRC_IP	收缩	
+参数限制：
+封禁实体类型 SRC_IP，DST_IP, SRC_DST_IP, DNS, URL
+参数示例：
+SRC_IP
+最小长度：
+最大长度：
+最小值：
+最大值：
+mode
+[string]
+-	封禁实体模式	in	收缩	
+参数限制：
+正则 "^[^*<>\"'%\\[\\]+&\\\\]*$"
+参数示例：
+in
+最小长度：
+最大长度：
+最小值：
+最大值：
+view
+[array]
+-	封禁实体内容展示用	["1.2.3.4","1.3.2.1"]	收缩	
+参数示例：
+["1.2.3.4","1.3.2.1"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+intelligenceTag
+[string]
+-	威胁情报标签，只有在端侧封禁该字段才可能有值	[“tag1”, "tag2"]	收缩	
+参数示例：
+[“tag1”, "tag2"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatLevel
+[array]
+-	威胁等级，只有在端侧封禁该字段才可能有值	1	收缩	
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+direction
+[int]
+-	封锁类型 , 只有在端侧封禁该字段才可能有值	1	收缩	
+参数限制：
+枚举 1：入站封锁 2：出站封锁 3：入出站全封锁
+数据字典：
+1	| [int]
+|
+入站封锁
+| 默认值
+2	| [int]
+|
+出站封锁
+3	| [int]
+|
+入出站全封锁
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+plugPort
+[array]
+-	封禁端口，只有在端侧封禁该字段才可能有值	["any"]	收缩	
+参数示例：
+["any"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+id
+[object]
+是	封禁规则ID	65600648b841df786b7ebd39	收缩	
+参数示例：
+65600648b841df786b7ebd39
+name
+[string]
+-	规则名称	test	收缩	
+参数示例：
+test
+blockIpTimeRange
+[string]
+-	封禁时长	2023-11-24 10:11:11至2023-12-09 10:11:11	收缩	
+参数示例：
+2023-11-24 10:11:11至2023-12-09 10:11:11
+status
+[string]
+-	封禁状态	block success	收缩	
+参数限制：
+block success已封禁, block failed封禁失败, unblocked已解封, part block success部分封禁成功, part unblock success部分解封成功, block ip in deal封禁中, unblock ip in deal解封中
+数据字典：
+block success	| [int]
+|
+已封禁
+| 默认值
+block failed	| [int]
+|
+封禁失败
+unblocked	| [int]
+|
+已解封
+part block success	| [int]
+|
+部分封禁成功
+part unblock success	| [int]
+|
+部分解封成功
+block ip in dea	| [int]
+|
+封禁中
+unblock ip in deal	| [int]
+|
+解封中
+参数示例：
+block success
+最小长度：
+最大长度：
+最小值：
+最大值：
+blockIpMethod
+[string]
+-	封禁方式	网侧	收缩	
+参数限制：
+枚举：[ 网侧， 端侧]
+参数示例：
+网侧
+最小长度：
+最大长度：
+最小值：
+最大值：
+createTime
+[long]
+-	创建时间	1679315129	收缩	
+参数限制：
+时间戳
+参数示例：
+1679315129
+最小长度：
+最大长度：
+最小值：
+最大值：
+updateTime
+[long]
+-	最新封禁时间	1679315129	收缩	
+参数限制：
+时间戳
+参数示例：
+1679315129
+最小长度：
+最大长度：
+最小值：
+最大值：
+reason
+[string]
+-	备注	禁了	收缩	
+参数示例：
+禁了
+最小长度：
+最大长度：
+最小值：
+最大值：
+incidentName
+[string]
+-	关联事件名称	感染drivelife家族挖矿	收缩	
+参数示例：
+感染drivelife家族挖矿
+最小长度：
+最大长度：
+最小值：
+最大值：
+alertName
+[string]
+-	关联告警名称	感染wannacry家族勒索软件	收缩	
+参数示例：
+感染wannacry家族勒索软件
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeType
+[string]
+-	封禁时长类型	forever	收缩	
+参数限制：
+枚举：1-forever-永久封禁，2-temporary-临时封禁
+参数示例：
+forever
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeValue
+[long]
+-	封禁时长	10	收缩	
+参数限制：
+当timeUnit 是 d 时，最小1，最大15，当timeUnit 是h时，最小是1，最大是360，当timeUnit时m时，最小是3，最大是21600
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeUnit
+[string]
+-	时间单位	d	收缩	
+参数限制：
+枚举：d天，h小时，m分钟
+数据字典：
+d	| [string]
+|
+天
+| 默认值
+h	| [string]
+|
+小时
+m	| [string]
+|
+分钟
+参数示例：
+d
+最小长度：
+最大长度：
+最小值：
+最大值：
+blockIpTimeEnd
+[long]
+-	封禁结束时间	1679315129	收缩	
+参数限制：
+时间戳
+参数示例：
+1679315129
+最小长度：
+最大长度：
+最小值：
+最大值：
+createUser
+[string]
+-	处置人	admin	收缩	
+参数示例：
+admin
+oprType
+[string]
+-	操作类型	1	收缩	
+参数限制：
+操作类型 1-封禁，2-解封
+数据字典：
+1	| [string]
+|
+封禁
+| 默认值
+2	| [string]
+|
+解封
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+total
+[int]
+-	封禁地址策略总数	1	收缩	
+参数示例：
+1
+pageSize
+[int]
+-	页面大小	10	收缩	
+参数限制：
+枚举值 10,50,100
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+page
+[int]
+-	当前页码	1	收缩	
+参数限制：
+最小值1，默认1
+数据字典：
+1	| [int]	| 默认值
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/responses/blockiprule/list
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"OK",
+    "data":Θ{
+        "total":2,
+        "page":1,
+        "pageSize":10,
+        "item":Θ[
+            Θ{
+                "id":"ObjectID("65600648b841df786b7ebd39")",
+                "name":"test",
+                "blockIpTimeRange":"2023-11-24 10:11:11至2023-12-09 10:11:11",
+                "status":"unblocked",
+                "blockIpMethod":"网侧",
+                "createTime":1700791871,
+                "updateTime":1700791968,
+                "reason":"",
+                "incidentName":"test",
+                "alertName":"",
+                "timeType":"forever",
+                "timeValue":0,
+                "timeUnit":"",
+                "blockIpTimeEnd":0,
+                "createUser":"admin",
+                "devices":Θ[
+                    Θ{
+                        "devId":9,
+                        "devType":"AF",
+                        "devName":"AF_AUTO",
+                        "devVersion":"8.0.85",
+                        "devIp":"",
+                        "failMessage":""
+                    }
+                ],
+                "blockIpRule":Θ{
+                    "type":"DNS",
+                    "mode":"in",
+                    "view":Θ[
+                        "baidu222.com"
+                    ]
+                },
+                "oprType":2,
+                "plugPort":null,
+                "direction":0,
+                "threatLevel":0,
+                "intelligenceTag":null
+            },
+            Θ{
+                "id":"ObjectID("656698a87f0d6e11c8d61dc6")",
+                "name":"postman_edr_t1_121.33.44.112",
+                "blockIpTimeRange":"2023-11-29 09:49:25至2023-12-14 09:49:25",
+                "status":"block success",
+                "blockIpMethod":"端侧",
+                "createTime":1701222565,
+                "updateTime":1701222582,
+                "reason":"",
+                "incidentName":"",
+                "alertName":"",
+                "timeType":"temporary",
+                "timeValue":15,
+                "timeUnit":"d",
+                "blockIpTimeEnd":1702518565,
+                "createUser":"admin",
+                "devices":Θ[
+                    Θ{
+                        "devId":19,
+                        "devType":"EDR",
+                        "devName":"",
+                        "devVersion":"",
+                        "devIp":"",
+                        "failMessage":""
+                    }
+                ],
+                "blockIpRule":Θ{
+                    "type":"DST_IP",
+                    "mode":"in",
+                    "view":Θ[
+                        "121.33.44.112"
+                    ]
+                },
+                "oprType":1,
+                "plugPort":Θ[
+                    "any"
+                ],
+                "direction":0,
+                "threatLevel":0,
+                "intelligenceTag":null
+            }
+        ]
+    }
+}

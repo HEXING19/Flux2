@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flux 智能安全运营平台</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  </head>
+  <body>
+    <canvas id="particleCanvas"></canvas>
+    <div class="noise-layer"></div>
+
+    <main class="root-shell">
+      <section id="landingView" class="landing-view">
+        <div class="landing-left">
+          <p class="badge">Flux Command Center</p>
+          <h1>
+            让安全运营从告警堆积<br />
+            进入<span>实时决策闭环</span>
+          </h1>
+          <p class="subtitle">面向 SOC 的智能执行台: 自然语言驱动检索、研判、审批与处置，在一个界面内完成全链路动作。</p>
+
+          <div class="signal-row">
+            <span>低延迟联动</span>
+            <span>可审计审批</span>
+            <span>自动化编排</span>
+            <span>多源证据汇聚</span>
+          </div>
+
+          <section class="status-board">
+            <header>
+              <h3>运行态势</h3>
+              <p>Control Plane</p>
+            </header>
+            <div class="metric-grid">
+              <article>
+                <h4>事件闭环效率</h4>
+                <p>查询到处置触发链路最短化，减少手工跳转。</p>
+              </article>
+              <article>
+                <h4>策略执行可追溯</h4>
+                <p>高危动作默认二次确认，并沉淀审计记录。</p>
+              </article>
+              <article>
+                <h4>流程自动推进</h4>
+                <p>支持定时工作流与人工审批回路联动。</p>
+              </article>
+              <article>
+                <h4>统一结果呈现</h4>
+                <p>文本、表格、图形视图共享同一协议渲染。</p>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <div class="landing-right">
+          <section class="hero-card command-deck" id="loginSection">
+            <div class="deck-head">
+              <div>
+                <h2>连接你的 XDR 控制面</h2>
+                <p class="section-note">认证通过后即可进入智能安全对话主工作区。</p>
+              </div>
+              <span class="deck-dot"></span>
+            </div>
+            <form id="loginForm" class="grid-form">
+              <label>平台地址<input type="text" id="baseUrl" placeholder="例如 https://10.5.41.194" required /></label>
+              <label>联动码<input type="password" id="authCode" placeholder="优先使用联动码" /></label>
+              <label>Access Key<input type="text" id="accessKey" placeholder="可选，AK/SK 二选一" /></label>
+              <label>Secret Key<input type="password" id="secretKey" placeholder="可选，AK/SK 二选一" /></label>
+              <label class="checkbox-line"><input type="checkbox" id="verifySsl" /> 校验 SSL 证书</label>
+              <div class="action-row">
+                <button type="button" id="probeLogin" class="secondary-btn">连通性探测</button>
+                <button type="submit" class="primary-btn">登录并进入工作台</button>
+              </div>
+              <p id="loginProbeResult" class="hint"></p>
+              <p id="loginResult" class="hint"></p>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="workspaceView" class="workspace-view hidden">
+        <header class="workspace-header panel">
+          <div>
+            <p class="badge">Flux · XDR</p>
+            <h2>安全运营工作台</h2>
+            <p id="authStatusText" class="section-note"></p>
+          </div>
+          <div class="action-row">
+            <button id="openSettingsBtn" class="secondary-btn">系统设置</button>
+            <button id="logoutBtn" class="secondary-btn">退出到登录页</button>
+          </div>
+        </header>
+
+        <section class="workspace-main">
+          <article class="panel chat-panel chat-panel-wide">
+            <header>
+              <h2>智能安全对话</h2>
+              <button id="openWorkflowPanel" class="secondary-btn">流程面板</button>
+            </header>
+            <div id="chatStream" class="chat-stream"></div>
+            <form id="chatForm" class="chat-input">
+              <input type="text" id="chatMessage" placeholder="例如：查询最近三天高危事件；把前两个标记为已处置" />
+              <button type="submit">发送指令</button>
+            </form>
+          </article>
+        </section>
+
+        <button id="workflowFab" class="workflow-fab" type="button" aria-label="打开流程编排面板">流程</button>
+
+        <aside id="workflowDrawer" class="workflow-drawer hidden" aria-hidden="true">
+          <header>
+            <h2>自动化流程编排</h2>
+            <button id="closeWorkflowPanel" class="secondary-btn" type="button">关闭</button>
+          </header>
+          <form id="workflowForm" class="grid-form">
+            <label>流程名称<input type="text" id="wfName" value="每日高危闭环" required /></label>
+            <label>Cron 表达式<input type="text" id="wfCron" value="0 9 * * *" required /></label>
+            <label>事件等级（逗号分隔）<input type="text" id="wfLevels" value="3,4" /></label>
+            <label class="checkbox-line"><input type="checkbox" id="wfApproval" checked /> 需要人工审批</label>
+            <label>Webhook 地址<input type="text" id="wfWebhook" placeholder="企业微信/钉钉机器人地址" /></label>
+            <div class="action-row">
+              <button type="button" id="saveWorkflow">保存流程</button>
+              <button type="button" id="runWorkflow" class="secondary-btn">立即执行流程</button>
+            </div>
+            <div class="action-row">
+              <button type="button" id="refreshApprovals" class="secondary-btn">刷新审批列表</button>
+            </div>
+            <p id="wfResult" class="hint"></p>
+          </form>
+          <div id="workflowList" class="list-box"></div>
+          <div id="approvalList" class="list-box"></div>
+        </aside>
+      </section>
+    </main>
+
+    <dialog id="settingsDialog" class="settings-dialog">
+      <header class="dialog-header">
+        <h3>系统设置</h3>
+        <button id="closeSettingsBtn" class="secondary-btn" type="button">关闭</button>
+      </header>
+      <section>
+        <h4>大模型供应商配置</h4>
+        <form id="providerForm" class="grid-form">
+          <label>模型供应商
+            <select id="providerType">
+              <option value="openai">OpenAI</option>
+              <option value="zhipu">智谱AI</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="custom">自定义端点</option>
+            </select>
+          </label>
+          <label>API Key<input type="password" id="providerApiKey" placeholder="按供应商填写对应密钥" /></label>
+          <label id="providerBaseUrlRow">Base URL<input type="text" id="providerBaseUrl" placeholder="供应商默认地址可留空" /></label>
+          <label>模型名称
+            <select id="providerModel"></select>
+          </label>
+          <label id="providerCustomModelRow" class="hidden">自定义模型名称<input type="text" id="providerCustomModel" placeholder="例如 gpt-4o-mini" /></label>
+          <p id="providerHint" class="section-note"></p>
+          <div class="action-row">
+            <button type="button" id="saveProvider">保存供应商配置</button>
+            <button type="button" id="testProvider" class="secondary-btn">探测模型连通性</button>
+          </div>
+          <p id="providerResult" class="hint"></p>
+        </form>
+        <div id="providerList" class="list-box"></div>
+      </section>
+    </dialog>
+
+    <dialog id="dangerDialog" class="danger-dialog">
+      <h3>危险操作二次确认</h3>
+      <p id="dangerText"></p>
+      <div class="action-row">
+        <button id="dangerConfirm" class="danger-btn">确认执行</button>
+        <button id="dangerCancel" class="secondary-btn">取消</button>
+      </div>
+    </dialog>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,740 @@
+/api/xdr/v1/incidents/list
+查询安全事件列表
+更新时间：2024-12-27 10:22:30
+OpenAPI：
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+startTimestamp
+[long]
+-	起始时间	1679315129	收缩	
+备注：
+对安全事件的最近发生时间做筛选
+数据字典：
+1679315129	| [long]
+|
+默认为最近7天，例如系统时间为2023-03-20 20:30:00，则起始时间为2023-03-13 20:30:00，时间戳为1678710600
+| 默认值
+参数示例：
+1679315129
+最小长度：
+最大长度：
+最小值：
+最大值：
+endTimestamp
+[long]
+-	结束时间	1679315129	收缩	
+备注：
+对安全事件的最近发生时间做筛选
+数据字典：
+1679327999	| [long]
+|
+默认为当天结束时间，例如系统时间为2023-03-20 20:30:00，则结束时间为2023-03-20 23:59:59，时间戳为1679327999
+| 默认值
+参数示例：
+1679315129
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeField
+[string]
+-	时间字段	endTime	收缩	
+数据字典：
+endTime	| [string]
+|
+结束时间
+| 默认值
+startTime	| [string]
+|
+开始时间
+auditTime	| [string]
+|
+审核时间
+updateTime	| [string]
+|
+更新时间
+uploadTime	| [string]
+|
+上传时间
+occurTime	| [string]
+|
+发生时间
+insertTime	| [string]
+|
+入库时间
+参数示例：
+endTime
+pageSize
+[int]
+-	页面大小	5	收缩	
+参数限制：
+5-200
+备注：
+每页展示事件条数
+参数示例：
+5
+page
+[int]
+-	页码	1	收缩	
+备注：
+安全事件列表的页码
+参数示例：
+1
+sort
+[string]
+-	排序规则	endTime:desc,severity:desc	收缩	
+参数限制：
+格式为"字段1:排序方式,字段2排序方式", 为空时默认按最近发生时间(endTime)降序排列, [sortField/sortOrder]和[sort]均不为空时优先按[sort]排序
+数据字典：
+severity	| [string]
+|
+严重等级
+endTime	| [string]
+|
+最近发生时间
+参数示例：
+endTime:desc,severity:desc
+最小长度：
+最大长度：
+uuIds
+[array]
+-	事件ID列表	["incident-e80adc0f-3911-4097-801a-4654cb5cf7fc"]	收缩	
+备注：
+查询指定uuId的事件
+数据字典：
+[]	| [array]
+|
+表示全部
+| 默认值
+参数示例：
+["incident-e80adc0f-3911-4097-801a-4654cb5cf7fc"]
+最小长度：
+0
+最大长度：
+200
+最小值：
+最大值：
+dealStatus
+[array]
+-	处置状态列表	[0，10， 60]	收缩	
+参数限制：
+传参是TMG标准数值, 具体的TMG标准值与数据库中数值的转换参考"详细说明"中的描述
+备注：
+查询特定处置状态的事件
+数据字典：
+[]	| [array]
+|
+表示全部
+| 默认值
+[0]	| [array]
+|
+未处置
+[10]	| [array]
+|
+处置中
+[40]	| [array]
+|
+已处置
+[50]	| [array]
+|
+已挂起
+[60]	| [array]
+|
+接受风险
+[70]	| [array]
+|
+已遏制
+参数示例：
+[0，10， 60]
+最小长度：
+最大长度：
+severities
+[array]
+-	安全等级	[1, 2, 3]	收缩	
+数据字典：
+[0]	| [array]
+|
+信息
+| 默认值
+[1]	| [array]
+|
+低危
+[2]	| [array]
+|
+中危
+[3]	| [array]
+|
+高危
+[4]	| [array]
+|
+严重
+[ ]	| [array]
+|
+表示全部
+参数示例：
+[1, 2, 3]
+hostBranchId
+[array]
+-	资产组	[0, 1]	收缩	
+参数示例：
+[0, 1]
+platformHostBranchIds
+[array]
+-	平台资产组	["6709f2a28a6780001e2ead0c_1" ]	收缩	
+参数限制：
+建议使用 platformHostBranchIds 参数作为 hostBranchId 的升级字段。虽然 hostBranchId 仍可使用，但在平台级联场景中，不同平台的资产组 ID 可能重复。当两个参数都有值时，将优先使用 platformHostBranchIds。
+参数示例：
+["6709f2a28a6780001e2ead0c_1" ]
+最小长度：
+最大长度：
+whiteStatus
+[array]
+-	加白状态	["未加白","部分加白"]	收缩	
+数据字典：
+["未加白","部分加白"]	| [array]
+|
+加白状态不为"已加白"的事件
+| 默认值
+["已加白"]	| [array]
+|
+加白状态为"已加白"的事件
+["部分加白"]	| [array]
+|
+加白状态为"部分加白"的事件
+["未加白"]	| [array]
+|
+加白状态为"未加白"的事件
+[ ]	| [array]
+|
+表示全部
+参数示例：
+["未加白","部分加白"]
+manages
+[array]
+-	上报设备ID	["SIEM2", "SIEM3"]	收缩	
+数据字典：
+["SIEM2", "SIEM3"]	| [string]
+|
+筛选上报设备ID为SIEM2和SIEM3的数据
+| 默认值
+参数示例：
+["SIEM2", "SIEM3"]
+excludeManages
+[array]
+-	排除上报设备ID	["SIEM4", "SIEM5"]	收缩	
+数据字典：
+["SIEM4", "SIEM5"]	| [string]
+|
+排除上报设备ID为SIEM4和SIEM5的设备
+| 默认值
+参数示例：
+["SIEM4", "SIEM5"]
+threatDefines
+[array]
+-	事件定性	[200]	收缩	
+数据字典：
+0	| [int]
+|
+未知威胁
+200	| [int]
+|
+业务行为
+300	| [int]
+|
+脆弱性风险
+400	| [int]
+|
+扫描器攻击
+450	| [int]
+|
+疑似定向攻击
+500	| [int]
+|
+病毒
+900	| [int]
+|
+定向攻击
+参数示例：
+[200]
+最小长度：
+最大长度：
+incidentSources
+[array]
+-	事件来源	["xth", "engine", "demo", "custom"]	收缩	
+数据字典：
+xth	| [string]
+|
+专家狩猎
+engine	| [string]
+|
+检测引擎
+demo	| [string]
+|
+样例事件
+custom	| [string]
+|
+自定义事件
+参数示例：
+["xth", "engine", "demo", "custom"]
+最小长度：
+最大长度：
+riskTags
+[array]
+-	风险标签	["A017_B021"]	收缩	
+参数限制：
+参考详细说明中的"标签分类表"
+参数示例：
+["A017_B021"]
+最小长度：
+最大长度：
+gptResults
+[array]
+-	研判结论	[110, 120, 130, 140, 150, 160, 170, 180]	收缩	
+数据字典：
+110	| [int]
+|
+真实攻击成功
+120	| [int]
+|
+病毒木马活动
+130	| [int]
+|
+真实攻击未成功
+140	| [int]
+|
+脆弱性访问
+150	| [int]
+|
+疑似攻击行为
+160	| [int]
+|
+误报
+170	| [int]
+|
+数据不足
+180	| [int]
+|
+自定义类型
+参数示例：
+[110, 120, 130, 140, 150, 160, 170, 180]
+最小长度：
+最大长度：
+dataSources
+[array]
+-	数据源	["EDR", "NDR", "CWPP"]	收缩	
+数据字典：
+["EDR"]	| [string]
+|
+EDR设备
+| 默认值
+["NDR"]	| [string]
+|
+NDR设备
+["CWPP"]	| [string]
+|
+CWPP设备
+参数示例：
+["EDR", "NDR", "CWPP"]
+最小长度：
+最大长度：
+incidentThreatClasses
+[array]
+-	安全事件一级分类	["0101", "0102"]	收缩	
+参数示例：
+["0101", "0102"]
+platformIds
+[array]
+-	平台id	["6709f2a28a6780001e2ead0c" ]	收缩	
+参数示例：
+["6709f2a28a6780001e2ead0c" ]
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	状态码	Success	收缩	
+参数示例：
+Success
+message
+[string]
+是	请求响应信息	请求成功	收缩	
+参数示例：
+请求成功
+Θdata
+[object]
+是				
+total
+[int]
+是	事件总数	100	收缩	
+备注：
+当前查询条件下，一共有多少事件
+参数示例：
+100
+pageSize
+[int]
+是	页面大小	5	收缩	
+参数示例：
+5
+page
+[int]
+是	当前页码	1	收缩	
+参数示例：
+1
+Θitem
+[array]
+是	安全事件内容			
+name
+[string]
+是	事件名称	主机进程存在危险行为	收缩	
+参数示例：
+主机进程存在危险行为
+uuId
+[string]
+是	事件ID	incident-528fdb4e-6720-4b42-8db1-be2e8ba76bec	收缩	
+参数示例：
+incident-528fdb4e-6720-4b42-8db1-be2e8ba76bec
+description
+[string]
+是	描述	11.11.22.101在2022-08-26 16:43:32通过WebShell攻击、Web网站攻击、未授权访问，执行Web命令执行行为、普通C2，导致主机192.168.100.99,fe80::10ef:4d6b:7995:b02e失陷。	收缩	
+参数示例：
+11.11.22.101在2022-08-26 16:43:32通过WebShell攻击、Web网站攻击、未授权访问，执行Web命令执行行为、普通C2，导致主机192.168.100.99,fe80::10ef:4d6b:7995:b02e失陷。
+incidentSeverity
+[int]
+是	事件等级	2	收缩	
+数据字典：
+-1	| [int]
+|
+信息
+| 默认值
+1	| [int]
+|
+低危
+2	| [int]
+|
+中危
+3	| [int]
+|
+高危
+4	| [int]
+|
+严重
+参数示例：
+2
+最小长度：
+最大长度：
+最小值：
+最大值：
+hostIp
+[string]
+是	主机IP	1.1.1.1	收缩	
+备注：
+支持IPv4、IPv6
+参数示例：
+1.1.1.1
+hostAssetId
+[int]
+是	主机资产ID	1	收缩	
+参数示例：
+1
+branchName
+[string]
+是	主机资产组	管理IP范围	收缩	
+参数示例：
+管理IP范围
+hostGroups
+[array]
+是	主机所属业务组	["测试业务组1"]	收缩	
+参数示例：
+["测试业务组1"]
+threatDefineName
+[array]
+是	威胁定性	["自动化攻击"，"病毒事件"]	收缩	
+备注：
+对安全事件的定性，例如定向攻击、病毒
+参数示例：
+["自动化攻击"，"病毒事件"]
+riskTag
+[array]
+是	标签	["SQL注入漏洞"]	收缩	
+参数示例：
+["SQL注入漏洞"]
+startTime
+[long]
+是	最早发生时间	1648776227	收缩	
+备注：
+安全事件第一次发生的时间
+参数示例：
+1648776227
+endTime
+[long]
+是	最近发生时间	1648776227	收缩	
+备注：
+安全事件的最近一次发生的时间
+参数示例：
+1648776227
+alertIds
+[array]
+是	告警ID	["alert-259fc01c-1ebf-11ed-82d2-0242ac110002"]	收缩	
+备注：
+安全事件关联的告警ID列表
+参数示例：
+["alert-259fc01c-1ebf-11ed-82d2-0242ac110002"]
+dealStatus
+[int]
+是	处置状态	10	收缩	
+数据字典：
+0	| [int]
+|
+待处置
+| 默认值
+10	| [int]
+|
+处置中
+30	| [int]
+|
+已防护
+40	| [int]
+|
+已处置
+50	| [int]
+|
+已挂起
+60	| [int]
+|
+接受风险
+70	| [int]
+|
+已遏制
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+dealAction
+[string]
+是	处置动作	处置中(手动标记)	收缩	
+数据字典：
+待处置	| [string]	| 默认值
+处置中(忽略)	| [string]
+处置中(标为误报)	| [string]
+处置中(手动标记)	| [string]
+处置中(加白名单)	| [string]
+处置中(工单处置)	| [string]
+处置中(已封禁地址)	| [string]
+处置中(已隔离主机)	| [string]
+处置中(已处置文件)	| [string]
+处置中(已信任文件)	| [string]
+处置完成(忽略)	| [string]
+处置完成(标为误报)	| [string]
+处置完成(手动标记)	| [string]
+处置完成(加白名单)	| [string]
+处置完成(工单处置)	| [string]
+处置完成(已封禁地址)	| [string]
+处置完成(已隔离主机)	| [string]
+处置完成(已处置文件)	| [string]
+处置完成(已信任文件)	| [string]
+参数示例：
+处置中(手动标记)
+最小长度：
+最大长度：
+最小值：
+最大值：
+whiteStatus
+[string]
+是	加白状态	未加白	收缩	
+备注：
+安全事件是否加入白名单
+数据字典：
+已加白	| [string]	| 默认值
+未加白	| [string]
+参数示例：
+未加白
+最小长度：
+最大长度：
+最小值：
+最大值：
+dataSource
+[array]
+是	数据源	["EDR","NDR"]	收缩	
+备注：
+安全事件的来源，来自NDR、EDR或者第三方设备
+参数示例：
+["EDR","NDR"]
+devSourceName
+[array]
+是	设备来源	["SIP (SIPSEC)"]	收缩	
+备注：
+上报该安全事件的具体设备
+参数示例：
+["SIP (SIPSEC)"]
+engineName
+[array]
+是	事件引擎	["IOA关联分析引擎"]	收缩	
+备注：
+解析出该安全事件的检测引擎
+参数示例：
+["IOA关联分析引擎"]
+incidentSource
+[string]
+是	事件来源	检测引擎	收缩	
+数据字典：
+检测引擎	| [string]
+专家狩猎	| [string]
+样例事件	| [string]
+自定义事件	| [string]
+参数示例：
+检测引擎
+最小长度：
+最大长度：
+incidentThreatClass
+[string]
+是	事件一级分类	0101	收缩	
+参数示例：
+0101
+incidentThreatType
+[string]
+是	事件二级分类	010101	收缩	
+参数示例：
+010101
+gptResult
+[int]
+是	GPT研判结论	115	收缩	
+数据字典：
+0	| [int]
+|
+等待GPT研判
+10	| [int]
+|
+人工入侵
+20	| [int]
+|
+病毒木马
+30	| [int]
+|
+疑似入侵
+40	| [int]
+|
+业务误报
+50	| [int]
+|
+脆弱性风险
+60	| [int]
+|
+风险探测
+70	| [int]
+|
+可疑行为
+110	| [int]
+|
+真实攻击成功
+115	| [int]
+|
+主机失陷活动
+120	| [int]
+|
+病毒木马活动
+130	| [int]
+|
+真实攻击未成功
+140	| [int]
+|
+脆弱性访问
+150	| [int]
+|
+疑似攻击行为
+160	| [int]
+|
+误报
+170	| [int]
+|
+数据不足
+180	| [int]
+|
+自定义类型
+参数示例：
+115
+最小长度：
+最大长度：
+gptResultDescription
+[string]
+是	GPT研判结论中文描述	主机失陷活动	收缩	
+数据字典：
+等待GPT研判	| [string]	| 默认值
+真实攻击成功	| [string]
+主机失陷活动	| [string]
+病毒木马活动	| [string]
+真实攻击未成功	| [string]
+脆弱性访问	| [string]
+疑似攻击行为	| [string]
+误报	| [string]
+数据不足	| [string]
+自定义类型	| [string]
+参数示例：
+主机失陷活动
+最小长度：
+最大长度：
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/incidents/list
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"请求成功",
+    "data":Θ{
+        "total":100,
+        "pageSize":5,
+        "page":1,
+        "item":Θ[
+            Θ{
+                "name":"主机进程存在危险行为",
+                "uuId":"incident-528fdb4e-6720-4b42-8db1-be2e8ba76bec",
+                "description":"11.11.22.101在2022-08-26 16:43:32通过WebShell攻击、Web网站攻击、未授权访问，执行Web命令执行行为、普通C2，导致主机192.168.100.99,fe80::10ef:4d6b:7995:b02e失陷。",
+                "incidentSeverity":2,
+                "hostIp":"1.1.1.1",
+                "hostAssetId":1,
+                "branchName":"管理IP范围",
+                "hostGroups":Θ[
+                    "测试业务组1"
+                ],
+                "threatDefineName":Θ[
+                    "自动化攻击",
+                    "病毒事件"
+                ],
+                "riskTag":Θ[
+                    "SQL注入漏洞"
+                ],
+                "startTime":1648776227,
+                "endTime":1648776227,
+                "alertIds":Θ[
+                    "alert-259fc01c-1ebf-11ed-82d2-0242ac110002"
+                ],
+                "dealStatus":10,
+                "dealAction":"处置中(手动标记)",
+                "whiteStatus":"未加白",
+                "dataSource":Θ[
+                    "EDR",
+                    "NDR"
+                ],
+                "devSourceName":Θ[
+                    "SIP (SIPSEC)"
+                ],
+                "engineName":Θ[
+                    "IOA关联分析引擎"
+                ],
+                "incidentSource":"检测引擎",
+                "incidentThreatClass":"0101",
+                "incidentThreatType":"010101",
+                "gptResult":115,
+                "gptResultDescription":"主机失陷活动"
+            }
+        ]
+    }
+}

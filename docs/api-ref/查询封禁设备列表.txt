@@ -1,0 +1,197 @@
+/api/xdr/v1/device/blockdevice/list
+查询封禁设备列表
+更新时间：2023-12-11 14:13:51
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+type
+[array]
+是	设备类型	[EDR,EDR LITE，SAAS EDR LITE，SAAS EDR]	收缩	
+参数限制：
+枚举值[ [AF ,EDR,EDR LITE，SAAS EDR LITE，SAAS EDR]， [AF] 查询网侧设备， [EDR,EDR LITE，SAAS EDR LITE，SAAS EDR]查询端侧设备
+数据字典：
+[AF]	| [array]
+|
+AF设备
+| 默认值
+[EDR]	| [array]
+|
+EDR设备
+[EDR LITE]	| [string]
+|
+EDR LITE设别
+[SAAS EDR]	| [string]
+|
+SAAS EDR设备
+[SAAS EDR LITE]	| [string]
+|
+SAAS EDR LITE设备
+参数示例：
+[EDR,EDR LITE，SAAS EDR LITE，SAAS EDR]
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+-	状态码	Success	收缩	
+数据字典：
+Success	| [string]
+|
+成功
+| 默认值
+参数示例：
+Success
+最小长度：
+最大长度：
+最小值：
+最大值：
+message
+[string]
+-	响应信息	OK	收缩	
+参数示例：
+OK
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θdata
+[object]
+-			收缩	
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θitem
+[array]
+-	封禁设备列表		收缩	
+最小长度：
+最大长度：
+最小值：
+最大值：
+deviceId
+[int]
+-	设备ID	12346	收缩	
+参数示例：
+12346
+最小长度：
+最大长度：
+最小值：
+最大值：
+deviceName
+[string]
+-	设备名称	AF_011	收缩	
+参数示例：
+AF_011
+最小长度：
+最大长度：
+最小值：
+最大值：
+deviceStatus
+[string]
+-	设备状态	online	收缩	
+数据字典：
+online	| [string]
+|
+在线
+| 默认值
+offline	| [string]
+|
+离线
+not_active	| [string]
+|
+未接入
+参数示例：
+online
+最小长度：
+最大长度：
+最小值：
+最大值：
+deviceType
+[string]
+-	设备类型	AF	收缩	
+数据字典：
+AF	| [string]	| 默认值
+EDR	| [string]
+EDR LITE	| [string]
+SAAS EDR	| [string]
+SAAS EDR LITE	| [string]
+参数示例：
+AF
+最小长度：
+最大长度：
+最小值：
+最大值：
+deviceVersion
+[string]
+-	设备版本	8.0.15	收缩	
+参数示例：
+8.0.15
+最小长度：
+最大长度：
+最小值：
+最大值：
+deviceIp
+[string]
+-	设备ip	1.2.3.4	收缩	
+参数示例：
+1.2.3.4
+gatewayId
+[string]
+-	网关ID	33173365542	收缩	
+参数示例：
+33173365542
+最小长度：
+最大长度：
+最小值：
+最大值：
+companyId
+[string]
+-	企业ID	10001001	收缩	
+参数示例：
+10001001
+最小长度：
+最大长度：
+最小值：
+最大值：
+remark
+[string]
+-	联动信息	可联动	收缩	
+数据字典：
+不可联动:设备未接入	| [string]	| 默认值
+不可联动:设备离线	| [string]
+可联动	| [string]
+参数示例：
+可联动
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/device/blockdevice/list
+
+HTTP Status Code:200 Content-Type:application/json; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"OK",
+    "data":Θ{
+        "item":Θ[
+            Θ{
+                "deviceId":12346,
+                "deviceName":"AF_011",
+                "deviceStatus":"online",
+                "deviceType":"AF",
+                "deviceVersion":"8.0.15",
+                "deviceIp":"1.2.3.4",
+                "gatewayId":"33173365542",
+                "companyId":"10001001",
+                "remark":"可联动"
+            }
+        ]
+    }
+}

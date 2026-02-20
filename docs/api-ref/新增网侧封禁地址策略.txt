@@ -1,0 +1,252 @@
+/api/xdr/v1/responses/blockiprule/network
+新增网侧封禁地址策略
+更新时间：2023-12-11 14:14:12
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+name
+[string]
+是	规则名称	主机对内网发起SQL注入攻击_10.0.1.27	收缩	
+参数限制：
+正则： "[^*<>\"'%\\[\\]+&\\\\]*" 最小长度1，最大长度512 名称可以重复
+参数示例：
+主机对内网发起SQL注入攻击_10.0.1.27
+最小长度：
+最大长度：
+最小值：
+最大值：
+reason
+[string]
+-	封禁备注	禁了	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+参数示例：
+禁了
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeType
+[string]
+是	封禁时长类型	forever	收缩	
+参数限制：
+枚举：1-forever-永久封禁，2-temporary-自定义封禁时长，当类型为temporary时，timeUnit 和 timeValue 都必须填
+数据字典：
+forever	| [string]
+|
+永久封禁
+| 默认值
+temporary	| [string]
+|
+自定义封禁时长
+参数示例：
+forever
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeValue
+[int]
+-	封禁时长	10	收缩	
+参数限制：
+当timeUnit 是 d 时，最小1，最大15，当timeUnit 是h时，最小是1，最大是360，当timeUnit时m时，最小是3，最大是21600
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeUnit
+[string]
+-	时间单位	d	收缩	
+参数限制：
+枚举值 d天，h小时，m分钟
+数据字典：
+d	| [string]
+|
+天
+| 默认值
+h	| [string]
+|
+小时
+m	| [string]
+|
+分钟
+参数示例：
+d
+最小长度：
+最大长度：
+最小值：
+最大值：
+ΘblockIpRule
+[object]
+是	封禁对象匹配规则			
+type
+[string]
+是	匹配字段	SRC_IP	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+数据字典：
+SRC_IP	| [string]
+|
+源ip
+| 默认值
+DST_IP	| [string]
+|
+目的ip
+URL	| [string]
+|
+链接
+DNS	| [string]
+|
+域名
+参数示例：
+SRC_IP
+最小长度：
+最大长度：
+最小值：
+最大值：
+mode
+[string]
+是	匹配模式	in	收缩	
+参数限制：
+枚举 [in]
+数据字典：
+in	| [string]	| 默认值
+参数示例：
+in
+最小长度：
+最大长度：
+最小值：
+最大值：
+view
+[array]
+是	匹配值	["1.2.3.4"]	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+参数示例：
+["1.2.3.4"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θdevices
+[array]
+是	设备信息列表			
+devId
+[int]
+是	设备id	123456	收缩	
+参数示例：
+123456
+最小长度：
+最大长度：
+最小值：
+最大值：
+devName
+[string]
+是	设备名字	10001010	收缩	
+参数限制：
+最大长度8
+参数示例：
+10001010
+最小长度：
+最大长度：
+最小值：
+最大值：
+devType
+[string]
+是	设备类型	AF	收缩	
+参数限制：
+枚举值 [AF,SIP,EDR,MIRROR,STA,CWPP,EDR LITE,LOCAL XDR,SIR，SAAS EDR LITE，SAAS EDR]
+数据字典：
+AF	| [string]
+|
+AF
+| 默认值
+SIP	| [string]
+|
+SIP
+EDR	| [string]
+|
+EDR
+MIRROR	| [string]
+|
+MIRROR
+STA	| [string]
+|
+STA
+CWPP	| [string]
+|
+CWPP
+EDR LITE	| [string]
+|
+EDR LITE
+LOCAL XDR	| [string]
+|
+LOCAL XDR
+SIR	| [string]
+|
+SIR
+SAAS EDR LITE	| [string]
+|
+SAAS EDR LITE
+SAAS EDR	| [string]
+|
+SAAS EDR
+参数示例：
+AF
+最小长度：
+最大长度：
+最小值：
+最大值：
+devVersion
+[string]
+是	设备版本			
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	状态码	Success	收缩	
+数据字典：
+Success	| [string]	| 默认值
+参数示例：
+Success
+message
+[string]
+是	响应消息	OK	收缩	
+数据字典：
+Ok	| [string]	| 默认值
+成功	| [string]
+参数示例：
+OK
+Θdata
+[object]
+是				
+ids
+[array]
+是	封禁规则id	["634818311968cc7c4dbc9eb5"]	收缩	
+参数限制：
+当一次输入多个封禁ip时，可能返回多个id
+参数示例：
+["634818311968cc7c4dbc9eb5"]
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/responses/blockiprule/network
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"成功",
+    "data":Θ{
+        "ids":Θ[
+            "64df39ce79fbfc7a177e8338",
+            "64df39ce79fbfc7a177e8337"
+        ]
+    }
+}

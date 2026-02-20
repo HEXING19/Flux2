@@ -1,0 +1,13 @@
+services:
+  flux:
+    build: .
+    container_name: flux-xdr
+    ports:
+      - '8000:8000'
+    environment:
+      - PYTHONPATH=/app/backend
+      - APP_ENV=prod
+      - MOCK_MODE=true
+      - DB_PATH=/app/data/flux.db
+    volumes:
+      - ./data:/app/data

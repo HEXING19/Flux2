@@ -1,0 +1,234 @@
+/api/xdr/v1/incidents/:uuid/entities/ip
+根据事件uuId获取事件外网ip处置实体
+更新时间：2023-05-22 18:08:06
+REST 参数
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+uuId
+[string]
+是	事件id	incident-0142d31d-c22a-438d-a44b-1e5cdd	收缩	
+参数示例：
+incident-0142d31d-c22a-438d-a44b-1e5cdd
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	返回码	Success	收缩	
+参数示例：
+Success
+message
+[string]
+是	返回message	成功	收缩	
+参数示例：
+成功
+Θdata
+[object]
+是	数据			
+Θitem
+[array]
+-	实体列表			
+id
+[string]
+-	实体ID	6424368ab75cda17df2a687c	收缩	
+参数示例：
+6424368ab75cda17df2a687c
+ip
+[string]
+-	ip	1.1.1.1	收缩	
+参数示例：
+1.1.1.1
+port
+[int]
+-	端口	80	收缩	
+参数示例：
+80
+threatLevel
+[int]
+-	威胁等级	0	收缩	
+数据字典：
+0	| [string]
+|
+未知
+1	| [number]
+|
+白
+2	| [number]
+|
+灰
+3	| [number]
+|
+黑
+参数示例：
+0
+最小长度：
+最大长度：
+最小值：
+最大值：
+location
+[string]
+-	地理位置	美国 哥伦布	收缩	
+参数示例：
+美国 哥伦布
+asLabel
+[string]
+-	运营商归属	Sharktech	收缩	
+参数示例：
+Sharktech
+intelligenceTag
+[array]
+-	威胁情报标签	["minepool"]	收缩	
+参数示例：
+["minepool"]
+mappingTag
+[string]
+-	测绘标签	IDC	收缩	
+备注：
+网络类型标签
+参数示例：
+IDC
+alertRole
+[string]
+-	告警角色	C2	收缩	
+参数示例：
+C2
+dealSuggestion
+[string]
+-	处置建议	[处置建议]： 1.封堵攻击源域名； 2.封堵攻击源域名； 3.封堵攻击源域名。	收缩	
+参数示例：
+[处置建议]： 1.封堵攻击源域名； 2.封堵攻击源域名； 3.封堵攻击源域名。
+最小长度：
+最大长度：
+最小值：
+最大值：
+businessAffection
+[string]
+-	业务影响	封禁域名会对导致对域名发起不了访问	收缩	
+参数示例：
+封禁域名会对导致对域名发起不了访问
+ΘsrcProcess
+[array]
+-	进程节点信息			
+md5
+[string]
+-	进程名称-md5	896c158f108cb36ae5dc62b7a90ad1aa	收缩	
+备注：
+进程名称加md5, "-"连接
+参数示例：
+896c158f108cb36ae5dc62b7a90ad1aa
+pid
+[int]
+-	进程pid	11552	收缩	
+参数示例：
+11552
+pName
+[string]
+-	进程名	fscan_upx64.exe	收缩	
+参数示例：
+fscan_upx64.exe
+ΘedrDealStatusInfo
+[object]
+-	端侧处置状态	IP还没有端侧处置状态	收缩	
+备注：
+目前IP没有端侧处置
+参数示例：
+IP还没有端侧处置状态
+status
+[string]
+-	处置状态			
+isPermanent
+[boolean]
+-	是否永久封禁			
+expireTime
+[long]
+-	过期时间			
+ΘndrDealStatusInfo
+[object]
+-	网侧处置状态			
+status
+[string]
+-	处置状态	PARTIAL_UNBLOCK_SUCCESS	收缩	
+数据字典：
+WAIT_DEAL	| [string]
+|
+待处置
+| 默认值
+BLOCK_SUCCESS	| [string]
+|
+已封禁
+BLOCK_FAILED	| [string]
+|
+封禁失败
+UNBLOCK_SUCCESS	| [string]
+|
+已解封
+PARTIAL_BLOCK_SUCCESS	| [string]
+|
+部分封禁成功
+PARTIAL_UNBLOCK_SUCCESS	| [string]
+|
+部分解封成功
+参数示例：
+PARTIAL_UNBLOCK_SUCCESS
+最小长度：
+最大长度：
+最小值：
+最大值：
+isPermanent
+[boolean]
+-	是否永久封禁	false	收缩	
+参数示例：
+false
+expireTime
+[long]
+-	过期时间	1681142400	收缩	
+备注：
+秒级时间戳
+参数示例：
+1681142400
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/incidents/:uuid/entities/ip
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"成功",
+    "data":Θ{
+        "item":Θ[
+            Θ{
+                "ip":"1.10.21.16",
+                "port":0,
+                "threatLevel":2,
+                "location":"澳大利亚",
+                "asLabel":"",
+                "intelligenceTag":Θ[
+                    "黑产"
+                ],
+                "mappingTag":"DOMAIN服务器",
+                "alertRole":"C2:C2代表的是服务器资产",
+                "srcProcess":Θ[
+                    Θ{
+                        "md5":"sdahabjhklxalkmlklkdnkalklds",
+                        "pid":154,
+                        "pName":"java.exe"
+                    }
+                ],
+                "edrDealStatusInfo":null,
+                "ndrDealStatusInfo":Θ{
+                    "status":"BLOCK_SUCCESS",
+                    "isPermanent":false,
+                    "expireTime":1665025904
+                },
+                "businessAffection":"封禁域名会对导致对域名发起不了访问",
+                "dealSuggestion":"[处置建议]：1.封堵攻击源域名； 2.封堵攻击源域名； 3.封堵攻击源域名。"
+            }
+        ]
+    }
+}

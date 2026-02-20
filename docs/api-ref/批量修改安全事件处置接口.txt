@@ -1,0 +1,107 @@
+/api/xdr/v1/incidents/dealstatus
+批量修改安全事件处置接口
+更新时间：2023-05-22 19:27:55
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+uuIds
+[array]
+是	事件ID列表	["incident-528fdb4e-6720-4b42-8db1-be2e8ba76bec"]	收缩	
+参数限制：
+1-200
+参数示例：
+["incident-528fdb4e-6720-4b42-8db1-be2e8ba76bec"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dealStatus
+[int]
+是	处置状态	10	收缩	
+数据字典：
+0	| [int]
+|
+待处置
+| 默认值
+10	| [int]
+|
+处置中
+40	| [int]
+|
+已处置
+50	| [int]
+|
+已挂起
+60	| [int]
+|
+接受风险
+70	| [int]
+|
+已遏制
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+dealComment
+[string]
+-	操作备注	修改事件处置状态	收缩	
+参数示例：
+修改事件处置状态
+最小长度：
+最大长度：
+2048
+最小值：
+最大值：
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	状态码	Success	收缩	
+参数示例：
+Success
+message
+[string]
+是	操作成功	修改处置状态成功	收缩	
+参数示例：
+修改处置状态成功
+Θdata
+[object]
+是				
+total
+[int]
+是	更新事件总数	10	收缩	
+备注：
+需要更新的事件去重后的总数、不区分成功、失败
+参数示例：
+10
+succeededNum
+[int]
+是	更新成功事件数	5	收缩	
+备注：
+处置状态更新成功的数量。相同状态更新，事件不会被统计到成功更新中
+参数示例：
+5
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/incidents/dealstatus
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "data":Θ{
+        "total":2,
+        "succeededNum":2
+    }
+}

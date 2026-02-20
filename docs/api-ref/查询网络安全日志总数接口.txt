@@ -1,0 +1,166 @@
+/api/xdr/v1/analysislog/networksecurity/count
+查询网络安全日志数量
+更新时间：2024-11-12 14:17:18
+OpenAPI：
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+startTimestamp
+[long]
+-	秒级开始时间戳 (不填则默认为当前秒的七天前时间戳)	1692670717	收缩	
+参数示例：
+1692670717
+endTimestamp
+[long]
+-	秒级结束时间戳 (不填则默认为今日23:59:59的时间戳)	1692670717	收缩	
+参数示例：
+1692670717
+productTypes
+[array]
+-	上报设备产品 (不填则默认为全部)	["STA", "EDR"]	收缩	
+数据字典：
+["STA"]	| [array]	| 默认值
+["EDR"]	| [array]
+["AC"]	| [array]
+["CWPP"]	| [array]
+["SSL VPN"]	| [array]
+["NTA"]	| [array]
+["SIP SecLog"]	| [array]
+["Logger"]	| [array]
+参数示例：
+["STA", "EDR"]
+accessDirections
+[array]
+-	访问方向 (不填默认为全部)	[1, 2]	收缩	
+参数限制：
+枚举校验 1:外对内 2:内对外 3:内对内
+数据字典：
+1	| [int]
+|
+外对内
+| 默认值
+2	| [int]
+|
+内对外
+3	| [int]
+|
+内对内
+参数示例：
+[1, 2]
+threatClasses
+[array]
+-	威胁一级分类 (不填默认查全部)	["94", "214"]	收缩	
+参数限制：
+参考详细说明中的附件: "网络安全日志威胁分类规范"
+参数示例：
+["94", "214"]
+threatTypes
+[array]
+-	威胁二级分类 (不填默认查全部)	["94_1", "214_2"]	收缩	
+参数限制：
+"一级分类+下划线+二级分类",参考详细说明中的附件: "网络安全日志威胁分类规范"
+参数示例：
+["94_1", "214_2"]
+threatSubTypes
+[array]
+-	威胁三级分类 (不填默认查全部)	["94_1_0", "214_2_-1"]	收缩	
+参数限制：
+"一级分类+下划线+二级分类+下划线+三级分类",参考详细说明中的附件: "网络安全日志威胁分类规范"
+参数示例：
+["94_1_0", "214_2_-1"]
+srcIps
+[array]
+-	源IP (不填查全部)	["192.168.233.233"]	收缩	
+参数示例：
+["192.168.233.233"]
+dstIps
+[array]
+-	目的IP (不填查全部)	["19.19.8.10"]	收缩	
+参数示例：
+["19.19.8.10"]
+attackStates
+[array]
+-	攻击状态 (不填查全部)	[0, 1, 2]	收缩	
+参数限制：
+枚举校验 0：尝试、1：失败、2：成功、3：失陷
+数据字典：
+0	| [int]
+|
+尝试
+| 默认值
+1	| [int]
+|
+失败
+2	| [int]
+|
+成功
+3	| [int]
+|
+失陷
+参数示例：
+[0, 1, 2]
+severities
+[array]
+-	严重性 (不填查全部)	[0, 1, 3]	收缩	
+参数限制：
+枚举校验 0:信息 1:低危 2:中危 3:高危 4:严重
+数据字典：
+[0]	| [array]
+|
+信息 severity in (0, 10]
+| 默认值
+[1]	| [array]
+|
+低危 severity in (10, 30]
+[2]	| [array]
+|
+中危 severity in (30, 50]
+[3]	| [array]
+|
+高危 severity in (50, 70]
+[4]	| [array]
+|
+严重 severity in (70, 100]
+参数示例：
+[0, 1, 3]
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	响应码	"Success"	收缩	
+参数示例：
+"Success"
+message
+[string]
+是	响应信息	"请求成功"	收缩	
+参数示例：
+"请求成功"
+Θdata
+[object]
+是	返回数据			
+total
+[long]
+是	网络安全日志总数	233	收缩	
+参数示例：
+233
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/analysislog/networksecurity/count
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"成功",
+    "data":Θ{
+        "total":36580
+    }
+}
+额外说明文档
+
+{"0":"markdown","markdown":"相同条件最多翻页到10w页, 之后需要更换查询条件, 例如开始时间设为第10w条的时间重新查询","html":"相同条件最多翻页到10w页, 之后需要更换查询条件, 例如开始时间设为第10w条的时间重新查询"}
