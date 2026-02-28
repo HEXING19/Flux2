@@ -12,6 +12,7 @@ from app.core.payload import approval_payload, text_payload
 from app.core.requester import get_requester_from_credential
 from app.llm.router import LLMRouter
 from app.models.db_models import AuditAction, XDRCredential
+from app.pipeline.service import IntentPipeline
 from app.skills.registry import SkillRegistry
 
 from .intent_parser import IntentParser
@@ -23,30 +24,44 @@ class ChatService:
         credential = session.exec(select(XDRCredential).order_by(XDRCredential.id.desc())).first()
         requester = get_requester_from_credential(credential)
         self.registry = SkillRegistry(requester, context_manager)
+        self.pipeline = IntentPipeline(self.registry)
         self.intent_parser = IntentParser()
         self.llm = LLMRouter(session)
 
     def _audit(self, session_id: str, action_name: str, dangerous: bool, status: str, detail: dict[str, Any]) -> None:
+        try:
+            detail_json = json.dumps(detail, ensure_ascii=False)
+        except Exception:
+            detail_json = str(detail)
         self.session.add(
             AuditAction(
                 session_id=session_id,
                 action_name=action_name,
                 dangerous=dangerous,
                 status=status,
-                detail_json=str(detail),
+                detail_json=detail_json,
             )
         )
         self.session.commit()
 
     def _execute_intent(self, session_id: str, intent: str, params: dict[str, Any], message: str) -> list[dict[str, Any]]:
-        skill = self.registry.get(intent)
-        if not skill:
-            return [text_payload("暂不支持该操作，请换一种说法。")]
-
         try:
-            payloads = skill.execute(session_id, params, message)
-            if any(p.get("data", {}).get("dangerous") for p in payloads):
-                self._audit(session_id, intent, True, "executed", params)
+            result = self.pipeline.run(session_id=session_id, message=message, intent=intent, params=params)
+            payloads = result.payloads
+            dangerous = any(p.get("data", {}).get("dangerous") for p in payloads) or result.ir.is_dangerous_intent
+            status = "blocked" if result.blocked else "executed"
+            self._audit(
+                session_id,
+                intent,
+                dangerous,
+                status,
+                {
+                    "params": params,
+                    "ir": result.ir.model_dump(),
+                    "lint_warnings": result.lint_warnings,
+                    "safety_errors": result.safety_errors,
+                },
+            )
             return payloads
         except MissingParameterException as exc:
             return [text_payload(exc.question)]

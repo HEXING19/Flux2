@@ -58,6 +58,13 @@ class FakeRequester:
         return {"code": "Failed", "message": f"unhandled path: {path}", "data": {}}
 
 
+class FakeRequesterEntityVariant(FakeRequester):
+    def request(self, method, path, *, json_body=None, params=None, timeout=15):
+        if path.endswith("/entities/ip"):
+            return {"code": "Success", "message": "成功", "data": [{"IP": "111.112.113.201"}]}
+        return super().request(method, path, json_body=json_body, params=params, timeout=timeout)
+
+
 class ChatConfirmFlowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -93,6 +100,44 @@ class ChatConfirmFlowTest(unittest.TestCase):
                 self.assertEqual(result[0]["type"], "text")
                 self.assertEqual(result[1]["type"], "table")
                 self.assertTrue(result[1]["data"]["rows"])
+
+    def test_entity_query_supports_serial_number_wording(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                chat.handle("t4", "查看近7天安全事件")
+                result = chat.handle("t4", "查看序号1安全事件外网实体")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertEqual(result[1]["type"], "table")
+                self.assertTrue(result[1]["data"]["rows"])
+
+    def test_entity_query_supports_explicit_event_uuid(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t5", "查看事件ID为incident-real-001的外网IP实体")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertEqual(result[1]["type"], "table")
+                self.assertTrue(result[1]["data"]["rows"])
+
+    def test_event_detail_and_action_support_explicit_event_uuid(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                detail_result = chat.handle("t6", "查看事件ID为incident-real-001的详情")
+                self.assertEqual(detail_result[0]["type"], "text")
+                self.assertEqual(detail_result[1]["type"], "table")
+                action_result = chat.handle("t6", "把事件ID为incident-real-001标记为已处置")
+                self.assertEqual(action_result[0]["type"], "approval_card")
+
+    def test_entity_query_compatible_with_variant_response_shape(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequesterEntityVariant()):
+                chat = ChatService(session)
+                result = chat.handle("t7", "查看incident-real-001这个事件的外网实体")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertEqual(result[1]["type"], "table")
+                self.assertEqual(result[1]["data"]["rows"][0]["ip"], "111.112.113.201")
 
 
 if __name__ == "__main__":

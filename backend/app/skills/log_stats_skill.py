@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.core.payload import echarts_payload
+from app.core.payload import echarts_payload, text_payload
 
 from .base import BaseSkill
 
@@ -43,6 +43,8 @@ class LogStatsSkill(BaseSkill):
             "productTypes": model.product_types,
         }
         resp = self.requester.request("POST", "/api/xdr/v1/analysislog/networksecurity/count", json_body=payload)
+        if resp.get("code") != "Success":
+            return [text_payload(f"日志统计查询失败: {resp.get('message', '未知错误')}", title="网络安全日志统计")]
         total = resp.get("data", {}).get("total", 0)
 
         start = model.startTimestamp or int((datetime.now() - timedelta(days=7)).timestamp())

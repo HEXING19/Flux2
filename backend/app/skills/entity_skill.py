@@ -10,12 +10,13 @@ from app.core.payload import table_payload, text_payload
 from app.core.settings import settings
 
 from .base import BaseSkill
-from .event_skills import _bootstrap_event_indices
+from .event_skills import _bootstrap_event_indices, extract_entity_items_from_response, extract_event_uuids_from_text
 
 
 class EntityQueryInput(BaseModel):
     ips: list[str] | None = None
     ref_text: str | None = None
+    incident_uuids: list[str] | None = None
 
 
 class EntityQuerySkill(BaseSkill):
@@ -75,14 +76,21 @@ class EntityQuerySkill(BaseSkill):
         prepared = dict(params)
         ref_text = prepared.get("ref_text") or user_text
         if not prepared.get("ips"):
-            refs = self.context_manager.resolve_indices(session_id, "events", ref_text)
+            refs = prepared.get("incident_uuids") or extract_event_uuids_from_text(ref_text)
+            if not refs:
+                refs = self.context_manager.resolve_indices(session_id, "events", ref_text)
             if not refs:
                 refs = _bootstrap_event_indices(self, session_id, ref_text)
             if refs:
+                prepared["incident_uuids"] = refs
                 inherited_ips: list[str] = []
+                api_errors: list[str] = []
                 for uid in refs[:5]:
                     entity_resp = self.requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
-                    entities = entity_resp.get("data", {}).get("item", [])
+                    entities, error = extract_entity_items_from_response(entity_resp)
+                    if error:
+                        api_errors.append(f"{uid}: {error}")
+                        continue
                     for item in entities:
                         ip = item.get("ip")
                         if ip:
@@ -91,6 +99,10 @@ class EntityQuerySkill(BaseSkill):
                     dedup = list(dict.fromkeys(inherited_ips))
                     prepared["ips"] = dedup
                     self.context_manager.update_params(session_id, {"last_entity_ip": dedup[0]})
+                elif api_errors:
+                    return [text_payload("事件外网实体查询失败：" + "；".join(api_errors[:3]), title="实体情报结果")]
+                else:
+                    return [text_payload("指定事件未查询到外网IP实体。", title="实体情报结果")]
         if not prepared.get("ips"):
             last_ip = self.context_manager.get_param(session_id, "last_entity_ip")
             if last_ip:
@@ -101,7 +113,7 @@ class EntityQuerySkill(BaseSkill):
             raise MissingParameterException(
                 skill_name=self.name,
                 missing_fields=["ips"],
-                question="请提供要查询的IP实体，或先查看某条事件详情让我自动继承实体IP。",
+                question="请提供要查询的IP实体，或指定事件序号/事件ID（如“查看序号1外网实体”或“查看事件ID为incident-xxx的外网实体”）。",
             )
 
         rows = [self._query_threatbook(ip) for ip in model.ips]

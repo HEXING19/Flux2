@@ -23,3 +23,6 @@ class SkillRegistry:
 
     def get(self, intent: str):
         return self._skills.get(intent)
+
+    def supported_intents(self) -> set[str]:
+        return set(self._skills.keys())

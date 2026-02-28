@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
@@ -13,6 +14,7 @@ from .base import BaseSkill
 
 SEVERITY_LABEL = {0: "信息", 1: "低危", 2: "中危", 3: "高危", 4: "严重"}
 DEAL_STATUS_LABEL = {0: "待处置", 10: "处置中", 40: "已处置", 50: "已挂起", 60: "接受风险", 70: "已遏制"}
+EVENT_UUID_PATTERN = re.compile(r"incident-[A-Za-z0-9-]{6,}")
 
 
 def _pick(item: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -35,6 +37,60 @@ def _to_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def extract_event_uuids_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+    matches = EVENT_UUID_PATTERN.findall(text)
+    if not matches:
+        return []
+    # keep order, remove duplicates
+    return list(dict.fromkeys(matches))
+
+
+def extract_entity_items_from_response(response: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+    if not isinstance(response, dict):
+        return [], "实体接口响应格式异常。"
+
+    code = response.get("code")
+    if code and code != "Success":
+        return [], str(response.get("message") or f"实体接口返回异常状态: {code}")
+
+    data = response.get("data")
+    raw_items: list[Any] = []
+
+    if isinstance(data, dict):
+        for key in ("item", "items", "list", "rows"):
+            value = data.get(key)
+            if isinstance(value, list):
+                raw_items.extend(value)
+        if any(k in data for k in ("ip", "IP", "entityIp", "entityIP", "view")):
+            raw_items.append(data)
+    elif isinstance(data, list):
+        raw_items.extend(data)
+
+    top_item = response.get("item")
+    if not raw_items and isinstance(top_item, list):
+        raw_items.extend(top_item)
+
+    entities: list[dict[str, Any]] = []
+    seen = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        ip_value = _pick(item, "ip", "IP", "entityIp", "entityIP", "view")
+        if ip_value in (None, ""):
+            continue
+        ip_str = str(ip_value)
+        if ip_str in seen:
+            continue
+        seen.add(ip_str)
+        normalized = dict(item)
+        normalized["ip"] = ip_str
+        entities.append(normalized)
+
+    return entities, None
 
 
 def _looks_like_event_reference(text: str) -> bool:
@@ -180,6 +236,10 @@ class EventDetailSkill(BaseSkill):
         prepared = dict(params)
         ref_text = prepared.get("ref_text") or user_text
         if not prepared.get("uuids"):
+            explicit_uuids = extract_event_uuids_from_text(ref_text)
+            if explicit_uuids:
+                prepared["uuids"] = explicit_uuids
+        if not prepared.get("uuids"):
             refs = self.context_manager.resolve_indices(session_id, "events", ref_text)
             if not refs:
                 refs = _bootstrap_event_indices(self, session_id, ref_text)
@@ -198,9 +258,14 @@ class EventDetailSkill(BaseSkill):
         detail_text_chunks = []
         for uid in model.uuids[:5]:
             proof_resp = self.requester.request("GET", f"/api/xdr/v1/incidents/{uid}/proof")
-            proof_data = (proof_resp.get("data") or [{}])[0]
+            proof_error = None
+            if proof_resp.get("code") != "Success":
+                proof_data = {}
+                proof_error = proof_resp.get("message") or "举证信息查询失败"
+            else:
+                proof_data = (proof_resp.get("data") or [{}])[0]
             entity_resp = self.requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
-            entities = entity_resp.get("data", {}).get("item", [])
+            entities, entity_error = extract_entity_items_from_response(entity_resp)
 
             timelines = proof_data.get("alertTimeLine", [])
             for event in timelines:
@@ -214,7 +279,7 @@ class EventDetailSkill(BaseSkill):
                     }
                 )
 
-            entity_ip = entities[0].get("ip") if entities else "N/A"
+            entity_ip = entities[0].get("ip") if entities else ("查询失败" if entity_error else "N/A")
             risk_tags = proof_data.get("riskTag", [])
             if isinstance(risk_tags, str):
                 risk_tag_text = risk_tags
@@ -224,7 +289,7 @@ class EventDetailSkill(BaseSkill):
                 risk_tag_text = ""
             detail_text_chunks.append(
                 f"事件 {uid}: {_pick(proof_data, 'name', 'incidentName', default='未知')}\n"
-                f"- AI研判: {proof_data.get('gptResultDescription', '暂无')}\n"
+                f"- AI研判: {proof_data.get('gptResultDescription', '暂无') if not proof_error else f'查询失败: {proof_error}'}\n"
                 f"- 风险标签: {risk_tag_text or '无'}\n"
                 f"- 外网IP实体: {entity_ip}"
             )
@@ -253,10 +318,15 @@ class EventActionSkill(BaseSkill):
     __init_schema__ = EventActionInput
     required_fields = ["deal_status"]
     requires_confirmation = True
+    apply_safety_gate = True
 
     def execute(self, session_id: str, params: dict[str, Any], user_text: str) -> list[dict[str, Any]]:
         prepared = dict(params)
         ref_text = prepared.get("ref_text") or user_text
+        if not prepared.get("uuids"):
+            explicit_uuids = extract_event_uuids_from_text(ref_text)
+            if explicit_uuids:
+                prepared["uuids"] = explicit_uuids
         if not prepared.get("uuids"):
             refs = self.context_manager.resolve_indices(session_id, "events", ref_text)
             if not refs:

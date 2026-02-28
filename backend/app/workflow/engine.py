@@ -16,7 +16,12 @@ class WorkflowEngine:
     def __init__(self, max_workers: int = 4):
         self.max_workers = max_workers
 
-    def run(self, nodes: list[PipelineNode], context: dict[str, Any]) -> dict[str, Any]:
+    def run(
+        self,
+        nodes: list[PipelineNode],
+        context: dict[str, Any],
+        on_node_complete: Callable[[str, dict[str, Any], dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         completed: dict[str, dict[str, Any]] = {}
         pending = {n.node_id: n for n in nodes}
 
@@ -34,6 +39,8 @@ class WorkflowEngine:
                 completed[node.node_id] = node.runner(context)
                 pending.pop(node.node_id, None)
                 context["nodes"] = completed
+                if on_node_complete:
+                    on_node_complete(node.node_id, completed[node.node_id], context)
                 continue
 
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -43,5 +50,7 @@ class WorkflowEngine:
                     completed[node.node_id] = fut.result()
                     pending.pop(node.node_id, None)
                     context["nodes"] = completed
+                    if on_node_complete:
+                        on_node_complete(node.node_id, completed[node.node_id], context)
 
         return completed

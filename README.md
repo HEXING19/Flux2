@@ -16,6 +16,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export PYTHONPATH=$(pwd)/backend
+python scripts/migrate_db.py
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -29,6 +30,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 source .venv/bin/activate
 pip install -r requirements.txt
 export PYTHONPATH=$(pwd)/backend
+python scripts/migrate_db.py
 python3 -m unittest discover -s backend/app/tests -p 'test_*.py'
 ```
 
@@ -38,6 +40,14 @@ python3 -m unittest discover -s backend/app/tests -p 'test_*.py'
 source .venv/bin/activate
 export PYTHONPATH=$(pwd)/backend
 python3 -m unittest backend/app/tests/test_workflow.py
+```
+
+单独执行数据库迁移（幂等）：
+
+```bash
+source .venv/bin/activate
+export PYTHONPATH=$(pwd)/backend
+python scripts/migrate_db.py
 ```
 
 如果你遇到 `ModuleNotFoundError`（例如 `sqlmodel`/`pydantic_settings`），通常是依赖还没装到当前环境，重新执行：
@@ -85,6 +95,8 @@ docker compose down
 
 - PyInstaller: `./scripts/build_pyinstaller.sh`
 - Docker: `docker compose up --build`
+- DB迁移: `python scripts/migrate_db.py`
+- CI: `.github/workflows/backend-tests.yml`
 
 
 

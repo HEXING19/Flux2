@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from app.core.context import context_manager
 from app.core.db import session_scope
+from app.core.exceptions import ValidationGuardException
 from app.core.payload import approval_payload, text_payload
 from app.core.requester import get_requester_from_credential
 from app.llm.router import LLMRouter
@@ -40,7 +41,7 @@ class WorkflowService:
             wf.levels = ",".join(str(x) for x in payload.get("levels", [3, 4]))
             wf.require_approval = payload.get("require_approval", True)
             wf.webhook_url = payload.get("webhook_url")
-            wf.updated_at = datetime.utcnow()
+            wf.updated_at = datetime.now(timezone.utc)
             session.add(wf)
             session.commit()
             session.refresh(wf)
@@ -85,6 +86,7 @@ class WorkflowService:
                 "webhook_url": wf.webhook_url,
             },
             "levels": levels,
+            "node_status": {},
         }
 
         def node1_fetch(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -140,7 +142,39 @@ class WorkflowService:
             PipelineNode("llm_summary", node3_summary, depends_on=["event_detail", "entity_query"]),
         ]
 
-        results = self.engine.run(nodes, runtime_context)
+        runtime_context["node_status"] = {
+            node.node_id: {"status": "Pending", "depends_on": node.depends_on} for node in nodes
+        }
+        run.context_json = json.dumps(
+            {
+                "session_id": runtime_context["session_id"],
+                "workflow": runtime_context["workflow"],
+                "node_status": runtime_context["node_status"],
+            },
+            ensure_ascii=False,
+        )
+        session.add(run)
+        session.commit()
+
+        def on_node_complete(node_id: str, node_result: dict[str, Any], ctx: dict[str, Any]) -> None:
+            node_status = ctx.setdefault("node_status", {})
+            node_status[node_id] = {
+                "status": "Finished",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "result_keys": sorted(list(node_result.keys())),
+            }
+            run.context_json = json.dumps(
+                {
+                    "session_id": ctx.get("session_id"),
+                    "workflow": ctx.get("workflow"),
+                    "node_status": node_status,
+                },
+                ensure_ascii=False,
+            )
+            session.add(run)
+            session.commit()
+
+        results = self.engine.run(nodes, runtime_context, on_node_complete=on_node_complete)
         summary = results["llm_summary"]["summary"]
         event_rows = results["fetch_events"]["rows"]
 
@@ -149,6 +183,7 @@ class WorkflowService:
             "summary": summary,
             "session_id": runtime_context["session_id"],
             "workflow": runtime_context["workflow"],
+            "node_status": runtime_context.get("node_status", {}),
         }
 
         if wf.require_approval:
@@ -175,7 +210,7 @@ class WorkflowService:
         apply_result = self._apply_decision_actions(session, run_context)
         run.status = "Finished"
         run.result_json = json.dumps(apply_result, ensure_ascii=False)
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(timezone.utc)
         session.add(run)
         session.commit()
         session.refresh(run)
@@ -202,20 +237,23 @@ class WorkflowService:
         # 演示性封禁：取第一条事件IP进行临时封禁
         first_ip = next((e.get("hostIp") for e in events if e.get("hostIp")), None)
         if first_ip:
-            payloads.extend(
-                registry.get("block_action").execute(
-                    run_context.get("session_id", "workflow"),
-                    {
-                        "block_type": "SRC_IP",
-                        "views": [first_ip],
-                        "time_type": "temporary",
-                        "time_value": 2,
-                        "time_unit": "h",
-                        "confirm": True,
-                    },
-                    "workflow block",
+            try:
+                payloads.extend(
+                    registry.get("block_action").execute(
+                        run_context.get("session_id", "workflow"),
+                        {
+                            "block_type": "SRC_IP",
+                            "views": [first_ip],
+                            "time_type": "temporary",
+                            "time_value": 2,
+                            "time_unit": "h",
+                            "confirm": True,
+                        },
+                        "workflow block",
+                    )
                 )
-            )
+            except ValidationGuardException as exc:
+                payloads.append(text_payload(f"自动封禁已跳过: {exc}"))
 
         webhook = run_context.get("workflow", {}).get("webhook_url")
         if webhook:
@@ -246,12 +284,12 @@ class WorkflowService:
         approval.status = "Approved" if decision == "approve" else "Rejected"
         approval.decision = decision
         approval.reviewer = reviewer
-        approval.updated_at = datetime.utcnow()
+        approval.updated_at = datetime.now(timezone.utc)
         session.add(approval)
 
         if decision == "reject":
             run.status = "Rejected"
-            run.finished_at = datetime.utcnow()
+            run.finished_at = datetime.now(timezone.utc)
             run.result_json = json.dumps({"message": comment or "审批拒绝"}, ensure_ascii=False)
             session.add(run)
             session.commit()
@@ -260,7 +298,7 @@ class WorkflowService:
         run_context = json.loads(run.context_json or "{}")
         result = self._apply_decision_actions(session, run_context)
         run.status = "Finished"
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(timezone.utc)
         run.result_json = json.dumps(result, ensure_ascii=False)
         session.add(run)
         session.commit()

@@ -23,6 +23,10 @@ class ContextManagerTest(unittest.TestCase):
         resolved = self.ctx.resolve_indices(self.session, "events", "查看第3个详情")
         self.assertEqual(resolved, ["u3"])
 
+    def test_serial_wording_index(self):
+        resolved = self.ctx.resolve_indices(self.session, "events", "查看序号2事件详情")
+        self.assertEqual(resolved, ["u2"])
+
 
 if __name__ == "__main__":
     unittest.main()

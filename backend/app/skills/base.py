@@ -20,6 +20,7 @@ class BaseSkill(ABC):
     __init_schema__ = SkillInput
     required_fields: list[str] = []
     requires_confirmation: bool = False
+    apply_safety_gate: bool = False
 
     def __init__(self, requester: APIRequester, context_manager: SkillContextManager):
         self.requester = requester
@@ -46,7 +47,8 @@ class BaseSkill(ABC):
         except ValidationError as exc:
             raise ValidationGuardException(f"{self.name} 参数校验失败 (Flux IR Validation Failed): {exc}") from exc
 
-        self.run_safety_gate(model)
+        if self.apply_safety_gate:
+            self.run_safety_gate(model)
 
         self.context_manager.update_params(session_id, model.model_dump(exclude_none=True))
         return model
@@ -86,10 +88,14 @@ class BaseSkill(ABC):
 
         # 动态加载用户自定义前端拦截名单
         custom_targets = set()
-        with session_scope() as session:
-            custom_rules = session.exec(select(SafetyGateRule)).all()
-            for rule in custom_rules:
-                custom_targets.add(rule.target.strip().lower())
+        try:
+            with session_scope() as session:
+                custom_rules = session.exec(select(SafetyGateRule)).all()
+                for rule in custom_rules:
+                    custom_targets.add(rule.target.strip().lower())
+        except Exception:
+            # In early init or isolated unit tests the table may not exist yet.
+            custom_targets = set()
 
         def _is_dangerous(val: str) -> bool:
             val = val.strip().lower()

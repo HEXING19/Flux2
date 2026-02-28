@@ -6,7 +6,7 @@ import hmac
 import json
 import struct
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -104,7 +104,7 @@ class Signature:
         else:
             headers[SDK_CONTENT_TYPE_KEY] = headers[CONTENT_TYPE_KEY]
         if SIGN_DATE_KEY not in headers:
-            sign_date = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            sign_date = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             headers[SIGN_DATE_KEY] = sign_date
         else:
             sign_date = str(headers[SIGN_DATE_KEY])

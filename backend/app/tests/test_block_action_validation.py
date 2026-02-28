@@ -64,6 +64,31 @@ class BlockSkillValidationTest(unittest.TestCase):
         view_field = next(f for f in payloads[1]["data"]["fields"] if f["key"] == "views")
         self.assertIn("200.200.1.1", view_field["value"])
 
+    def test_block_query_can_inherit_last_entity_ip_for_pronoun_question(self):
+        query_skill = BlockQuerySkill(FakeRequester(block_items=[], online_devices=self.online_devices), self.ctx)
+        self.ctx.update_params("s1", {"last_entity_ip": "111.112.113.201"})
+        payloads = query_skill.execute("s1", {}, "查看这个IP地址是不是已经被封禁")
+        self.assertEqual(payloads[0]["type"], "text")
+        self.assertIn("111.112.113.201", payloads[0]["data"]["text"])
+
+    def test_block_action_form_should_include_device_field_when_no_online_device(self):
+        skill = BlockActionSkill(FakeRequester(online_devices=[]), self.ctx)
+        payloads = skill.execute(
+            "s1",
+            {
+                "block_type": "SRC_IP",
+                "views": ["111.112.113.201"],
+                "time_type": "temporary",
+                "time_value": 1,
+                "time_unit": "d",
+            },
+            "封禁这个IP",
+        )
+        self.assertEqual(payloads[0]["type"], "form_card")
+        self.assertIn("联动设备", payloads[0]["data"]["description"])
+        field_keys = {f["key"] for f in payloads[0]["data"]["fields"]}
+        self.assertIn("device_id", field_keys)
+
 
 if __name__ == "__main__":
     unittest.main()

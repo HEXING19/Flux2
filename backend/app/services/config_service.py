@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlmodel import Session, select
 
@@ -17,7 +17,7 @@ class ConfigService:
         if existing:
             for key, value in payload.items():
                 setattr(existing, key, value)
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             self.session.add(existing)
             self.session.commit()
             self.session.refresh(existing)
@@ -38,7 +38,7 @@ class ConfigService:
         if existing:
             for key, value in payload.items():
                 setattr(existing, key, value)
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = datetime.now(timezone.utc)
             self.session.add(existing)
             self.session.commit()
             self.session.refresh(existing)

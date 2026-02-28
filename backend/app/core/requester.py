@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from typing import Any
 
 import requests
@@ -41,19 +43,74 @@ class APIRequester:
             return {"code": "Failed", "message": "缺少XDR基础地址，请先完成登录配置。", "data": {}}
 
         url = f"{self.base_url}{path}"
-        headers = {"content-type": "application/json"}
-        req = requests.Request(method.upper(), url, headers=headers, data=json.dumps(json_body or {}), params=params)
-        if self.signature:
-            self.signature.sign(req)
+        method_upper = method.upper().strip()
+        request_id = uuid.uuid4().hex[:16]
+        sign_headers = {"content-type": "application/json"}
 
         for attempt in range(1, max_retries + 1):
             try:
+                req_kwargs: dict[str, Any] = {"headers": dict(sign_headers), "params": params}
+                if json_body is not None:
+                    req_kwargs["data"] = json.dumps(json_body, ensure_ascii=False)
+                elif method_upper in {"POST", "PUT", "PATCH"}:
+                    req_kwargs["data"] = "{}"
+
+                req = requests.Request(method_upper, url, **req_kwargs)
+                if self.signature:
+                    self.signature.sign(req)
+                # Add tracing header after signature to avoid signature mismatch in strict gateways.
+                req.headers["x-flux-request-id"] = request_id
                 response = self.session.send(req.prepare(), timeout=timeout)
-                response.raise_for_status()
-                return response.json()
+
+                body: dict[str, Any] | None = None
+                try:
+                    parsed = response.json()
+                    if isinstance(parsed, dict):
+                        body = parsed
+                except Exception:
+                    body = None
+
+                if response.status_code >= 500 and attempt < max_retries:
+                    time.sleep(min(1.5 * attempt, 4.0))
+                    continue
+
+                if response.status_code >= 400:
+                    message = ""
+                    if body and body.get("message"):
+                        message = str(body.get("message"))
+                    elif response.text:
+                        message = response.text[:400]
+                    else:
+                        message = f"HTTP {response.status_code}"
+
+                    if response.status_code in {401, 403}:
+                        message = f"{message}。认证失败或权限不足，请重新登录并确认账号已开通该接口权限。"
+
+                    return {
+                        "code": "Failed",
+                        "message": f"请求失败({response.status_code}): {message} (request_id={request_id})",
+                        "data": body.get("data", {}) if isinstance(body, dict) else {},
+                        "requestId": request_id,
+                    }
+
+                if body is not None:
+                    body.setdefault("requestId", request_id)
+                    return body
+
+                return {
+                    "code": "Failed",
+                    "message": f"请求成功但响应不是JSON (request_id={request_id})",
+                    "data": {"raw": response.text[:1000]},
+                    "requestId": request_id,
+                }
             except Exception as exc:
                 if attempt == max_retries:
-                    return {"code": "Failed", "message": f"请求失败: {exc}", "data": {}}
+                    return {
+                        "code": "Failed",
+                        "message": f"请求失败: {exc} (request_id={request_id})",
+                        "data": {},
+                    }
+                time.sleep(min(1.5 * attempt, 4.0))
 
         return {"code": "Failed", "message": "未知请求错误", "data": {}}
 

@@ -100,7 +100,17 @@ class BlockQuerySkill(BaseSkill):
         )
 
     def execute(self, session_id: str, params: dict[str, Any], user_text: str) -> list[dict[str, Any]]:
-        model = self.validate_and_prepare(session_id, params)
+        prepared = dict(params)
+        if not prepared.get("keyword"):
+            inherited_target = (
+                self.context_manager.get_param(session_id, "last_block_target")
+                or self.context_manager.get_param(session_id, "last_entity_ip")
+                or self.context_manager.get_param(session_id, "keyword")
+            )
+            if inherited_target and any(k in user_text for k in ["这个IP", "该IP", "这个地址", "它", "是否", "是不是", "有没有"]):
+                prepared["keyword"] = str(inherited_target)
+
+        model = self.validate_and_prepare(session_id, prepared)
         if model.keyword:
             self.context_manager.update_params(session_id, {"last_block_target": model.keyword})
         payload = {
@@ -114,6 +124,8 @@ class BlockQuerySkill(BaseSkill):
             payload["searchInfos"] = [{"fieldName": "view", "fieldValue": model.keyword}]
 
         response = self.requester.request("POST", "/api/xdr/v1/responses/blockiprule/list", json_body=payload)
+        if response.get("code") != "Success":
+            return [text_payload(f"封禁策略查询失败: {response.get('message', '未知错误')}", title="封禁策略查询")]
         items = response.get("data", {}).get("item", [])
 
         rule_ids = [_pick(item, "id", "ruleId", "taskId") for item in items]
@@ -170,9 +182,12 @@ class BlockActionSkill(BaseSkill):
     __init_schema__ = BlockActionInput
     required_fields: list[str] = []
     requires_confirmation = True
+    apply_safety_gate = True
 
     def _list_online_devices(self) -> list[dict[str, Any]]:
         resp = self.requester.request("POST", "/api/xdr/v1/device/blockdevice/list", json_body={"type": ["AF"]})
+        if resp.get("code") != "Success":
+            return []
         devices = resp.get("data", {}).get("item", [])
         return [d for d in devices if d.get("deviceStatus") == "online"]
 
@@ -309,14 +324,17 @@ class BlockActionSkill(BaseSkill):
             },
         ]
 
-        if len(online_devices) > 1:
+        if online_devices:
+            default_device_id = prepared.get("device_id")
+            if default_device_id in (None, ""):
+                default_device_id = str(online_devices[0].get("deviceId"))
             fields.append(
                 {
                     "key": "device_id",
                     "label": "联动设备",
                     "type": "select",
                     "required": True,
-                    "value": str(online_devices[0].get("deviceId")),
+                    "value": str(default_device_id),
                     "options": [
                         {
                             "label": f"{d.get('deviceName')} ({d.get('deviceId')})",
@@ -324,6 +342,17 @@ class BlockActionSkill(BaseSkill):
                         }
                         for d in online_devices
                     ],
+                }
+            )
+        else:
+            fields.append(
+                {
+                    "key": "device_id",
+                    "label": "联动设备ID",
+                    "type": "text",
+                    "required": True,
+                    "value": str(prepared.get("device_id") or ""),
+                    "placeholder": "请先在平台确认AF设备在线，再填写设备ID重试",
                 }
             )
 
@@ -385,9 +414,18 @@ class BlockActionSkill(BaseSkill):
             missing.append("封禁时长数值")
         if prepared.get("time_type") == "temporary" and not prepared.get("time_unit"):
             missing.append("封禁时长单位")
+        if not prepared.get("devices"):
+            if not online_devices:
+                missing.append("联动设备")
+            elif len(online_devices) > 1 and not prepared.get("device_id"):
+                missing.append("联动设备")
+            elif prepared.get("device_id"):
+                missing.append("联动设备(请确认设备在线)")
 
         if missing:
             reason = f"请先补充参数后再执行封禁，当前缺少：{'、'.join(missing)}。"
+            if not online_devices:
+                reason += " 当前未检测到在线AF联动设备，请先在平台检查设备接入与在线状态。"
             return self._build_param_form(session_id, prepared, online_devices, reason=reason)
 
         model = self.validate_and_prepare(session_id, prepared)

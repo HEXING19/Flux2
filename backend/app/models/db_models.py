@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
 
 def utc_now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 class ProviderConfig(SQLModel, table=True):
@@ -85,3 +85,13 @@ class SafetyGateRule(SQLModel, table=True):
     description: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
+
+class SessionState(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(index=True, unique=True)
+    params_json: str = "{}"
+    index_json: str = "{}"
+    index_meta_json: str = "{}"
+    pending_action_json: Optional[str] = None
+    pending_form_json: Optional[str] = None
+    updated_at: datetime = Field(default_factory=utc_now)

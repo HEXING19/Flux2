@@ -61,9 +61,7 @@ class IntentParser:
         if any(k in normalized for k in ["日志统计", "日志数量", "日志趋势", "网络安全日志", "日志总数", "安全日志"]):
             return ParsedIntent(intent="log_stats", params=self._parse_common_filters(normalized))
 
-        if any(k in normalized for k in ["封禁状态", "封禁策略", "查询封禁", "封禁列表", "是否被封禁"]) or (
-            "查询" in normalized and "封禁" in normalized
-        ):
+        if self._looks_like_block_query(normalized):
             params = self._parse_common_filters(normalized)
             keyword = self._extract_keyword(normalized)
             if not keyword:
@@ -72,9 +70,7 @@ class IntentParser:
                 params["keyword"] = keyword
             return ParsedIntent(intent="block_query", params=params)
 
-        if any(k in normalized for k in ["封禁", "拉黑", "阻断"]) and not any(
-            k in normalized for k in ["查询封禁", "封禁列表", "是否被封禁", "查询"]
-        ):
+        if any(k in normalized for k in ["封禁", "拉黑", "阻断"]) and not self._looks_like_block_query(normalized):
             params = self._parse_block_action(normalized)
             return ParsedIntent(intent="block_action", params=params)
 
@@ -125,6 +121,36 @@ class IntentParser:
         if m:
             return m.group(1)
         return None
+
+    def _looks_like_block_query(self, text: str) -> bool:
+        explicit = [
+            "封禁状态",
+            "封禁策略",
+            "查询封禁",
+            "封禁列表",
+            "是否被封禁",
+            "被封禁",
+            "已封禁",
+            "被封了吗",
+            "有没有被封",
+            "有无被封",
+            "是不是被封",
+        ]
+        if any(token in text for token in explicit):
+            return True
+
+        query_verb = any(token in text for token in ["查询", "查看", "检查", "核查", "确认", "查下"])
+        if query_verb and "封禁" in text:
+            return True
+
+        # "查xxx是否封禁" style without explicit query keyword
+        if text.startswith("查") and "封禁" in text:
+            return True
+
+        if "封禁" in text and any(token in text for token in ["是否", "是不是", "有没有", "有无"]):
+            return True
+
+        return False
 
     def _extract_ip_or_domain(self, text: str) -> str | None:
         ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
