@@ -1,8 +1,35 @@
 const state = {
   sessionId: `session-${Date.now()}`,
-  workflowId: null,
   isAuthenticated: false,
+  playbookTemplates: [],
 };
+
+const DEFAULT_PLAYBOOK_SCENES = [
+  {
+    id: 'routine_check',
+    name: '今日安全早报',
+    button_label: '☕ 生成今日安全早报',
+    description: '自动聚合过去24小时日志总量、未处置高危事件和样本证据，生成值班晨报。',
+    hint: '适合每天交接班时快速掌握整体安全态势。',
+    default_params: { window_hours: 24, sample_size: 3 },
+  },
+  {
+    id: 'alert_triage',
+    name: '单点告警深度研判',
+    button_label: '🔍 一键深度研判',
+    description: '围绕指定事件做实体画像、外部情报和内部影响计数，输出封禁/观察建议。',
+    hint: '可在“事件查询”后按序号研判，或直接输入事件 UUID。',
+    default_params: { window_days: 7, mode: 'analyze' },
+  },
+  {
+    id: 'threat_hunting',
+    name: '攻击者活动轨迹',
+    button_label: '🕵️ 攻击者活动轨迹生成',
+    description: '默认回溯90天并最多扫描2000条事件，生成攻击故事线和关键证据。',
+    hint: '适合针对某个可疑 IP 做溯源汇报。',
+    default_params: { window_days: 90, max_scan: 2000, evidence_limit: 20 },
+  },
+];
 
 const PROVIDER_META = {
   openai: {
@@ -39,9 +66,6 @@ const el = {
   openSettingsBtn: document.getElementById('openSettingsBtn'),
   closeSettingsBtn: document.getElementById('closeSettingsBtn'),
   settingsDialog: document.getElementById('settingsDialog'),
-  openWorkflowPanel: document.getElementById('openWorkflowPanel'),
-  closeWorkflowPanel: document.getElementById('closeWorkflowPanel'),
-  workflowDrawer: document.getElementById('workflowDrawer'),
 
   loginForm: document.getElementById('loginForm'),
   probeLoginBtn: document.getElementById('probeLogin'),
@@ -62,11 +86,8 @@ const el = {
   chatForm: document.getElementById('chatForm'),
   chatMessage: document.getElementById('chatMessage'),
   chatStream: document.getElementById('chatStream'),
-
-  workflowList: document.getElementById('workflowList'),
-  approvalList: document.getElementById('approvalList'),
-  wfResult: document.getElementById('wfResult'),
-
+  playbookCards: document.getElementById('playbookCards'),
+  playbookHint: document.getElementById('playbookHint'),
   dangerDialog: document.getElementById('dangerDialog'),
   dangerText: document.getElementById('dangerText'),
 };
@@ -102,7 +123,6 @@ function setAuthState(authenticated, statusText = '', isConnected = true) {
   const mainNav = document.getElementById('mainNav');
   if (mainNav) mainNav.classList.toggle('hidden', !authenticated);
   if (!authenticated) {
-    setWorkflowDrawer(false);
     closeDialog(el.settingsDialog);
   }
   if (authenticated) {
@@ -119,10 +139,6 @@ function setAuthState(authenticated, statusText = '', isConnected = true) {
   }
 }
 
-function setWorkflowDrawer(open) {
-  el.workflowDrawer.classList.toggle('hidden', !open);
-  el.workflowDrawer.setAttribute('aria-hidden', open ? 'false' : 'true');
-}
 
 function openDialog(dialog) {
   if (!dialog) return;
@@ -384,6 +400,234 @@ function renderPayload(payload) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function playbookButtonClass(style) {
+  if (style === 'danger') return 'danger-btn';
+  if (style === 'secondary') return 'secondary-btn';
+  return 'primary-btn';
+}
+
+function renderNextActions(actions) {
+  if (!actions || !actions.length) return;
+  const card = cardTemplate('下一步动作推荐');
+  const row = document.createElement('div');
+  row.className = 'action-row playbook-next-actions';
+
+  actions.forEach((action) => {
+    const btn = document.createElement('button');
+    btn.className = playbookButtonClass(action.style);
+    btn.textContent = action.label || action.id || '执行';
+    btn.onclick = async () => {
+      try {
+        btn.disabled = true;
+        await runPlaybook(action.template_id, action.params || {}, action.label || action.template_id);
+      } catch (err) {
+        const errorCard = cardTemplate('Playbook 执行失败');
+        const pre = document.createElement('pre');
+        pre.textContent = err.message || '未知错误';
+        errorCard.appendChild(pre);
+        appendCard(errorCard);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    row.appendChild(btn);
+  });
+
+  card.appendChild(row);
+  appendCard(card);
+}
+
+function createPlaybookProgressCard(runId, templateId) {
+  const card = cardTemplate(`Playbook 运行中 · ${templateId}`);
+  card.dataset.playbookRunId = String(runId);
+  const pre = document.createElement('pre');
+  pre.textContent = `run_id=${runId}\n初始化中...`;
+  card.appendChild(pre);
+  appendCard(card);
+  return { card, pre };
+}
+
+function updatePlaybookProgress(preEl, runData) {
+  const nodeStatus = runData?.context?.node_status || {};
+  const progress = runData?.context?.progress || {};
+  const lines = [];
+  lines.push(`状态: ${runData.status}`);
+  lines.push(`run_id: ${runData.run_id}`);
+  lines.push(`进度: ${progress.finished || 0}/${progress.total || Object.keys(nodeStatus).length || 0}`);
+  Object.entries(nodeStatus).forEach(([nodeId, info]) => {
+    const status = info?.status || 'Pending';
+    const error = info?.error ? ` (error: ${info.error})` : '';
+    lines.push(`- ${nodeId}: ${status}${error}`);
+  });
+  preEl.textContent = lines.join('\n');
+}
+
+function renderPlaybookResult(runData) {
+  const result = runData?.result || {};
+  const summary = result.summary || runData?.error || '';
+  if (summary) {
+    renderPayload({
+      type: 'text',
+      data: { title: `Playbook 结果 · ${runData.template_id}`, text: summary, dangerous: false },
+    });
+  }
+
+  (result.cards || []).forEach((cardPayload) => renderPayload(cardPayload));
+  renderNextActions(result.next_actions || []);
+}
+
+function buildSceneParams(scene) {
+  const base = { ...(scene.default_params || {}) };
+  if (scene.id === 'alert_triage') {
+    const raw = window.prompt('请输入事件序号（如 1）或事件UUID（incident-xxx）：', '');
+    const value = (raw || '').trim();
+    if (!value) return null;
+    if (/^incident-/.test(value)) {
+      return { ...base, incident_uuid: value };
+    }
+    const idx = Number(value);
+    if (!Number.isNaN(idx) && idx > 0) {
+      return { ...base, event_index: idx };
+    }
+    throw new Error('输入格式错误，请填写事件序号或 incident UUID。');
+  }
+
+  if (scene.id === 'threat_hunting') {
+    const raw = window.prompt('请输入要追踪的攻击者IP：', '');
+    const value = (raw || '').trim();
+    if (!value) return null;
+    return { ...base, ip: value };
+  }
+
+  return base;
+}
+
+function renderPlaybookCards(templates) {
+  if (!el.playbookCards) return;
+  el.playbookCards.innerHTML = '';
+
+  const byId = new Map((templates || []).map((tpl) => [tpl.id, tpl]));
+  const scenes = DEFAULT_PLAYBOOK_SCENES.map((scene) => {
+    const remote = byId.get(scene.id) || {};
+    return {
+      ...scene,
+      ...remote,
+      default_params: { ...scene.default_params, ...(remote.default_params || {}) },
+    };
+  });
+
+  scenes.forEach((scene) => {
+    const card = document.createElement('article');
+    card.className = 'playbook-card-item';
+
+    const title = document.createElement('h4');
+    title.textContent = scene.name || scene.id;
+    card.appendChild(title);
+
+    const desc = document.createElement('p');
+    desc.className = 'scene-desc';
+    desc.textContent = scene.description || '';
+    card.appendChild(desc);
+
+    const hint = document.createElement('p');
+    hint.className = 'scene-hint';
+    hint.textContent = scene.hint || '';
+    card.appendChild(hint);
+
+    const action = document.createElement('div');
+    action.className = 'scene-action';
+    const btn = document.createElement('button');
+    btn.className = 'primary-btn playbook-btn';
+    btn.textContent = scene.button_label || scene.name || scene.id;
+    btn.onclick = async () => {
+      try {
+        btn.disabled = true;
+        const params = buildSceneParams(scene);
+        if (!params) return;
+        await runPlaybook(scene.id, params, scene.name || scene.id);
+      } catch (err) {
+        setHint(el.playbookHint, err.message || '场景执行失败', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    action.appendChild(btn);
+    card.appendChild(action);
+    el.playbookCards.appendChild(card);
+  });
+}
+
+async function refreshPlaybookTemplates() {
+  if (!state.isAuthenticated) return;
+  try {
+    const templates = await api('/api/playbooks/templates');
+    state.playbookTemplates = templates;
+    renderPlaybookCards(templates);
+    setHint(el.playbookHint, `已加载 ${templates.length} 个场景模板。`, 'success');
+  } catch (err) {
+    state.playbookTemplates = [];
+    renderPlaybookCards([]);
+    setHint(el.playbookHint, err.message || 'Playbook 模板加载失败', 'error');
+  }
+}
+
+async function pollPlaybookRun(runId, progressUi) {
+  const maxPoll = 120;
+  for (let i = 0; i < maxPoll; i += 1) {
+    const runData = await api(`/api/playbooks/runs/${runId}`);
+    updatePlaybookProgress(progressUi.pre, runData);
+    if (runData.status === 'Finished' || runData.status === 'Failed') {
+      return runData;
+    }
+    await sleep(1000);
+  }
+  throw new Error(`Playbook 运行超时，run_id=${runId}`);
+}
+
+async function runPlaybook(templateId, params = {}, triggerLabel = '') {
+  if (!state.isAuthenticated) {
+    setHint(el.playbookHint, '请先登录平台后再执行场景。', 'error');
+    return;
+  }
+
+  if (!templateId) {
+    throw new Error('缺少 template_id');
+  }
+
+  const requestPayload = {
+    template_id: templateId,
+    params,
+    session_id: state.sessionId,
+  };
+
+  const introCard = cardTemplate('你', 'user');
+  const introPre = document.createElement('pre');
+  introPre.textContent = `触发场景: ${triggerLabel || templateId}`;
+  introCard.appendChild(introPre);
+  appendCard(introCard);
+
+  const runInfo = await api('/api/playbooks/run', {
+    method: 'POST',
+    body: JSON.stringify(requestPayload),
+  });
+  const progressUi = createPlaybookProgressCard(runInfo.run_id, templateId);
+  if (runInfo.partial_context) {
+    updatePlaybookProgress(progressUi.pre, {
+      run_id: runInfo.run_id,
+      template_id: templateId,
+      status: runInfo.status,
+      context: runInfo.partial_context,
+    });
+  }
+
+  const runData = await pollPlaybookRun(runInfo.run_id, progressUi);
+  renderPlaybookResult(runData);
+}
+
 async function readSSEStream(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -457,51 +701,6 @@ async function refreshProviders() {
   );
 }
 
-async function refreshWorkflows() {
-  const items = await api('/api/workflows');
-  renderList(
-    el.workflowList,
-    items,
-    (i) => `#${i.id} ${i.name} | Cron:${i.cron_expr} | 等级:${(i.levels || []).join(',')} | ${i.enabled ? '开启' : '关闭'}`,
-  );
-  if (items.length && !state.workflowId) state.workflowId = items[0].id;
-}
-
-async function refreshApprovals() {
-  const items = await api('/api/workflows/approvals');
-  renderList(el.approvalList, items, (i) => {
-    const disabled = i.status !== 'Pending' ? 'disabled' : '';
-    return `
-      <div><strong>#${i.id}</strong> ${i.title}（${i.status}）</div>
-      <div class="action-row" style="margin-top:6px;">
-        <button ${disabled} data-approve="${i.id}" class="danger-btn">批准</button>
-        <button ${disabled} data-reject="${i.id}" class="secondary-btn">拒绝</button>
-      </div>
-    `;
-  });
-
-  el.approvalList.querySelectorAll('button[data-approve]').forEach((btn) => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute('data-approve');
-      await api(`/api/workflows/approvals/${id}/decision`, {
-        method: 'POST',
-        body: JSON.stringify({ decision: 'approve', reviewer: '安全分析员' }),
-      });
-      await refreshApprovals();
-    };
-  });
-
-  el.approvalList.querySelectorAll('button[data-reject]').forEach((btn) => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute('data-reject');
-      await api(`/api/workflows/approvals/${id}/decision`, {
-        method: 'POST',
-        body: JSON.stringify({ decision: 'reject', reviewer: '安全分析员', comment: '人工驳回' }),
-      });
-      await refreshApprovals();
-    };
-  });
-}
 
 async function sendChat(message) {
   if (!state.isAuthenticated) {
@@ -529,17 +728,10 @@ async function sendChat(message) {
 }
 
 async function bootWorkspace() {
-  await Promise.all([
-    refreshProviders().catch((err) => {
-      setHint(el.providerResult, err.message || '供应商配置加载失败，可稍后重试。', 'error');
-    }),
-    refreshWorkflows().catch((err) => {
-      setHint(el.wfResult, err.message || '流程列表加载失败，可稍后重试。', 'error');
-    }),
-    refreshApprovals().catch((err) => {
-      setHint(el.wfResult, err.message || '审批列表加载失败，可稍后重试。', 'error');
-    }),
-  ]);
+  await refreshProviders().catch((err) => {
+    setHint(el.providerResult, err.message || '供应商配置加载失败，可稍后重试。', 'error');
+  });
+  await refreshPlaybookTemplates();
 }
 
 async function checkAuthStatus() {
@@ -589,7 +781,10 @@ el.loginForm.addEventListener('submit', async (e) => {
 
 el.logoutBtn.onclick = () => {
   state.sessionId = `session-${Date.now()}`;
+  state.playbookTemplates = [];
   el.chatStream.innerHTML = '';
+  if (el.playbookCards) el.playbookCards.innerHTML = '';
+  if (el.playbookHint) setHint(el.playbookHint, '');
   setHint(el.loginResult, '已退出到登录页（本地会话已重置）。', 'success');
   setAuthState(false);
 };
@@ -619,22 +814,6 @@ el.settingsDialog.addEventListener('click', (event) => {
   if (isOutside) closeDialog(el.settingsDialog);
 });
 
-const openWorkflowDrawer = async () => {
-  if (!state.isAuthenticated) {
-    setHint(el.loginResult, '请先登录后再打开流程面板。', 'error');
-    return;
-  }
-  setWorkflowDrawer(true);
-  try {
-    await Promise.all([refreshWorkflows(), refreshApprovals()]);
-    setHint(el.wfResult, '');
-  } catch (err) {
-    setHint(el.wfResult, err.message || '流程面板加载失败', 'error');
-  }
-};
-
-el.openWorkflowPanel.onclick = openWorkflowDrawer;
-el.closeWorkflowPanel.onclick = () => setWorkflowDrawer(false);
 
 el.providerType.addEventListener('change', initProviderUI);
 el.providerModel.addEventListener('change', initProviderUI);
@@ -751,13 +930,15 @@ document.getElementById('testProvider').onclick = async () => {
   }
 };
 
+window.refreshSafetyRules = refreshSafetyRules;
+
 el.chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = el.chatMessage.value.trim();
   if (!message) return;
   el.chatMessage.value = '';
 
-  const userCard = cardTemplate('你');
+  const userCard = cardTemplate('你', 'user');
   const pre = document.createElement('pre');
   pre.textContent = message;
   userCard.appendChild(pre);
@@ -766,60 +947,9 @@ el.chatForm.addEventListener('submit', async (e) => {
   await sendChat(message);
 });
 
-document.getElementById('saveWorkflow').onclick = async () => {
-  try {
-    if (!state.isAuthenticated) {
-      setHint(el.wfResult, '请先登录平台。', 'error');
-      return;
-    }
-
-    const levels = document
-      .getElementById('wfLevels')
-      .value.split(',')
-      .map((x) => Number(x.trim()))
-      .filter(Boolean);
-
-    const payload = {
-      name: document.getElementById('wfName').value,
-      cron_expr: document.getElementById('wfCron').value,
-      levels,
-      enabled: true,
-      require_approval: document.getElementById('wfApproval').checked,
-      webhook_url: document.getElementById('wfWebhook').value || null,
-    };
-    const data = await api('/api/workflows', { method: 'POST', body: JSON.stringify(payload) });
-    state.workflowId = data.id;
-    setHint(el.wfResult, `流程已保存：#${data.id}`, 'success');
-    await refreshWorkflows();
-  } catch (err) {
-    setHint(el.wfResult, err.message, 'error');
-  }
-};
-
-document.getElementById('runWorkflow').onclick = async () => {
-  try {
-    if (!state.isAuthenticated) {
-      setHint(el.wfResult, '请先登录平台。', 'error');
-      return;
-    }
-    if (!state.workflowId) {
-      setHint(el.wfResult, '请先保存流程配置。', 'error');
-      return;
-    }
-    const data = await api('/api/workflows/run', {
-      method: 'POST',
-      body: JSON.stringify({ workflow_id: state.workflowId }),
-    });
-    setHint(el.wfResult, `流程已触发，状态：${data.status}`, 'success');
-    await refreshApprovals();
-  } catch (err) {
-    setHint(el.wfResult, err.message, 'error');
-  }
-};
-
-document.getElementById('refreshApprovals').onclick = refreshApprovals;
 
 (async function init() {
   initProviderUI();
+  renderPlaybookCards([]);
   await checkAuthStatus();
 })();

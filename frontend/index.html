@@ -20,7 +20,6 @@
         <div class="status-dot"></div>
         <span id="authStatusText">已连接</span>
       </div>
-      <button id="openWorkflowPanel" class="secondary-btn">流程编排</button>
       <button id="openSettingsBtn" class="secondary-btn">管理设置</button>
       <button id="logoutBtn" class="secondary-btn">退出</button>
     </div>
@@ -31,10 +30,10 @@
     <section id="landingView" class="auth-view flex-layout">
       <div class="landing-hero">
         <h1 class="hero-title">
-          <span style="color:var(--brand-turquoise);">FLUX</span> XDR<br />
+          <span style="color:var(--brand-blue-l10);">FLUX</span> XDR<br />
           新一代智能安全运营平台
         </h1>
-        <p class="hero-desc">融合大语言模型与自动化编排技术，为复杂边界防御提供全方位视角的「智能控制面」，构建自适应的闭环防御体系。</p>
+        <p class="hero-desc">融合大语言模型与自动化编排技术，为复杂边界防御提供全方位视角的「智能控制面」，构建自适应的闭环防御体系。不再受限于繁琐的排查，交给Flux智能决策。</p>
 
         <div class="feature-list">
           <div class="feature-item">
@@ -44,18 +43,19 @@
               <p>对接私有化大模型，自然语言交互处理高危告警，降本增效。</p>
             </div>
           </div>
-          <div class="feature-item">
-            <div class="feature-icon">⚡</div>
-            <div class="feature-text">
-              <h3>自动化编排闭环</h3>
-              <p>自定义工作流体系 (Workflow)，零代码设定防御响应机制。</p>
-            </div>
-          </div>
+
           <div class="feature-item">
             <div class="feature-icon">🛡️</div>
             <div class="feature-text">
               <h3>高危二次防线</h3>
-              <p>设置管控红线，特权指令熔断与人工复核 (Human-in-the-loop) 机制。</p>
+              <p>设置管控红线，特权指令熔断与人工复核 (Human-in-the-loop) 机制，保护核心资产永不中断。</p>
+            </div>
+          </div>
+          <div class="feature-item">
+            <div class="feature-icon">🌌</div>
+            <div class="feature-text">
+              <h3>深信服安全视角</h3>
+              <p>全面兼容并赋能各类异构资产，上帝视角的XDR态势感知。</p>
             </div>
           </div>
         </div>
@@ -88,6 +88,11 @@
         <div class="panel-header">
           <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
         </div>
+        <div class="playbook-hub">
+          <div class="playbook-hub-title">场景百宝箱 (Playbook Hub)</div>
+          <div id="playbookCards" class="playbook-cards"></div>
+          <p id="playbookHint" class="hint"></p>
+        </div>
         <div id="chatStream" class="chat-stream">
           <div class="chat-card">
             <strong>系统向导</strong>
@@ -110,41 +115,7 @@
       </div>
     </section>
 
-    <!-- Side Drawer: Flexible and Efficient Use -->
-    <aside id="workflowDrawer" class="workflow-drawer" aria-hidden="true">
-      <div class="drawer-header">
-        <h2>自动化场景编排 (Workflow)</h2>
-        <button id="closeWorkflowPanel" class="close-icon-btn" type="button" aria-label="关闭">&times;</button>
-      </div>
-      <div class="drawer-body">
-        <form id="workflowForm">
-          <label>场景命名<input type="text" id="wfName" value="每日高危巡检闭环" required /></label>
-          <label>触发周期 (Cron)<input type="text" id="wfCron" value="0 9 * * *" required /></label>
-          <label>捕获等级 (逗号分隔)<input type="text" id="wfLevels" value="3,4" /></label>
-          <label class="checkbox-line"><input type="checkbox" id="wfApproval" checked /> 阻断前需人工复核
-            (Human-in-the-loop)</label>
-          <label>Webhook 通知投递<input type="text" id="wfWebhook" placeholder="支持企微/钉钉机器人" /></label>
 
-          <div class="action-row">
-            <button type="button" id="saveWorkflow" class="primary-btn">下发调度计划</button>
-            <button type="button" id="runWorkflow" class="secondary-btn">手动立即触发</button>
-          </div>
-          <p id="wfResult" class="hint"></p>
-        </form>
-
-        <hr />
-        <h4>计划中场景任务</h4>
-        <div id="workflowList" class="list-box"></div>
-
-        <hr />
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-          <h4 style="margin:0;">待办阻断审批 (Pending Approvals)</h4>
-          <button type="button" id="refreshApprovals" class="secondary-btn"
-            style="padding:4px 8px; font-size:12px;">刷新</button>
-        </div>
-        <div id="approvalList" class="list-box"></div>
-      </div>
-    </aside>
   </main>
 
   <dialog id="settingsDialog" class="settings-dialog">
@@ -247,10 +218,13 @@
       <div class="dialog-header">
         <h3 style="color:var(--sec-high);">特权操作二次熔断确认</h3>
       </div>
-      <p id="dangerText" style="margin-bottom:24px; font-size:14px; line-height:1.6;"></p>
+      <p id="dangerText"
+        style="margin-bottom:24px; font-size:14px; line-height:1.6; padding: 16px; background: rgba(255,0,0,0.1); border-left: 4px solid var(--status-fault); border-radius: 4px;">
+      </p>
       <div class="action-row" style="justify-content: flex-end;">
         <button id="dangerCancel" class="secondary-btn">撤销操作指令</button>
-        <button id="dangerConfirm" class="danger-btn">通过审计并下发执行</button>
+        <button id="dangerConfirm" class="danger-btn"
+          style="box-shadow: 0 0 10px rgba(211,47,47,0.4)">通过审计并下发执行</button>
       </div>
     </div>
   </dialog>

@@ -11,6 +11,7 @@ from sqlmodel import select
 from app.api.routes_auth import router as auth_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_config import router as config_router
+from app.api.routes_playbook import router as playbook_router
 from app.api.routes_workflow import router as workflow_router
 from app.api.routes_safety_gate import router as safety_gate_router
 from app.core.db import init_db, session_scope
@@ -30,6 +31,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(config_router)
 app.include_router(chat_router)
+app.include_router(playbook_router)
 app.include_router(workflow_router)
 app.include_router(safety_gate_router)
 

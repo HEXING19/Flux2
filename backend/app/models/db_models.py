@@ -56,6 +56,19 @@ class WorkflowRun(SQLModel, table=True):
     error: Optional[str] = None
 
 
+class PlaybookRun(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    template: str = Field(index=True)
+    status: str = Field(default="Pending", index=True)
+    input_json: Optional[str] = None
+    context_json: Optional[str] = None
+    result_json: Optional[str] = None
+    error: Optional[str] = None
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+
+
 class ApprovalRequest(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     workflow_run_id: int = Field(index=True)
