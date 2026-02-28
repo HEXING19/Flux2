@@ -39,7 +39,6 @@ const el = {
   openSettingsBtn: document.getElementById('openSettingsBtn'),
   closeSettingsBtn: document.getElementById('closeSettingsBtn'),
   settingsDialog: document.getElementById('settingsDialog'),
-  workflowFab: document.getElementById('workflowFab'),
   openWorkflowPanel: document.getElementById('openWorkflowPanel'),
   closeWorkflowPanel: document.getElementById('closeWorkflowPanel'),
   workflowDrawer: document.getElementById('workflowDrawer'),
@@ -96,16 +95,27 @@ function setHint(target, message, type = '') {
   if (type) target.classList.add(type);
 }
 
-function setAuthState(authenticated, statusText = '') {
+function setAuthState(authenticated, statusText = '', isConnected = true) {
   state.isAuthenticated = authenticated;
   el.landingView.classList.toggle('hidden', authenticated);
   el.workspaceView.classList.toggle('hidden', !authenticated);
+  const mainNav = document.getElementById('mainNav');
+  if (mainNav) mainNav.classList.toggle('hidden', !authenticated);
   if (!authenticated) {
     setWorkflowDrawer(false);
     closeDialog(el.settingsDialog);
   }
   if (authenticated) {
     el.authStatusText.textContent = statusText || '认证通过，已连接 XDR 平台。';
+    if (!isConnected) {
+      el.authStatusText.style.color = 'var(--status-fault)';
+      document.querySelector('.status-dot').style.background = 'var(--status-fault)';
+      document.querySelector('.status-dot').style.boxShadow = '0 0 8px var(--status-fault)';
+    } else {
+      el.authStatusText.style.color = 'var(--text-muted)';
+      document.querySelector('.status-dot').style.background = 'var(--status-online)';
+      document.querySelector('.status-dot').style.boxShadow = '0 0 8px var(--status-online)';
+    }
   }
 }
 
@@ -146,9 +156,7 @@ function collectLoginPayload() {
   return {
     base_url: document.getElementById('baseUrl').value.trim(),
     auth_code: document.getElementById('authCode').value.trim() || null,
-    access_key: document.getElementById('accessKey').value.trim() || null,
-    secret_key: document.getElementById('secretKey').value.trim() || null,
-    verify_ssl: document.getElementById('verifySsl').checked,
+    verify_ssl: false,
   };
 }
 
@@ -539,8 +547,14 @@ async function checkAuthStatus() {
     const status = await api('/api/auth/status');
     if (status.authenticated) {
       const url = status.base_url || '已配置平台';
-      setAuthState(true, `当前已连接平台：${url}`);
-      await bootWorkspace();
+      const isConnected = status.connected !== false;
+
+      if (isConnected) {
+        setAuthState(true, `当前已连接平台：${url}`, true);
+        await bootWorkspace();
+      } else {
+        setAuthState(true, `当前平台配置：${url} (连接断开/网络异常)`, false);
+      }
     } else {
       setAuthState(false);
     }
@@ -588,8 +602,9 @@ el.openSettingsBtn.onclick = async () => {
   openDialog(el.settingsDialog);
   try {
     await refreshProviders();
+    await window.refreshSafetyRules?.();
   } catch (err) {
-    setHint(el.providerResult, err.message || '供应商配置加载失败', 'error');
+    setHint(el.providerResult, err.message || '配置加载失败', 'error');
   }
 };
 
@@ -618,7 +633,6 @@ const openWorkflowDrawer = async () => {
   }
 };
 
-el.workflowFab.onclick = openWorkflowDrawer;
 el.openWorkflowPanel.onclick = openWorkflowDrawer;
 el.closeWorkflowPanel.onclick = () => setWorkflowDrawer(false);
 
@@ -639,6 +653,89 @@ document.getElementById('saveProvider').onclick = async () => {
     setHint(el.providerResult, err.message, 'error');
   }
 };
+
+async function refreshSafetyRules() {
+  const containerList = document.getElementById('safetyRuleList');
+  const containerBuiltin = document.getElementById('builtinSafetyRules');
+  try {
+    const items = await api('/api/config/safety_gate');
+
+    const builtinItems = items.filter(i => i.is_builtin);
+    const customItems = items.filter(i => !i.is_builtin);
+
+    containerBuiltin.innerHTML = '';
+    builtinItems.forEach(i => {
+      const span = document.createElement('span');
+      span.className = 'badge-tag';
+      span.title = i.description || '';
+      span.textContent = i.target;
+      containerBuiltin.appendChild(span);
+    });
+
+    renderList(containerList, customItems, (i) => {
+      const typeLabel = i.rule_type === 'ip' ? 'IP' : i.rule_type === 'cidr' ? '网段' : '域名';
+      return `
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <strong style="color:var(--sec-medium);">${i.target}</strong> <span style="font-size:0.85em; opacity:0.7">(${typeLabel})</span>
+            <div style="font-size:0.85em; margin-top:4px; color:var(--text-main);">${i.description || '无备注'}</div>
+          </div>
+          <button data-delete-rule="${i.id}" class="secondary-btn" style="padding:4px 8px; font-size:0.85em;">删除红线</button>
+        </div>
+      `;
+    });
+
+    containerList.querySelectorAll('button[data-delete-rule]').forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute('data-delete-rule');
+        try {
+          await api(`/api/config/safety_gate/${id}`, { method: 'DELETE' });
+          await refreshSafetyRules();
+        } catch (err) {
+          setHint(document.getElementById('safetyRuleResult'), err.message, 'error');
+        }
+      };
+    });
+  } catch (err) {
+    containerList.textContent = '加载失败';
+  }
+}
+
+// Sidebar Tab Switching
+document.querySelectorAll('.settings-tab').forEach(tab => {
+  tab.onclick = () => {
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
+    tab.classList.add('active');
+    const targetId = tab.getAttribute('data-tab');
+    document.getElementById(targetId).classList.add('active');
+  };
+});
+
+document.getElementById('safetyRuleForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const resultHint = document.getElementById('safetyRuleResult');
+  try {
+    if (!state.isAuthenticated) {
+      setHint(resultHint, '请先登录平台。', 'error');
+      return;
+    }
+    const payload = {
+      rule_type: document.getElementById('safetyRuleType').value,
+      target: document.getElementById('safetyRuleTarget').value.trim(),
+      description: document.getElementById('safetyRuleDesc').value.trim() || undefined
+    };
+
+    await api('/api/config/safety_gate', { method: 'POST', body: JSON.stringify(payload) });
+    setHint(resultHint, '安全防卫红线已添加。', 'success');
+    document.getElementById('safetyRuleTarget').value = '';
+    document.getElementById('safetyRuleDesc').value = '';
+    await refreshSafetyRules();
+  } catch (err) {
+    setHint(resultHint, err.message, 'error');
+  }
+});
+
 
 document.getElementById('testProvider').onclick = async () => {
   try {
@@ -722,60 +819,7 @@ document.getElementById('runWorkflow').onclick = async () => {
 
 document.getElementById('refreshApprovals').onclick = refreshApprovals;
 
-function runParticleBackground() {
-  const canvas = document.getElementById('particleCanvas');
-  const ctx = canvas.getContext('2d');
-  const dots = Array.from({ length: 76 }, () => ({
-    x: Math.random() * window.innerWidth,
-    y: Math.random() * window.innerHeight,
-    vx: (Math.random() - 0.5) * 0.55,
-    vy: (Math.random() - 0.5) * 0.55,
-    r: Math.random() * 1.8 + 0.6,
-  }));
-
-  const resize = () => {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-  };
-
-  const frame = () => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'rgba(34,211,238,0.75)';
-    dots.forEach((d) => {
-      d.x += d.vx;
-      d.y += d.vy;
-      if (d.x <= 0 || d.x >= canvas.width) d.vx *= -1;
-      if (d.y <= 0 || d.y >= canvas.height) d.vy *= -1;
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
-      ctx.fill();
-    });
-
-    for (let i = 0; i < dots.length; i++) {
-      for (let j = i + 1; j < dots.length; j++) {
-        const a = dots[i];
-        const b = dots[j];
-        const dist = Math.hypot(a.x - b.x, a.y - b.y);
-        if (dist < 120) {
-          ctx.strokeStyle = `rgba(34, 211, 238, ${0.14 - dist / 860})`;
-          ctx.beginPath();
-          ctx.moveTo(a.x, a.y);
-          ctx.lineTo(b.x, b.y);
-          ctx.stroke();
-        }
-      }
-    }
-
-    requestAnimationFrame(frame);
-  };
-
-  resize();
-  window.addEventListener('resize', resize);
-  frame();
-}
-
 (async function init() {
-  runParticleBackground();
   initProviderUI();
   await checkAuthStatus();
 })();

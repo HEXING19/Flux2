@@ -55,11 +55,26 @@ def probe(payload: LoginRequest):
 
 @router.get("/status")
 def auth_status(session: Session = Depends(get_session)):
+    from app.core.requester import get_requester_from_credential
+
     credential = session.exec(select(XDRCredential).order_by(XDRCredential.id.desc())).first()
     if not credential:
         return {"authenticated": False}
+
+    # Real-time probe to determine if the configured server is reachable right now
+    requester = get_requester_from_credential(credential)
+    test_resp = requester.request(
+        "POST",
+        "/api/xdr/v1/incidents/list",
+        json_body={"page": 1, "pageSize": 1},
+        timeout=60,
+        max_retries=1,
+    )
+    is_connected = test_resp.get("code") == "Success"
+
     return {
         "authenticated": True,
+        "connected": is_connected,
         "base_url": credential.base_url,
         "verify_ssl": credential.verify_ssl,
     }

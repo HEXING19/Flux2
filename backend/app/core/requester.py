@@ -35,6 +35,7 @@ class APIRequester:
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         timeout: int = 15,
+        max_retries: int = 3,
     ) -> dict[str, Any]:
         if not self.base_url:
             return {"code": "Failed", "message": "缺少XDR基础地址，请先完成登录配置。", "data": {}}
@@ -45,13 +46,13 @@ class APIRequester:
         if self.signature:
             self.signature.sign(req)
 
-        for attempt in range(1, 4):
+        for attempt in range(1, max_retries + 1):
             try:
                 response = self.session.send(req.prepare(), timeout=timeout)
                 response.raise_for_status()
                 return response.json()
             except Exception as exc:
-                if attempt == 3:
+                if attempt == max_retries:
                     return {"code": "Failed", "message": f"请求失败: {exc}", "data": {}}
 
         return {"code": "Failed", "message": "未知请求错误", "data": {}}

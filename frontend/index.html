@@ -1,182 +1,261 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Flux 智能安全运营平台</title>
-    <link rel="stylesheet" href="/assets/styles.css" />
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
-  </head>
-  <body>
-    <canvas id="particleCanvas"></canvas>
-    <div class="noise-layer"></div>
 
-    <main class="root-shell">
-      <section id="landingView" class="landing-view">
-        <div class="landing-left">
-          <p class="badge">Flux Command Center</p>
-          <h1>
-            让安全运营从告警堆积<br />
-            进入<span>实时决策闭环</span>
-          </h1>
-          <p class="subtitle">面向 SOC 的智能执行台: 自然语言驱动检索、研判、审批与处置，在一个界面内完成全链路动作。</p>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flux XDR 安全运营平台</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
 
-          <div class="signal-row">
-            <span>低延迟联动</span>
-            <span>可审计审批</span>
-            <span>自动化编排</span>
-            <span>多源证据汇聚</span>
-          </div>
+<body>
+  <!-- System Status Visibility: Persistent Navbar -->
+  <nav class="navbar hidden" id="mainNav">
+    <div class="nav-brand">
+      <span style="color:var(--brand-turquoise); font-weight:800;">FLUX</span> <span>XDR 智能控制面</span>
+    </div>
+    <div class="nav-actions">
+      <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span id="authStatusText">已连接</span>
+      </div>
+      <button id="openWorkflowPanel" class="secondary-btn">流程编排</button>
+      <button id="openSettingsBtn" class="secondary-btn">管理设置</button>
+      <button id="logoutBtn" class="secondary-btn">退出</button>
+    </div>
+  </nav>
 
-          <section class="status-board">
-            <header>
-              <h3>运行态势</h3>
-              <p>Control Plane</p>
-            </header>
-            <div class="metric-grid">
-              <article>
-                <h4>事件闭环效率</h4>
-                <p>查询到处置触发链路最短化，减少手工跳转。</p>
-              </article>
-              <article>
-                <h4>策略执行可追溯</h4>
-                <p>高危动作默认二次确认，并沉淀审计记录。</p>
-              </article>
-              <article>
-                <h4>流程自动推进</h4>
-                <p>支持定时工作流与人工审批回路联动。</p>
-              </article>
-              <article>
-                <h4>统一结果呈现</h4>
-                <p>文本、表格、图形视图共享同一协议渲染。</p>
-              </article>
+  <main class="container">
+    <!-- Auth Gateway: Modern SaaS 2-column layout -->
+    <section id="landingView" class="auth-view flex-layout">
+      <div class="landing-hero">
+        <h1 class="hero-title">
+          <span style="color:var(--brand-turquoise);">FLUX</span> XDR<br />
+          新一代智能安全运营平台
+        </h1>
+        <p class="hero-desc">融合大语言模型与自动化编排技术，为复杂边界防御提供全方位视角的「智能控制面」，构建自适应的闭环防御体系。</p>
+
+        <div class="feature-list">
+          <div class="feature-item">
+            <div class="feature-icon">🔍</div>
+            <div class="feature-text">
+              <h3>智能研判引擎</h3>
+              <p>对接私有化大模型，自然语言交互处理高危告警，降本增效。</p>
             </div>
-          </section>
-        </div>
-
-        <div class="landing-right">
-          <section class="hero-card command-deck" id="loginSection">
-            <div class="deck-head">
-              <div>
-                <h2>连接你的 XDR 控制面</h2>
-                <p class="section-note">认证通过后即可进入智能安全对话主工作区。</p>
-              </div>
-              <span class="deck-dot"></span>
-            </div>
-            <form id="loginForm" class="grid-form">
-              <label>平台地址<input type="text" id="baseUrl" placeholder="例如 https://10.5.41.194" required /></label>
-              <label>联动码<input type="password" id="authCode" placeholder="优先使用联动码" /></label>
-              <label>Access Key<input type="text" id="accessKey" placeholder="可选，AK/SK 二选一" /></label>
-              <label>Secret Key<input type="password" id="secretKey" placeholder="可选，AK/SK 二选一" /></label>
-              <label class="checkbox-line"><input type="checkbox" id="verifySsl" /> 校验 SSL 证书</label>
-              <div class="action-row">
-                <button type="button" id="probeLogin" class="secondary-btn">连通性探测</button>
-                <button type="submit" class="primary-btn">登录并进入工作台</button>
-              </div>
-              <p id="loginProbeResult" class="hint"></p>
-              <p id="loginResult" class="hint"></p>
-            </form>
-          </section>
-        </div>
-      </section>
-
-      <section id="workspaceView" class="workspace-view hidden">
-        <header class="workspace-header panel">
-          <div>
-            <p class="badge">Flux · XDR</p>
-            <h2>安全运营工作台</h2>
-            <p id="authStatusText" class="section-note"></p>
           </div>
+          <div class="feature-item">
+            <div class="feature-icon">⚡</div>
+            <div class="feature-text">
+              <h3>自动化编排闭环</h3>
+              <p>自定义工作流体系 (Workflow)，零代码设定防御响应机制。</p>
+            </div>
+          </div>
+          <div class="feature-item">
+            <div class="feature-icon">🛡️</div>
+            <div class="feature-text">
+              <h3>高危二次防线</h3>
+              <p>设置管控红线，特权指令熔断与人工复核 (Human-in-the-loop) 机制。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="auth-card" id="loginSection">
+        <h2>工作台认证接入</h2>
+        <p>提供控制中心地址及联动凭证，开启安全智能运营。</p>
+        <form id="loginForm">
+          <label>控制中心地址
+            <input type="text" id="baseUrl" placeholder="https://10.x.x.x" required />
+          </label>
+          <label>联动授权码
+            <input type="password" id="authCode" placeholder="输入优先验证项" required />
+          </label>
+
+          <div class="action-row" style="margin-top: 24px;">
+            <button type="button" id="probeLogin" class="secondary-btn" style="padding: 12px 24px;">探通测试</button>
+            <button type="submit" class="primary-btn" style="flex:1; padding: 12px;">连接接入点</button>
+          </div>
+          <p id="loginProbeResult" class="hint"></p>
+          <p id="loginResult" class="hint"></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- Main Workspace -->
+    <section id="workspaceView" class="workspace-grid hidden">
+      <div class="chat-panel">
+        <div class="panel-header">
+          <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
+        </div>
+        <div id="chatStream" class="chat-stream">
+          <div class="chat-card">
+            <strong>系统向导</strong>
+            <pre>协议握手完成。Flux 智能安全助手已就绪。
+
+您可以通过自然语言与我交互，我支持以下核心能力：
+1. 💡 事件查询与研判：例如“查询昨日的高等级安全事件”、“查看第2个事件的详细举证”
+2. 🛡️ 实体阻断管理：例如“查询 192.168.1.10 的封禁状态”、“把刚刚的攻击源 IP 在外网防火墙上封禁 24 小时”
+3. 📊 数据统计分析：例如“统计最近一周的网络安全日志趋势”
+
+针对特权操作，系统将会触发安全红线校验与二次人工确认。请描述您的安全运营需求...</pre>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <form id="chatForm" class="chat-input-form">
+            <input type="text" id="chatMessage" placeholder="输入自然语言指令进行意图捕获与执行..." autocomplete="off" />
+            <button type="submit" class="primary-btn">执行</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- Side Drawer: Flexible and Efficient Use -->
+    <aside id="workflowDrawer" class="workflow-drawer" aria-hidden="true">
+      <div class="drawer-header">
+        <h2>自动化场景编排 (Workflow)</h2>
+        <button id="closeWorkflowPanel" class="close-icon-btn" type="button" aria-label="关闭">&times;</button>
+      </div>
+      <div class="drawer-body">
+        <form id="workflowForm">
+          <label>场景命名<input type="text" id="wfName" value="每日高危巡检闭环" required /></label>
+          <label>触发周期 (Cron)<input type="text" id="wfCron" value="0 9 * * *" required /></label>
+          <label>捕获等级 (逗号分隔)<input type="text" id="wfLevels" value="3,4" /></label>
+          <label class="checkbox-line"><input type="checkbox" id="wfApproval" checked /> 阻断前需人工复核
+            (Human-in-the-loop)</label>
+          <label>Webhook 通知投递<input type="text" id="wfWebhook" placeholder="支持企微/钉钉机器人" /></label>
+
           <div class="action-row">
-            <button id="openSettingsBtn" class="secondary-btn">系统设置</button>
-            <button id="logoutBtn" class="secondary-btn">退出到登录页</button>
+            <button type="button" id="saveWorkflow" class="primary-btn">下发调度计划</button>
+            <button type="button" id="runWorkflow" class="secondary-btn">手动立即触发</button>
           </div>
-        </header>
+          <p id="wfResult" class="hint"></p>
+        </form>
 
-        <section class="workspace-main">
-          <article class="panel chat-panel chat-panel-wide">
-            <header>
-              <h2>智能安全对话</h2>
-              <button id="openWorkflowPanel" class="secondary-btn">流程面板</button>
-            </header>
-            <div id="chatStream" class="chat-stream"></div>
-            <form id="chatForm" class="chat-input">
-              <input type="text" id="chatMessage" placeholder="例如：查询最近三天高危事件；把前两个标记为已处置" />
-              <button type="submit">发送指令</button>
-            </form>
-          </article>
+        <hr />
+        <h4>计划中场景任务</h4>
+        <div id="workflowList" class="list-box"></div>
+
+        <hr />
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h4 style="margin:0;">待办阻断审批 (Pending Approvals)</h4>
+          <button type="button" id="refreshApprovals" class="secondary-btn"
+            style="padding:4px 8px; font-size:12px;">刷新</button>
+        </div>
+        <div id="approvalList" class="list-box"></div>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <div class="settings-layout">
+      <aside class="settings-sidebar">
+        <h3 class="settings-title">全局管控与设置</h3>
+        <nav class="settings-nav">
+          <button class="settings-tab active" data-tab="tab_llm_config">大模型认知引擎</button>
+          <button class="settings-tab" data-tab="tab_safety_gate">高危防线与红线</button>
+        </nav>
+      </aside>
+
+      <main class="settings-main">
+        <button id="closeSettingsBtn" class="close-icon-btn absolute-close" type="button"
+          aria-label="关闭">&times;</button>
+
+        <section id="tab_llm_config" class="settings-section active">
+          <div class="section-header">
+            <h3>LLM 认知引擎接入管理</h3>
+            <p class="section-note">配置 XDR 实战平台的推理与意图理解分析引擎中枢。</p>
+          </div>
+          <form id="providerForm" class="settings-form-grid">
+            <label>供应商节点
+              <select id="providerType">
+                <option value="openai">OpenAI</option>
+                <option value="zhipu">智谱AI (Zhipu)</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="custom">第三方边界 (Custom)</option>
+              </select>
+            </label>
+            <label>调用模型标识
+              <select id="providerModel"></select>
+            </label>
+            <label class="full-width">鉴权密钥 (API Key)
+              <input type="password" id="providerApiKey" placeholder="留空则复用系统环境变量" />
+            </label>
+            <label id="providerBaseUrlRow" class="full-width">接口基址 (Base URL)
+              <input type="text" id="providerBaseUrl" placeholder="通常由系统自动分配，定制环境可覆盖" />
+            </label>
+            <label id="providerCustomModelRow" class="hidden full-width">定制模型符
+              <input type="text" id="providerCustomModel" placeholder="e.g. gpt-4-32k" />
+            </label>
+
+            <div class="form-footer full-width">
+              <p id="providerHint" class="section-note" style="margin:0;"></p>
+              <div class="action-row" style="margin:0;">
+                <button type="button" id="testProvider" class="secondary-btn">路由探活</button>
+                <button type="button" id="saveProvider" class="primary-btn">写入配置</button>
+              </div>
+            </div>
+            <p id="providerResult" class="hint full-width"></p>
+          </form>
+          <div id="providerList" class="list-box"></div>
         </section>
 
-        <button id="workflowFab" class="workflow-fab" type="button" aria-label="打开流程编排面板">流程</button>
-
-        <aside id="workflowDrawer" class="workflow-drawer hidden" aria-hidden="true">
-          <header>
-            <h2>自动化流程编排</h2>
-            <button id="closeWorkflowPanel" class="secondary-btn" type="button">关闭</button>
-          </header>
-          <form id="workflowForm" class="grid-form">
-            <label>流程名称<input type="text" id="wfName" value="每日高危闭环" required /></label>
-            <label>Cron 表达式<input type="text" id="wfCron" value="0 9 * * *" required /></label>
-            <label>事件等级（逗号分隔）<input type="text" id="wfLevels" value="3,4" /></label>
-            <label class="checkbox-line"><input type="checkbox" id="wfApproval" checked /> 需要人工审批</label>
-            <label>Webhook 地址<input type="text" id="wfWebhook" placeholder="企业微信/钉钉机器人地址" /></label>
-            <div class="action-row">
-              <button type="button" id="saveWorkflow">保存流程</button>
-              <button type="button" id="runWorkflow" class="secondary-btn">立即执行流程</button>
-            </div>
-            <div class="action-row">
-              <button type="button" id="refreshApprovals" class="secondary-btn">刷新审批列表</button>
-            </div>
-            <p id="wfResult" class="hint"></p>
-          </form>
-          <div id="workflowList" class="list-box"></div>
-          <div id="approvalList" class="list-box"></div>
-        </aside>
-      </section>
-    </main>
-
-    <dialog id="settingsDialog" class="settings-dialog">
-      <header class="dialog-header">
-        <h3>系统设置</h3>
-        <button id="closeSettingsBtn" class="secondary-btn" type="button">关闭</button>
-      </header>
-      <section>
-        <h4>大模型供应商配置</h4>
-        <form id="providerForm" class="grid-form">
-          <label>模型供应商
-            <select id="providerType">
-              <option value="openai">OpenAI</option>
-              <option value="zhipu">智谱AI</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="custom">自定义端点</option>
-            </select>
-          </label>
-          <label>API Key<input type="password" id="providerApiKey" placeholder="按供应商填写对应密钥" /></label>
-          <label id="providerBaseUrlRow">Base URL<input type="text" id="providerBaseUrl" placeholder="供应商默认地址可留空" /></label>
-          <label>模型名称
-            <select id="providerModel"></select>
-          </label>
-          <label id="providerCustomModelRow" class="hidden">自定义模型名称<input type="text" id="providerCustomModel" placeholder="例如 gpt-4o-mini" /></label>
-          <p id="providerHint" class="section-note"></p>
-          <div class="action-row">
-            <button type="button" id="saveProvider">保存供应商配置</button>
-            <button type="button" id="testProvider" class="secondary-btn">探测模型连通性</button>
+        <section id="tab_safety_gate" class="settings-section">
+          <div class="section-header">
+            <h3>高危指令硬拦截防线 (Safety Gate Rules)</h3>
+            <p class="section-note">拦截由模型幻觉或人工误操作引起的高危屏蔽指令，确保核心资产和业务永不中断。</p>
           </div>
-          <p id="providerResult" class="hint"></p>
-        </form>
-        <div id="providerList" class="list-box"></div>
-      </section>
-    </dialog>
 
-    <dialog id="dangerDialog" class="danger-dialog">
-      <h3>危险操作二次确认</h3>
-      <p id="dangerText"></p>
-      <div class="action-row">
-        <button id="dangerConfirm" class="danger-btn">确认执行</button>
-        <button id="dangerCancel" class="secondary-btn">取消</button>
+          <div class="builtin-rules-container">
+            <h4>默认受保护基础组件 (系统内置)</h4>
+            <div id="builtinSafetyRules" class="builtin-tags">
+              <!-- Builtin tags will be injected here -->
+            </div>
+          </div>
+
+          <form id="safetyRuleForm" class="settings-form-grid"
+            style="margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border-light);">
+            <h4 class="full-width" style="margin-top:0;">新增自定义防线 (Custom Overrides)</h4>
+            <label>匹配维度
+              <select id="safetyRuleType">
+                <option value="ip">IPv4 物联实体 (IP)</option>
+                <option value="cidr">CIDR 聚合网段 (Network)</option>
+                <option value="domain">完全限定域名 (FQDN)</option>
+              </select>
+            </label>
+            <label>防线目标向量
+              <input type="text" id="safetyRuleTarget" placeholder="e.g. 192.168.1.10" required />
+            </label>
+            <label class="full-width">业务逻辑备注 (Metadata)
+              <input type="text" id="safetyRuleDesc" placeholder="e.g. 数据中心核心存储管理口" />
+            </label>
+            <div class="form-footer full-width" style="justify-content: flex-end;">
+              <button type="submit" class="danger-btn"
+                style="background:var(--sec-medium); color:#000;">追加至安全防线</button>
+            </div>
+            <p id="safetyRuleResult" class="hint full-width"></p>
+          </form>
+          <div id="safetyRuleList" class="list-box"></div>
+        </section>
+      </main>
+    </div>
+  </dialog>
+
+  <!-- Dangerous Action Confirm: Consistency -->
+  <dialog id="dangerDialog" class="danger-dialog">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3 style="color:var(--sec-high);">特权操作二次熔断确认</h3>
       </div>
-    </dialog>
+      <p id="dangerText" style="margin-bottom:24px; font-size:14px; line-height:1.6;"></p>
+      <div class="action-row" style="justify-content: flex-end;">
+        <button id="dangerCancel" class="secondary-btn">撤销操作指令</button>
+        <button id="dangerConfirm" class="danger-btn">通过审计并下发执行</button>
+      </div>
+    </div>
+  </dialog>
 
-    <script src="/assets/app.js"></script>
-  </body>
+  <script src="/assets/app.js"></script>
+</body>
+
 </html>

@@ -76,3 +76,12 @@ class AuditAction(SQLModel, table=True):
     status: str
     detail_json: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class SafetyGateRule(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    rule_type: str = Field(index=True)  # ip, domain, cidr
+    target: str = Field(index=True, unique=True)
+    description: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+

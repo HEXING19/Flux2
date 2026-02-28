@@ -85,3 +85,12 @@ docker compose down
 
 - PyInstaller: `./scripts/build_pyinstaller.sh`
 - Docker: `docker compose up --build`
+
+
+
+cd /Users/hexing/Flux2
+docker compose down
+rm -rf flux.db
+mkdir -p data
+docker compose up --build -d
+docker compose logs -f
