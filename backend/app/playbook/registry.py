@@ -84,6 +84,41 @@ class PlaybookRegistry:
                     ),
                 ],
             ),
+            "asset_guard": PlaybookTemplateMeta(
+                id="asset_guard",
+                name="核心资产防线透视",
+                description="围绕核心资产IP进行双向流量/告警体检，输出管理层可读的风险结论。",
+                button_label="🏥 核心资产一键体检",
+                default_params={"window_hours": 24, "top_external_ip": 5},
+                params=[
+                    PlaybookTemplateParam(
+                        key="asset_ip",
+                        label="核心资产IP",
+                        description="必填，保护对象IP。",
+                        required=True,
+                    ),
+                    PlaybookTemplateParam(
+                        key="asset_name",
+                        label="资产名称",
+                        description="可选，便于管理层识别业务对象。",
+                        required=False,
+                    ),
+                    PlaybookTemplateParam(
+                        key="window_hours",
+                        label="统计窗口(小时)",
+                        description="默认24小时。",
+                        required=False,
+                        default=24,
+                    ),
+                    PlaybookTemplateParam(
+                        key="top_external_ip",
+                        label="外部IP TopN",
+                        description="默认5个。",
+                        required=False,
+                        default=5,
+                    ),
+                ],
+            ),
         }
 
     def list_templates(self) -> list[dict]:

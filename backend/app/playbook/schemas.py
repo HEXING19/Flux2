@@ -23,6 +23,6 @@ class PlaybookTemplateMeta(BaseModel):
 
 
 class PlaybookRunRequest(BaseModel):
-    template_id: Literal["routine_check", "alert_triage", "threat_hunting"]
+    template_id: Literal["routine_check", "alert_triage", "threat_hunting", "asset_guard"]
     params: dict[str, Any] = Field(default_factory=dict)
     session_id: str | None = Field(default=None, min_length=1)

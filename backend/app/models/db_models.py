@@ -99,6 +99,24 @@ class SafetyGateRule(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ThreatIntelConfig(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(index=True, unique=True)
+    api_key: Optional[str] = None
+    enabled: bool = True
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class CoreAsset(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    asset_name: str
+    asset_ip: str = Field(index=True, unique=True)
+    biz_owner: Optional[str] = None
+    metadata_json: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class SessionState(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: str = Field(index=True, unique=True)

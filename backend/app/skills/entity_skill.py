@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.core.exceptions import MissingParameterException
 from app.core.payload import table_payload, text_payload
-from app.core.settings import settings
+from app.core.threatbook import resolve_threatbook_api_key
 
 from .base import BaseSkill
 from .event_skills import _bootstrap_event_indices, extract_entity_items_from_response, extract_event_uuids_from_text
@@ -44,7 +44,8 @@ class EntityQuerySkill(BaseSkill):
         }
 
     def _query_threatbook(self, ip: str) -> dict[str, Any]:
-        if not settings.threatbook_api_key:
+        api_key = resolve_threatbook_api_key()
+        if not api_key:
             # 未配置时用稳定的本地策略回退，避免每次同IP返回结果飘忽。
             return self._stable_local_assessment(ip)
 
@@ -52,7 +53,7 @@ class EntityQuerySkill(BaseSkill):
             with httpx.Client(timeout=10) as client:
                 resp = client.get(
                     "https://api.threatbook.cn/v3/scene/ip_reputation",
-                    params={"apikey": settings.threatbook_api_key, "resource": ip},
+                    params={"apikey": api_key, "resource": ip},
                 )
                 data = resp.json()
                 result = data.get("data", {}).get(ip, {})
@@ -117,7 +118,7 @@ class EntityQuerySkill(BaseSkill):
             )
 
         rows = [self._query_threatbook(ip) for ip in model.ips]
-        summary = "已完成实体情报查询。" if settings.threatbook_api_key else "未检测到微步Key，已返回本地评估结果。"
+        summary = "已完成实体情报查询。" if resolve_threatbook_api_key() else "未检测到微步Key，已返回本地评估结果。"
         return [
             text_payload(summary, title="实体情报结果"),
             table_payload(

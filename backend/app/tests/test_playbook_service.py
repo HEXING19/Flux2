@@ -164,6 +164,20 @@ class PlaybookServiceTest(unittest.TestCase):
                     params={},
                     session_id="s-validation-2",
                 )
+            with self.assertRaises(ValueError):
+                playbook_service.start_run(
+                    session,
+                    template_id="asset_guard",
+                    params={},
+                    session_id="s-validation-3",
+                )
+            with self.assertRaises(ValueError):
+                playbook_service.start_run(
+                    session,
+                    template_id="asset_guard",
+                    params={"asset_ip": "bad-ip"},
+                    session_id="s-validation-4",
+                )
 
     def test_alert_triage_count_payloads(self):
         fake_requester = PlaybookRequester()
@@ -220,6 +234,33 @@ class PlaybookServiceTest(unittest.TestCase):
                 self.assertIn("summary", result)
                 self.assertGreaterEqual(len(result.get("cards", [])), 3)
                 self.assertGreaterEqual(len(result.get("next_actions", [])), 1)
+
+    def test_routine_check_dependency_declared(self):
+        status = playbook_service._initial_node_status("routine_check", None)
+        self.assertEqual(
+            status["node_2_unhandled_high_events_24h"].get("depends_on"),
+            ["node_1_log_count_24h"],
+        )
+
+    def test_asset_guard_returns_summary_and_cards(self):
+        fake_requester = PlaybookRequester()
+        with (
+            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
+            patch("app.playbook.service.LLMRouter.complete", return_value="asset guard summary"),
+        ):
+            with Session(engine) as session:
+                run = playbook_service.start_run(
+                    session,
+                    template_id="asset_guard",
+                    params={"asset_ip": "10.10.0.2", "asset_name": "核心资产A"},
+                    session_id="s-asset-1",
+                )
+                final_run = self._wait_run_finished(session, run.id)
+                self.assertEqual(final_run.status, "Finished")
+                payload = playbook_service.serialize_run(final_run)
+                result = payload.get("result", {})
+                self.assertIn("summary", result)
+                self.assertGreaterEqual(len(result.get("cards", [])), 3)
 
 
 if __name__ == "__main__":

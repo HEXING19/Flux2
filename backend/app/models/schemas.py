@@ -42,6 +42,23 @@ class ProviderConnectivityRequest(BaseModel):
     model_name: Optional[str] = None
 
 
+class ThreatbookConfigIn(BaseModel):
+    api_key: Optional[str] = None
+    enabled: bool = True
+
+
+class ThreatbookConnectivityRequest(BaseModel):
+    api_key: Optional[str] = None
+    test_ip: str = Field(default="8.8.8.8")
+
+
+class CoreAssetIn(BaseModel):
+    asset_name: str = Field(min_length=1)
+    asset_ip: str = Field(min_length=1)
+    biz_owner: Optional[str] = None
+    metadata: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1)
     message: str = Field(min_length=1)

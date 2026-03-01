@@ -2,6 +2,7 @@ const state = {
   sessionId: `session-${Date.now()}`,
   isAuthenticated: false,
   playbookTemplates: [],
+  coreAssets: [],
 };
 
 const DEFAULT_PLAYBOOK_SCENES = [
@@ -29,7 +30,53 @@ const DEFAULT_PLAYBOOK_SCENES = [
     hint: '适合针对某个可疑 IP 做溯源汇报。',
     default_params: { window_days: 90, max_scan: 2000, evidence_limit: 20 },
   },
+  {
+    id: 'asset_guard',
+    name: '核心资产防线透视',
+    button_label: '🏥 核心资产一键体检',
+    description: '围绕核心资产IP进行双向态势体检，输出管理层可读的风险摘要和建议动作。',
+    hint: '适合给业务负责人做核心资产每日/每周态势汇报。',
+    default_params: { window_hours: 24, top_external_ip: 5 },
+  },
 ];
+
+const PLAYBOOK_STAGE_META = {
+  routine_check: {
+    node_1_log_count_24h: { title: '统计日志总量', desc: '统计过去窗口期日志体量' },
+    node_2_unhandled_high_events_24h: { title: '检索高危未处置事件', desc: '筛选需要优先关注的高危告警' },
+    node_3_sample_detail_parallel: { title: '并行拉取样本证据', desc: '补充样本事件证据和实体信息' },
+    node_4_llm_briefing: { title: '生成早报结论', desc: '输出面向值班交接的结论与建议' },
+  },
+  alert_triage: {
+    analyze: {
+      node_1_resolve_target: { title: '定位目标事件', desc: '解析事件ID/序号并锁定目标' },
+      node_2_entity_profile: { title: '生成实体画像', desc: '抽取事件关联IP与画像信息' },
+      node_3_external_intel: { title: '外部情报查询', desc: '补充ThreatBook或本地情报结果' },
+      node_4_internal_impact_count_parallel: { title: '统计内部影响', desc: '计算影响面与风险得分' },
+      node_5_llm_triage_summary: { title: '输出研判结论', desc: '给出处置建议和优先动作' },
+    },
+    block_ip: {
+      node_1_resolve_target_ip: { title: '解析待封禁IP', desc: '从参数或事件实体定位目标IP' },
+      node_2_build_block_approval: { title: '生成审批卡', desc: '进入高危操作人工审批链路' },
+    },
+  },
+  threat_hunting: {
+    node_1_external_profile: { title: '查询外部画像', desc: '获取目标IP外部威胁画像' },
+    node_2_event_scan_paginated: { title: '分页扫描事件', desc: '回溯窗口内检索相关事件' },
+    node_3_evidence_enrichment_parallel: { title: '并行补充证据', desc: '拉取时间线和关联实体信息' },
+    node_4_internal_activity_count: { title: '统计内部活动', desc: '按窗口统计源/目的活动量' },
+    node_5_llm_timeline_story: { title: '生成活动轨迹故事线', desc: '输出侦察到影响的结构化叙事' },
+  },
+  asset_guard: {
+    node_1_events_dst_asset: { title: '统计入向告警', desc: '分析以资产为目的的事件' },
+    node_2_events_src_asset: { title: '统计出向告警', desc: '分析以资产为源的事件' },
+    node_3_logs_dst_asset: { title: '统计入向访问', desc: '计算资产作为目的IP的访问量' },
+    node_4_logs_src_asset: { title: '统计出向访问', desc: '计算资产作为源IP的访问量' },
+    node_5_top_external_ip: { title: '提取外部Top实体', desc: '识别高频外部访问IP' },
+    node_6_external_intel_enrich: { title: '情报画像增强', desc: '对外部Top实体执行情报查询' },
+    node_7_llm_asset_briefing: { title: '生成管理层结论', desc: '输出核心资产态势结论与建议' },
+  },
+};
 
 const PROVIDER_META = {
   openai: {
@@ -82,6 +129,17 @@ const el = {
   providerHint: document.getElementById('providerHint'),
   providerResult: document.getElementById('providerResult'),
   providerList: document.getElementById('providerList'),
+  threatbookApiKey: document.getElementById('threatbookApiKey'),
+  threatbookEnabled: document.getElementById('threatbookEnabled'),
+  threatbookTestIp: document.getElementById('threatbookTestIp'),
+  threatbookResult: document.getElementById('threatbookResult'),
+  coreAssetForm: document.getElementById('coreAssetForm'),
+  coreAssetName: document.getElementById('coreAssetName'),
+  coreAssetIp: document.getElementById('coreAssetIp'),
+  coreAssetOwner: document.getElementById('coreAssetOwner'),
+  coreAssetMeta: document.getElementById('coreAssetMeta'),
+  coreAssetResult: document.getElementById('coreAssetResult'),
+  coreAssetList: document.getElementById('coreAssetList'),
 
   chatForm: document.getElementById('chatForm'),
   chatMessage: document.getElementById('chatMessage'),
@@ -444,39 +502,240 @@ function renderNextActions(actions) {
 function createPlaybookProgressCard(runId, templateId) {
   const card = cardTemplate(`Playbook 运行中 · ${templateId}`);
   card.dataset.playbookRunId = String(runId);
+  card.classList.add('playbook-progress-card');
+
+  const runMeta = document.createElement('div');
+  runMeta.className = 'playbook-progress-meta';
+  runMeta.textContent = `run_id: ${runId}`;
+  card.appendChild(runMeta);
+
+  const barWrap = document.createElement('div');
+  barWrap.className = 'playbook-progress-bar';
+  const barFill = document.createElement('div');
+  barFill.className = 'playbook-progress-fill';
+  barFill.style.width = '0%';
+  barWrap.appendChild(barFill);
+  card.appendChild(barWrap);
+
+  const progressText = document.createElement('p');
+  progressText.className = 'playbook-progress-text';
+  progressText.textContent = '初始化中...';
+  card.appendChild(progressText);
+
+  const stageList = document.createElement('div');
+  stageList.className = 'playbook-stage-list';
+  card.appendChild(stageList);
+
+  const details = document.createElement('details');
+  details.className = 'playbook-tech-details';
+  const summary = document.createElement('summary');
+  summary.textContent = '技术详情';
+  details.appendChild(summary);
   const pre = document.createElement('pre');
   pre.textContent = `run_id=${runId}\n初始化中...`;
-  card.appendChild(pre);
+  details.appendChild(pre);
+  card.appendChild(details);
+
   appendCard(card);
-  return { card, pre };
+  return { card, pre, stageList, progressText, barFill };
 }
 
-function updatePlaybookProgress(preEl, runData) {
+function getStageMeta(templateId, runData) {
+  const input = runData?.input?.params || {};
+  if (templateId === 'alert_triage') {
+    const mode = input.mode === 'block_ip' ? 'block_ip' : 'analyze';
+    return PLAYBOOK_STAGE_META.alert_triage[mode] || {};
+  }
+  return PLAYBOOK_STAGE_META[templateId] || {};
+}
+
+function mapNodeStatus(status) {
+  const normalized = String(status || 'Pending');
+  if (normalized === 'Running') return { text: '执行中', className: 'running' };
+  if (normalized === 'Finished') return { text: '已完成', className: 'finished' };
+  if (normalized === 'Failed') return { text: '失败', className: 'failed' };
+  return { text: '等待中', className: 'pending' };
+}
+
+function simplifyError(errorText) {
+  if (!errorText) return '';
+  const text = String(errorText).trim();
+  if (text.includes("'nodes'")) return '依赖节点尚未就绪';
+  if (text.length <= 80) return text;
+  return `${text.slice(0, 80)}...`;
+}
+
+function updatePlaybookProgress(progressUi, runData) {
   const nodeStatus = runData?.context?.node_status || {};
   const progress = runData?.context?.progress || {};
-  const lines = [];
-  lines.push(`状态: ${runData.status}`);
-  lines.push(`run_id: ${runData.run_id}`);
-  lines.push(`进度: ${progress.finished || 0}/${progress.total || Object.keys(nodeStatus).length || 0}`);
-  Object.entries(nodeStatus).forEach(([nodeId, info]) => {
-    const status = info?.status || 'Pending';
-    const error = info?.error ? ` (error: ${info.error})` : '';
-    lines.push(`- ${nodeId}: ${status}${error}`);
+  const total = progress.total || Object.keys(nodeStatus).length || 0;
+  const finished = progress.finished || 0;
+  const percent = total > 0 ? Math.round((finished / total) * 100) : 0;
+  progressUi.barFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+
+  const statusText = mapNodeStatus(runData?.status).text;
+  progressUi.progressText.textContent = `状态：${statusText} · 进度：${finished}/${total}`;
+
+  const stageMeta = getStageMeta(runData?.template_id, runData);
+  const orderedNodeIds = Object.keys(stageMeta).length ? Object.keys(stageMeta) : Object.keys(nodeStatus);
+  Object.keys(nodeStatus).forEach((nodeId) => {
+    if (!orderedNodeIds.includes(nodeId)) orderedNodeIds.push(nodeId);
   });
-  preEl.textContent = lines.join('\n');
+  progressUi.stageList.innerHTML = '';
+  orderedNodeIds.forEach((nodeId) => {
+    const info = nodeStatus[nodeId] || {};
+    const statusInfo = mapNodeStatus(info.status);
+    const stage = document.createElement('div');
+    stage.className = `playbook-stage-item stage-${statusInfo.className}`;
+
+    const left = document.createElement('div');
+    left.className = 'playbook-stage-main';
+    const title = document.createElement('div');
+    title.className = 'playbook-stage-title';
+    title.textContent = stageMeta[nodeId]?.title || '后台任务';
+    const desc = document.createElement('div');
+    desc.className = 'playbook-stage-desc';
+    desc.textContent = stageMeta[nodeId]?.desc || nodeId;
+    left.appendChild(title);
+    left.appendChild(desc);
+
+    if (info?.error) {
+      const err = document.createElement('div');
+      err.className = 'playbook-stage-error';
+      err.textContent = `失败原因：${simplifyError(info.error)}`;
+      left.appendChild(err);
+    }
+
+    const badge = document.createElement('span');
+    badge.className = `playbook-stage-badge badge-${statusInfo.className}`;
+    badge.textContent = statusInfo.text;
+
+    stage.appendChild(left);
+    stage.appendChild(badge);
+    progressUi.stageList.appendChild(stage);
+  });
+
+  const lines = [`状态: ${runData.status}`, `run_id: ${runData.run_id}`, `进度: ${finished}/${total}`];
+  Object.entries(nodeStatus).forEach(([nodeId, info]) => {
+    const rawStatus = info?.status || 'Pending';
+    const rawError = info?.error ? ` (error: ${info.error})` : '';
+    lines.push(`- ${nodeId}: ${rawStatus}${rawError}`);
+  });
+  progressUi.pre.textContent = lines.join('\n');
+}
+
+function payloadText(payload) {
+  return payload?.type === 'text' ? String(payload?.data?.text || '').trim() : '';
+}
+
+function isSummaryDuplicated(summary, cards) {
+  if (!summary || !cards?.length) return false;
+  const firstText = payloadText(cards[0]);
+  return !!firstText && firstText === String(summary).trim();
+}
+
+function createUnifiedTable(payload) {
+  const wrap = document.createElement('div');
+  wrap.className = 'table-wrap';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const trh = document.createElement('tr');
+  (payload.data.columns || []).forEach((c) => {
+    const th = document.createElement('th');
+    th.textContent = c.label;
+    trh.appendChild(th);
+  });
+  thead.appendChild(trh);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  (payload.data.rows || []).forEach((row) => {
+    const tr = document.createElement('tr');
+    (payload.data.columns || []).forEach((c) => {
+      const td = document.createElement('td');
+      const value = row[c.key];
+      td.textContent = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderAlertTriageUnifiedCard(runData) {
+  const result = runData?.result || {};
+  const summary = String(result.summary || runData?.error || '').trim();
+  const cards = result.cards || [];
+
+  const card = cardTemplate('单点告警深度研判报告');
+  card.classList.add('playbook-unified-report');
+
+  if (summary) {
+    const section = document.createElement('div');
+    section.className = 'report-section';
+    const title = document.createElement('h4');
+    title.className = 'report-section-title';
+    title.textContent = '结论';
+    section.appendChild(title);
+    const pre = document.createElement('pre');
+    pre.textContent = summary;
+    section.appendChild(pre);
+    card.appendChild(section);
+  }
+
+  cards.forEach((payload, index) => {
+    if (payload?.type === 'text' && payloadText(payload) === summary) return;
+    const section = document.createElement('div');
+    section.className = 'report-section';
+
+    const title = document.createElement('h4');
+    title.className = 'report-section-title';
+    title.textContent = payload?.data?.title || `区块 ${index + 1}`;
+    section.appendChild(title);
+
+    if (payload?.type === 'text') {
+      const pre = document.createElement('pre');
+      pre.textContent = payload?.data?.text || '';
+      section.appendChild(pre);
+    } else if (payload?.type === 'table') {
+      section.appendChild(createUnifiedTable(payload));
+    } else if (payload?.type === 'echarts_graph') {
+      const p = document.createElement('p');
+      p.textContent = payload?.data?.summary || '图表结果';
+      section.appendChild(p);
+    } else {
+      const pre = document.createElement('pre');
+      pre.textContent = JSON.stringify(payload?.data || {}, null, 2);
+      section.appendChild(pre);
+    }
+    card.appendChild(section);
+  });
+
+  appendCard(card);
 }
 
 function renderPlaybookResult(runData) {
   const result = runData?.result || {};
-  const summary = result.summary || runData?.error || '';
-  if (summary) {
+  const summary = String(result.summary || runData?.error || '').trim();
+  const cards = result.cards || [];
+  const shouldRenderSummary = summary && !isSummaryDuplicated(summary, cards);
+
+  if (runData?.template_id === 'alert_triage' && runData?.input?.params?.mode !== 'block_ip') {
+    renderAlertTriageUnifiedCard(runData);
+    renderNextActions(result.next_actions || []);
+    return;
+  }
+
+  if (shouldRenderSummary) {
     renderPayload({
       type: 'text',
       data: { title: `Playbook 结果 · ${runData.template_id}`, text: summary, dangerous: false },
     });
   }
 
-  (result.cards || []).forEach((cardPayload) => renderPayload(cardPayload));
+  cards.forEach((cardPayload) => renderPayload(cardPayload));
   renderNextActions(result.next_actions || []);
 }
 
@@ -503,7 +762,45 @@ function buildSceneParams(scene) {
     return { ...base, ip: value };
   }
 
+  if (scene.id === 'asset_guard') {
+    const defaultAsset = state.coreAssets[0];
+    const defaultPromptValue = defaultAsset ? `${defaultAsset.asset_name || ''} ${defaultAsset.asset_ip}`.trim() : '';
+    const raw = window.prompt('请输入核心资产IP（可输入“资产名 空格 IP”）：', defaultPromptValue);
+    const value = (raw || '').trim();
+    if (!value) return null;
+
+    let assetIp = '';
+    let assetName = '';
+    const ipMatch = value.match(/(?:\d{1,3}\.){3}\d{1,3}/);
+    if (ipMatch) {
+      assetIp = ipMatch[0];
+      assetName = value.replace(assetIp, '').trim();
+    } else {
+      throw new Error('请输入合法的核心资产IP。');
+    }
+    return { ...base, asset_ip: assetIp, asset_name: assetName || undefined };
+  }
+
   return base;
+}
+
+function formatTriggerLabel(templateId, triggerLabel, params) {
+  const baseLabel = triggerLabel || templateId;
+  if (templateId === 'alert_triage') {
+    if (params?.incident_uuid) return `触发场景: ${baseLabel}（${params.incident_uuid}）`;
+    if (Array.isArray(params?.incident_uuids) && params.incident_uuids.length) {
+      if (params.incident_uuids.length === 1) return `触发场景: ${baseLabel}（${params.incident_uuids[0]}）`;
+      return `触发场景: ${baseLabel}（${params.incident_uuids[0]} 等${params.incident_uuids.length}条）`;
+    }
+    if (params?.event_index) return `触发场景: ${baseLabel}（序号${params.event_index}）`;
+    if (Array.isArray(params?.event_indexes) && params.event_indexes.length) {
+      return `触发场景: ${baseLabel}（序号${params.event_indexes[0]} 等${params.event_indexes.length}条）`;
+    }
+  }
+  if (templateId === 'asset_guard' && params?.asset_ip) {
+    return `触发场景: ${baseLabel}（${params.asset_ip}）`;
+  }
+  return `触发场景: ${baseLabel}`;
 }
 
 function renderPlaybookCards(templates) {
@@ -579,7 +876,7 @@ async function pollPlaybookRun(runId, progressUi) {
   const maxPoll = 120;
   for (let i = 0; i < maxPoll; i += 1) {
     const runData = await api(`/api/playbooks/runs/${runId}`);
-    updatePlaybookProgress(progressUi.pre, runData);
+    updatePlaybookProgress(progressUi, runData);
     if (runData.status === 'Finished' || runData.status === 'Failed') {
       return runData;
     }
@@ -606,7 +903,7 @@ async function runPlaybook(templateId, params = {}, triggerLabel = '') {
 
   const introCard = cardTemplate('你', 'user');
   const introPre = document.createElement('pre');
-  introPre.textContent = `触发场景: ${triggerLabel || templateId}`;
+  introPre.textContent = formatTriggerLabel(templateId, triggerLabel, params);
   introCard.appendChild(introPre);
   appendCard(introCard);
 
@@ -616,7 +913,7 @@ async function runPlaybook(templateId, params = {}, triggerLabel = '') {
   });
   const progressUi = createPlaybookProgressCard(runInfo.run_id, templateId);
   if (runInfo.partial_context) {
-    updatePlaybookProgress(progressUi.pre, {
+    updatePlaybookProgress(progressUi, {
       run_id: runInfo.run_id,
       template_id: templateId,
       status: runInfo.status,
@@ -701,6 +998,70 @@ async function refreshProviders() {
   );
 }
 
+async function loadThreatbookConfig() {
+  if (!el.threatbookApiKey) return;
+  const data = await api('/api/config/threatbook');
+  el.threatbookApiKey.value = '';
+  if (el.threatbookEnabled) el.threatbookEnabled.checked = data.enabled !== false;
+  if (data.masked_key) {
+    el.threatbookApiKey.placeholder = `已保存：${data.masked_key}`;
+  } else {
+    el.threatbookApiKey.placeholder = '输入 ThreatBook API Key';
+  }
+}
+
+async function saveThreatbookConfig() {
+  if (!el.threatbookApiKey || !el.threatbookEnabled) return;
+  const payload = {
+    api_key: el.threatbookApiKey.value.trim() || null,
+    enabled: !!el.threatbookEnabled.checked,
+  };
+  await api('/api/config/threatbook', { method: 'POST', body: JSON.stringify(payload) });
+  setHint(el.threatbookResult, 'ThreatBook 配置已保存。', 'success');
+  await loadThreatbookConfig();
+}
+
+async function testThreatbookConfig() {
+  if (!el.threatbookApiKey || !el.threatbookTestIp) return;
+  const payload = {
+    api_key: el.threatbookApiKey.value.trim() || null,
+    test_ip: el.threatbookTestIp.value.trim() || '8.8.8.8',
+  };
+  const result = await api('/api/config/threatbook/test', { method: 'POST', body: JSON.stringify(payload) });
+  setHint(el.threatbookResult, result.message || '测试完成', result.success ? 'success' : 'error');
+}
+
+async function refreshCoreAssets() {
+  if (!el.coreAssetList) return;
+  const items = await api('/api/config/core-assets');
+  state.coreAssets = items;
+  renderList(el.coreAssetList, items, (item) => {
+    const metadata = item.metadata && Object.keys(item.metadata).length ? JSON.stringify(item.metadata) : '-';
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <div>
+          <strong style="color:var(--sec-medium);">${item.asset_name || '未命名资产'}</strong>
+          <div style="font-size:0.9em; margin-top:4px;">IP: ${item.asset_ip}</div>
+          <div style="font-size:0.85em; opacity:0.85; margin-top:4px;">负责人: ${item.biz_owner || '-'} · 备注: ${metadata}</div>
+        </div>
+        <button data-delete-asset="${item.id}" class="secondary-btn" style="padding:4px 8px; font-size:0.85em;">删除</button>
+      </div>
+    `;
+  });
+
+  el.coreAssetList.querySelectorAll('button[data-delete-asset]').forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute('data-delete-asset');
+      try {
+        await api(`/api/config/core-assets/${id}`, { method: 'DELETE' });
+        await refreshCoreAssets();
+      } catch (err) {
+        setHint(el.coreAssetResult, err.message || '删除失败', 'error');
+      }
+    };
+  });
+}
+
 
 async function sendChat(message) {
   if (!state.isAuthenticated) {
@@ -730,6 +1091,12 @@ async function sendChat(message) {
 async function bootWorkspace() {
   await refreshProviders().catch((err) => {
     setHint(el.providerResult, err.message || '供应商配置加载失败，可稍后重试。', 'error');
+  });
+  await loadThreatbookConfig().catch((err) => {
+    setHint(el.threatbookResult, err.message || 'ThreatBook 配置加载失败，可稍后重试。', 'error');
+  });
+  await refreshCoreAssets().catch((err) => {
+    setHint(el.coreAssetResult, err.message || '核心资产列表加载失败，可稍后重试。', 'error');
   });
   await refreshPlaybookTemplates();
 }
@@ -798,6 +1165,8 @@ el.openSettingsBtn.onclick = async () => {
   try {
     await refreshProviders();
     await window.refreshSafetyRules?.();
+    await loadThreatbookConfig();
+    await refreshCoreAssets();
   } catch (err) {
     setHint(el.providerResult, err.message || '配置加载失败', 'error');
   }
@@ -930,7 +1299,65 @@ document.getElementById('testProvider').onclick = async () => {
   }
 };
 
+const saveThreatbookBtn = document.getElementById('saveThreatbook');
+if (saveThreatbookBtn) {
+  saveThreatbookBtn.onclick = async () => {
+    try {
+      if (!state.isAuthenticated) {
+        setHint(el.threatbookResult, '请先登录平台。', 'error');
+        return;
+      }
+      await saveThreatbookConfig();
+    } catch (err) {
+      setHint(el.threatbookResult, err.message || '保存失败', 'error');
+    }
+  };
+}
+
+const testThreatbookBtn = document.getElementById('testThreatbook');
+if (testThreatbookBtn) {
+  testThreatbookBtn.onclick = async () => {
+    try {
+      if (!state.isAuthenticated) {
+        setHint(el.threatbookResult, '请先登录平台。', 'error');
+        return;
+      }
+      await testThreatbookConfig();
+    } catch (err) {
+      setHint(el.threatbookResult, err.message || '测试失败', 'error');
+    }
+  };
+}
+
+if (el.coreAssetForm) {
+  el.coreAssetForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      if (!state.isAuthenticated) {
+        setHint(el.coreAssetResult, '请先登录平台。', 'error');
+        return;
+      }
+      const payload = {
+        asset_name: el.coreAssetName.value.trim(),
+        asset_ip: el.coreAssetIp.value.trim(),
+        biz_owner: el.coreAssetOwner.value.trim() || null,
+        metadata: el.coreAssetMeta.value.trim() || null,
+      };
+      await api('/api/config/core-assets', { method: 'POST', body: JSON.stringify(payload) });
+      setHint(el.coreAssetResult, '核心资产已保存。', 'success');
+      el.coreAssetName.value = '';
+      el.coreAssetIp.value = '';
+      el.coreAssetOwner.value = '';
+      el.coreAssetMeta.value = '';
+      await refreshCoreAssets();
+    } catch (err) {
+      setHint(el.coreAssetResult, err.message || '保存失败', 'error');
+    }
+  });
+}
+
 window.refreshSafetyRules = refreshSafetyRules;
+window.refreshCoreAssets = refreshCoreAssets;
 
 el.chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();

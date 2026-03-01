@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,9 +16,9 @@ from app.core.db import session_scope
 from app.core.exceptions import ConfirmationRequiredException
 from app.core.payload import approval_payload, echarts_payload, table_payload, text_payload
 from app.core.requester import APIRequester, get_requester_from_credential
-from app.core.settings import settings
+from app.core.threatbook import resolve_threatbook_api_key
 from app.llm.router import LLMRouter
-from app.models.db_models import PlaybookRun, XDRCredential
+from app.models.db_models import CoreAsset, PlaybookRun, XDRCredential
 from app.skills.event_skills import extract_entity_items_from_response
 from app.skills.registry import SkillRegistry
 from app.workflow.engine import PipelineNode, WorkflowEngine
@@ -176,6 +177,16 @@ class PlaybookService:
             normalized["evidence_limit"] = max(1, min(20, _to_int(normalized.get("evidence_limit"), 20)))
             mode = str(normalized.get("mode") or "analyze").strip().lower()
             normalized["mode"] = mode if mode in {"analyze", "export_summary"} else "analyze"
+        if template_id == "asset_guard":
+            normalized["asset_ip"] = str(normalized.get("asset_ip") or "").strip()
+            normalized["asset_name"] = str(normalized.get("asset_name") or "").strip() or None
+            normalized["window_hours"] = max(1, min(168, _to_int(normalized.get("window_hours"), 24)))
+            normalized["top_external_ip"] = max(1, min(10, _to_int(normalized.get("top_external_ip"), 5)))
+            if normalized["asset_ip"] and not normalized["asset_name"]:
+                with session_scope() as session:
+                    row = session.exec(select(CoreAsset).where(CoreAsset.asset_ip == normalized["asset_ip"])).first()
+                    if row and row.asset_name:
+                        normalized["asset_name"] = row.asset_name
         return normalized
 
     def _validate_input(self, template_id: str, params: dict[str, Any], runtime_session_id: str) -> None:
@@ -194,12 +205,23 @@ class PlaybookService:
 
         if template_id == "threat_hunting" and not params.get("ip"):
             raise ValueError("threat_hunting 缺少必填参数 ip。")
+        if template_id == "asset_guard":
+            asset_ip = str(params.get("asset_ip") or "").strip()
+            if not asset_ip:
+                raise ValueError("asset_guard 缺少必填参数 asset_ip。")
+            try:
+                ipaddress.ip_address(asset_ip)
+            except ValueError as exc:
+                raise ValueError("asset_guard 参数 asset_ip 格式不合法。") from exc
 
     def _initial_node_status(self, template_id: str, mode: str | None) -> dict[str, Any]:
         if template_id == "routine_check":
             return {
                 "node_1_log_count_24h": {"status": "Pending", "depends_on": []},
-                "node_2_unhandled_high_events_24h": {"status": "Pending", "depends_on": []},
+                "node_2_unhandled_high_events_24h": {
+                    "status": "Pending",
+                    "depends_on": ["node_1_log_count_24h"],
+                },
                 "node_3_sample_detail_parallel": {
                     "status": "Pending",
                     "depends_on": ["node_2_unhandled_high_events_24h"],
@@ -238,6 +260,32 @@ class PlaybookService:
                         "node_2_entity_profile",
                         "node_3_external_intel",
                         "node_4_internal_impact_count_parallel",
+                    ],
+                },
+            }
+
+        if template_id == "asset_guard":
+            return {
+                "node_1_events_dst_asset": {"status": "Pending", "depends_on": []},
+                "node_2_events_src_asset": {"status": "Pending", "depends_on": ["node_1_events_dst_asset"]},
+                "node_3_logs_dst_asset": {"status": "Pending", "depends_on": ["node_1_events_dst_asset"]},
+                "node_4_logs_src_asset": {"status": "Pending", "depends_on": ["node_1_events_dst_asset"]},
+                "node_5_top_external_ip": {
+                    "status": "Pending",
+                    "depends_on": ["node_1_events_dst_asset", "node_2_events_src_asset"],
+                },
+                "node_6_external_intel_enrich": {
+                    "status": "Pending",
+                    "depends_on": ["node_5_top_external_ip"],
+                },
+                "node_7_llm_asset_briefing": {
+                    "status": "Pending",
+                    "depends_on": [
+                        "node_1_events_dst_asset",
+                        "node_2_events_src_asset",
+                        "node_3_logs_dst_asset",
+                        "node_4_logs_src_asset",
+                        "node_6_external_intel_enrich",
                     ],
                 },
             }
@@ -293,6 +341,8 @@ class PlaybookService:
                     nodes, finalizer = self._build_alert_triage(runtime_context)
             elif runtime_context["template_id"] == "threat_hunting":
                 nodes, finalizer = self._build_threat_hunting(runtime_context)
+            elif runtime_context["template_id"] == "asset_guard":
+                nodes, finalizer = self._build_asset_guard(runtime_context)
             else:
                 raise ValueError(f"未支持的模板: {runtime_context['template_id']}")
 
@@ -455,7 +505,8 @@ class PlaybookService:
         }
 
     def _query_intel(self, ip: str) -> dict[str, Any]:
-        if not settings.threatbook_api_key:
+        threatbook_key = resolve_threatbook_api_key()
+        if not threatbook_key:
             score = sum(int(part) for part in ip.split(".") if part.isdigit()) % 100
             severity = "low"
             tags = ["unknown"]
@@ -479,7 +530,7 @@ class PlaybookService:
             with httpx.Client(timeout=8) as client:
                 resp = client.get(
                     "https://api.threatbook.cn/v3/scene/ip_reputation",
-                    params={"apikey": settings.threatbook_api_key, "resource": ip},
+                    params={"apikey": threatbook_key, "resource": ip},
                 )
                 body = resp.json()
                 data = body.get("data", {}).get(ip, {})
@@ -702,7 +753,11 @@ class PlaybookService:
 
         nodes = [
             PipelineNode("node_1_log_count_24h", node_1_log_count_24h),
-            PipelineNode("node_2_unhandled_high_events_24h", node_2_unhandled_high_events_24h),
+            PipelineNode(
+                "node_2_unhandled_high_events_24h",
+                node_2_unhandled_high_events_24h,
+                depends_on=["node_1_log_count_24h"],
+            ),
             PipelineNode(
                 "node_3_sample_detail_parallel",
                 node_3_sample_detail_parallel,
@@ -1190,6 +1245,50 @@ class PlaybookService:
             "truncated": truncated,
         }
 
+    def _query_incidents(
+        self,
+        requester: APIRequester,
+        *,
+        start_ts: int,
+        end_ts: int,
+        extra_filters: dict[str, Any] | None = None,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        req = {
+            "page": 1,
+            "pageSize": page_size,
+            "sort": "endTime:desc,severity:desc",
+            "timeField": "endTime",
+            "startTimestamp": start_ts,
+            "endTimestamp": end_ts,
+        }
+        req.update(extra_filters or {})
+        resp = requester.request("POST", "/api/xdr/v1/incidents/list", json_body=req)
+        if resp.get("code") != "Success":
+            return {
+                "rows": [],
+                "raw_items": [],
+                "error": str(resp.get("message") or "事件查询失败"),
+                "request": req,
+            }
+        items = resp.get("data", {}).get("item", []) or []
+        rows = [self._normalize_event_row(item, idx) for idx, item in enumerate(items, start=1)]
+        return {"rows": rows, "raw_items": items, "error": None, "request": req}
+
+    @staticmethod
+    def _is_external_ip(ip: str) -> bool:
+        try:
+            candidate = ipaddress.ip_address(ip)
+            return not (
+                candidate.is_private
+                or candidate.is_loopback
+                or candidate.is_reserved
+                or candidate.is_link_local
+                or candidate.is_multicast
+            )
+        except ValueError:
+            return False
+
     @staticmethod
     def _incident_match_ip(item: dict[str, Any], ip: str) -> bool:
         for key in ("hostIp", "srcIp", "dstIp", "assetIp"):
@@ -1205,6 +1304,271 @@ class PlaybookService:
             ]
         )
         return ip in combined
+
+    def _build_asset_guard(
+        self, runtime_context: dict[str, Any]
+    ) -> tuple[list[PipelineNode], Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]]:
+        requester: APIRequester = runtime_context["requester"]
+        params = runtime_context["params"]
+        asset_ip = str(params.get("asset_ip"))
+        asset_name = str(params.get("asset_name") or "").strip() or asset_ip
+        window_hours = params.get("window_hours", 24)
+        top_n = params.get("top_external_ip", 5)
+
+        def node_1_events_dst_asset(ctx: dict[str, Any]) -> dict[str, Any]:
+            _ = ctx
+            end_ts = to_ts(utc_now())
+            start_ts = end_ts - window_hours * 3600
+            queried = self._query_incidents(
+                requester,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                extra_filters={"dstIps": [asset_ip]},
+            )
+            uuids = [row.get("uuId") for row in queried["rows"] if row.get("uuId")]
+            return {
+                "rows": queried["rows"],
+                "count": len(queried["rows"]),
+                "uuids": uuids,
+                "startTimestamp": start_ts,
+                "endTimestamp": end_ts,
+                "error": queried["error"],
+                "request": queried["request"],
+            }
+
+        def node_2_events_src_asset(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_events_dst_asset"]
+            queried = self._query_incidents(
+                requester,
+                start_ts=node1["startTimestamp"],
+                end_ts=node1["endTimestamp"],
+                extra_filters={"srcIps": [asset_ip]},
+            )
+            uuids = [row.get("uuId") for row in queried["rows"] if row.get("uuId")]
+            return {
+                "rows": queried["rows"],
+                "count": len(queried["rows"]),
+                "uuids": uuids,
+                "error": queried["error"],
+                "request": queried["request"],
+            }
+
+        def node_3_logs_dst_asset(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_events_dst_asset"]
+            counted = self._count_logs(
+                requester,
+                start_ts=node1["startTimestamp"],
+                end_ts=node1["endTimestamp"],
+                extra_filters={"dstIps": [asset_ip]},
+            )
+            return {
+                "log_total": counted["total"],
+                "error": counted["error"],
+                "source": "POST /api/xdr/v1/analysislog/networksecurity/count",
+            }
+
+        def node_4_logs_src_asset(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_events_dst_asset"]
+            counted = self._count_logs(
+                requester,
+                start_ts=node1["startTimestamp"],
+                end_ts=node1["endTimestamp"],
+                extra_filters={"srcIps": [asset_ip]},
+            )
+            return {
+                "log_total": counted["total"],
+                "error": counted["error"],
+                "source": "POST /api/xdr/v1/analysislog/networksecurity/count",
+            }
+
+        def node_5_top_external_ip(ctx: dict[str, Any]) -> dict[str, Any]:
+            uuids = _dedup_keep_order(
+                ctx["nodes"]["node_1_events_dst_asset"].get("uuids", [])
+                + ctx["nodes"]["node_2_events_src_asset"].get("uuids", [])
+            )
+            ip_counter: dict[str, int] = {}
+            errors: list[str] = []
+
+            def enrich_one(uid: str) -> tuple[str, list[str], str | None]:
+                resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
+                entities, error = extract_entity_items_from_response(resp)
+                entity_ips: list[str] = []
+                for item in entities:
+                    ip = item.get("ip")
+                    if not isinstance(ip, str):
+                        continue
+                    if ip == asset_ip:
+                        continue
+                    if not self._is_external_ip(ip):
+                        continue
+                    entity_ips.append(ip)
+                return uid, _dedup_keep_order(entity_ips), error
+
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                fut_map = {executor.submit(enrich_one, uid): uid for uid in uuids[:30]}
+                for fut in as_completed(fut_map):
+                    uid, ips, error = fut.result()
+                    if error:
+                        errors.append(f"{uid}: {error}")
+                    for ip in ips:
+                        ip_counter[ip] = ip_counter.get(ip, 0) + 1
+
+            top_rows = sorted(
+                [{"ip": ip, "hits": hits} for ip, hits in ip_counter.items()],
+                key=lambda item: item["hits"],
+                reverse=True,
+            )[:top_n]
+            if top_rows:
+                context_manager.update_params(runtime_context["session_id"], {"last_entity_ip": top_rows[0]["ip"]})
+            return {"top_external_ips": top_rows, "errors": errors, "scanned_incidents": len(uuids[:30])}
+
+        def node_6_external_intel_enrich(ctx: dict[str, Any]) -> dict[str, Any]:
+            top_rows = ctx["nodes"]["node_5_top_external_ip"].get("top_external_ips", [])
+            intel_rows = []
+            for row in top_rows:
+                intel = self._query_intel(row["ip"])
+                intel["hits"] = row["hits"]
+                intel_rows.append(intel)
+            return {"intel_rows": intel_rows}
+
+        def node_7_llm_asset_briefing(ctx: dict[str, Any]) -> dict[str, Any]:
+            events_dst = ctx["nodes"]["node_1_events_dst_asset"].get("count", 0)
+            events_src = ctx["nodes"]["node_2_events_src_asset"].get("count", 0)
+            logs_dst = ctx["nodes"]["node_3_logs_dst_asset"].get("log_total", 0)
+            logs_src = ctx["nodes"]["node_4_logs_src_asset"].get("log_total", 0)
+            intel_rows = ctx["nodes"]["node_6_external_intel_enrich"].get("intel_rows", [])
+            fallback = (
+                f"核心资产 {asset_name}（{asset_ip}）在最近{window_hours}小时内完成体检。"
+                f"入向告警 {events_dst} 条、出向告警 {events_src} 条，入向访问 {logs_dst} 次、出向访问 {logs_src} 次。"
+                "建议优先复核高风险外部实体并跟进处置闭环。"
+            )
+            prompt = (
+                "你是SOC负责人，请面向管理层输出核心资产防线透视结论，要求包含：总体态势、主要隐患、建议动作。"
+                f"\n资产名称: {asset_name}"
+                f"\n资产IP: {asset_ip}"
+                f"\n入向告警数: {events_dst}"
+                f"\n出向告警数: {events_src}"
+                f"\n入向访问量: {logs_dst}"
+                f"\n出向访问量: {logs_src}"
+                f"\nTop外部实体情报: {json.dumps(intel_rows, ensure_ascii=False)}"
+            )
+            briefing = self._safe_llm_complete(
+                prompt,
+                system="输出中文，面向管理层，结论化且可执行。",
+                fallback=fallback,
+            )
+            return {"briefing": briefing}
+
+        nodes = [
+            PipelineNode("node_1_events_dst_asset", node_1_events_dst_asset),
+            PipelineNode("node_2_events_src_asset", node_2_events_src_asset, depends_on=["node_1_events_dst_asset"]),
+            PipelineNode("node_3_logs_dst_asset", node_3_logs_dst_asset, depends_on=["node_1_events_dst_asset"]),
+            PipelineNode("node_4_logs_src_asset", node_4_logs_src_asset, depends_on=["node_1_events_dst_asset"]),
+            PipelineNode(
+                "node_5_top_external_ip",
+                node_5_top_external_ip,
+                depends_on=["node_1_events_dst_asset", "node_2_events_src_asset"],
+            ),
+            PipelineNode(
+                "node_6_external_intel_enrich",
+                node_6_external_intel_enrich,
+                depends_on=["node_5_top_external_ip"],
+            ),
+            PipelineNode(
+                "node_7_llm_asset_briefing",
+                node_7_llm_asset_briefing,
+                depends_on=[
+                    "node_1_events_dst_asset",
+                    "node_2_events_src_asset",
+                    "node_3_logs_dst_asset",
+                    "node_4_logs_src_asset",
+                    "node_6_external_intel_enrich",
+                ],
+            ),
+        ]
+
+        def finalizer(results: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+            _ = ctx
+            node1 = results.get("node_1_events_dst_asset", {})
+            node2 = results.get("node_2_events_src_asset", {})
+            node3 = results.get("node_3_logs_dst_asset", {})
+            node4 = results.get("node_4_logs_src_asset", {})
+            node6 = results.get("node_6_external_intel_enrich", {})
+            summary = results.get("node_7_llm_asset_briefing", {}).get("briefing", "核心资产防线透视已完成。")
+
+            stats_rows = [
+                {"direction": "入向（目标为资产）", "event_count": node1.get("count", 0), "log_count": node3.get("log_total", 0)},
+                {"direction": "出向（源为资产）", "event_count": node2.get("count", 0), "log_count": node4.get("log_total", 0)},
+            ]
+            intel_rows = node6.get("intel_rows", [])
+            cards = [
+                text_payload(summary, title="核心资产态势结论"),
+                table_payload(
+                    title="资产双向告警统计",
+                    columns=[
+                        {"key": "direction", "label": "方向"},
+                        {"key": "event_count", "label": "告警数"},
+                        {"key": "log_count", "label": "访问量"},
+                    ],
+                    rows=stats_rows,
+                    namespace="asset_guard_stats",
+                ),
+                table_payload(
+                    title=f"Top {top_n} 外部访问实体情报",
+                    columns=[
+                        {"key": "ip", "label": "IP"},
+                        {"key": "hits", "label": "关联事件数"},
+                        {"key": "severity", "label": "威胁等级"},
+                        {"key": "confidence", "label": "置信度"},
+                        {"key": "tags", "label": "标签"},
+                        {"key": "source", "label": "来源"},
+                    ],
+                    rows=intel_rows,
+                    namespace="asset_guard_intel",
+                ),
+                text_payload(
+                    "建议动作：优先对高风险外部IP执行深度研判，并对核心资产相关高危告警进行人工复核。",
+                    title="建议动作",
+                ),
+            ]
+
+            next_actions: list[dict[str, Any]] = []
+            incident_uuids = _dedup_keep_order(node1.get("uuids", []) + node2.get("uuids", []))
+            if incident_uuids:
+                next_actions.append(
+                    {
+                        "id": "asset_guard_triage",
+                        "label": "🔍 对首条相关事件做深度研判",
+                        "template_id": "alert_triage",
+                        "params": {"incident_uuid": incident_uuids[0], "session_id": runtime_context["session_id"]},
+                        "style": "primary",
+                    }
+                )
+            if intel_rows:
+                next_actions.append(
+                    {
+                        "id": "asset_guard_hunting",
+                        "label": "🕵️ 生成高风险外部IP活动轨迹",
+                        "template_id": "threat_hunting",
+                        "params": {"ip": intel_rows[0].get("ip")},
+                        "style": "secondary",
+                    }
+                )
+
+            return {
+                "summary": summary,
+                "cards": cards,
+                "next_actions": next_actions,
+                "asset": {"asset_name": asset_name, "asset_ip": asset_ip, "window_hours": window_hours},
+                "evidence_sources": [
+                    "POST /api/xdr/v1/incidents/list",
+                    "POST /api/xdr/v1/analysislog/networksecurity/count",
+                    "GET /api/xdr/v1/incidents/{uuid}/entities/ip",
+                    "ThreatBook / local fallback",
+                ],
+            }
+
+        return nodes, finalizer
 
     def _build_threat_hunting(
         self, runtime_context: dict[str, Any]

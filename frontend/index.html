@@ -125,6 +125,8 @@
         <nav class="settings-nav">
           <button class="settings-tab active" data-tab="tab_llm_config">大模型认知引擎</button>
           <button class="settings-tab" data-tab="tab_safety_gate">高危防线与红线</button>
+          <button class="settings-tab" data-tab="tab_core_assets">核心资产管理</button>
+          <button class="settings-tab" data-tab="tab_threatbook">威胁情报联动</button>
         </nav>
       </aside>
 
@@ -207,6 +209,58 @@
             <p id="safetyRuleResult" class="hint full-width"></p>
           </form>
           <div id="safetyRuleList" class="list-box"></div>
+        </section>
+
+        <section id="tab_core_assets" class="settings-section">
+          <div class="section-header">
+            <h3>核心资产管理</h3>
+            <p class="section-note">维护重点业务资产清单，可直接用于“核心资产防线透视”场景输入。</p>
+          </div>
+          <form id="coreAssetForm" class="settings-form-grid">
+            <label>资产名称
+              <input type="text" id="coreAssetName" placeholder="如：核心交易库" required />
+            </label>
+            <label>资产IP
+              <input type="text" id="coreAssetIp" placeholder="如：10.10.1.20" required />
+            </label>
+            <label>负责人
+              <input type="text" id="coreAssetOwner" placeholder="如：业务安全负责人" />
+            </label>
+            <label>备注/元数据(JSON或文本)
+              <input type="text" id="coreAssetMeta" placeholder='如：{"system":"trading","level":"core"}' />
+            </label>
+            <div class="form-footer full-width" style="justify-content: flex-end;">
+              <button type="submit" class="primary-btn">保存核心资产</button>
+            </div>
+            <p id="coreAssetResult" class="hint full-width"></p>
+          </form>
+          <div id="coreAssetList" class="list-box"></div>
+        </section>
+
+        <section id="tab_threatbook" class="settings-section">
+          <div class="section-header">
+            <h3>威胁情报联动（ThreatBook）</h3>
+            <p class="section-note">配置后将优先使用 ThreatBook 进行实体画像；未配置时自动降级到本地评估。</p>
+          </div>
+          <form class="settings-form-grid">
+            <label class="full-width">ThreatBook API Key
+              <input type="password" id="threatbookApiKey" placeholder="输入 ThreatBook API Key" />
+            </label>
+            <label class="checkbox-line full-width">
+              <input type="checkbox" id="threatbookEnabled" checked />
+              启用 ThreatBook 在线查询
+            </label>
+            <label>测试 IP
+              <input type="text" id="threatbookTestIp" value="8.8.8.8" />
+            </label>
+            <div class="form-footer full-width" style="justify-content: flex-end;">
+              <div class="action-row" style="margin:0;">
+                <button type="button" id="testThreatbook" class="secondary-btn">连通性测试</button>
+                <button type="button" id="saveThreatbook" class="primary-btn">保存配置</button>
+              </div>
+            </div>
+            <p id="threatbookResult" class="hint full-width"></p>
+          </form>
         </section>
       </main>
     </div>
