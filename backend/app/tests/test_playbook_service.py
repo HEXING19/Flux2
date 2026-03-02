@@ -12,8 +12,9 @@ from app.playbook.service import playbook_service
 
 
 class PlaybookRequester:
-    def __init__(self) -> None:
+    def __init__(self, *, proof_as_dict: bool = False) -> None:
         self.count_payloads: list[dict] = []
+        self.proof_as_dict = proof_as_dict
 
     def request(self, method, path, *, json_body=None, params=None, timeout=15, max_retries=3):
         _ = (method, params, timeout, max_retries)
@@ -75,16 +76,15 @@ class PlaybookRequester:
 
         if path.endswith("/proof"):
             uid = path.split("/")[-2]
+            record = {
+                "name": f"{uid}-proof",
+                "gptResultDescription": "测试研判",
+                "riskTag": ["c2"],
+                "alertTimeLine": [{"name": "x", "severity": 3, "stage": "利用", "lastTime": 1739999000}],
+            }
             return {
                 "code": "Success",
-                "data": [
-                    {
-                        "name": f"{uid}-proof",
-                        "gptResultDescription": "测试研判",
-                        "riskTag": ["c2"],
-                        "alertTimeLine": [{"name": "x", "severity": 3, "stage": "利用", "lastTime": 1739999000}],
-                    }
-                ],
+                "data": record if self.proof_as_dict else [record],
             }
 
         if path.endswith("/entities/ip"):
@@ -261,6 +261,31 @@ class PlaybookServiceTest(unittest.TestCase):
                 result = payload.get("result", {})
                 self.assertIn("summary", result)
                 self.assertGreaterEqual(len(result.get("cards", [])), 3)
+
+    def test_parallel_nodes_tolerate_dict_proof_payload(self):
+        fake_requester = PlaybookRequester(proof_as_dict=True)
+        with (
+            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
+            patch("app.playbook.service.LLMRouter.complete", return_value="safe summary"),
+        ):
+            with Session(engine) as session:
+                routine_run = playbook_service.start_run(
+                    session,
+                    template_id="routine_check",
+                    params={},
+                    session_id="s-proof-dict-routine",
+                )
+                routine_final = self._wait_run_finished(session, routine_run.id)
+                self.assertEqual(routine_final.status, "Finished")
+
+                hunting_run = playbook_service.start_run(
+                    session,
+                    template_id="threat_hunting",
+                    params={"ip": "8.8.8.8"},
+                    session_id="s-proof-dict-hunting",
+                )
+                hunting_final = self._wait_run_finished(session, hunting_run.id)
+                self.assertEqual(hunting_final.status, "Finished")
 
 
 if __name__ == "__main__":

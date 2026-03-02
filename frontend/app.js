@@ -561,6 +561,7 @@ function simplifyError(errorText) {
   if (!errorText) return '';
   const text = String(errorText).trim();
   if (text.includes("'nodes'")) return '依赖节点尚未就绪';
+  if (text === '0') return '接口返回数据格式异常（缺少预期字段）';
   if (text.length <= 80) return text;
   return `${text.slice(0, 80)}...`;
 }
@@ -745,7 +746,7 @@ function buildSceneParams(scene) {
     const raw = window.prompt('请输入事件序号（如 1）或事件UUID（incident-xxx）：', '');
     const value = (raw || '').trim();
     if (!value) return null;
-    if (/^incident-/.test(value)) {
+    if (!/^\d+$/.test(value)) {
       return { ...base, incident_uuid: value };
     }
     const idx = Number(value);
@@ -1102,24 +1103,17 @@ async function bootWorkspace() {
 }
 
 async function checkAuthStatus() {
+  setAuthState(false);
   try {
     const status = await api('/api/auth/status');
-    if (status.authenticated) {
-      const url = status.base_url || '已配置平台';
-      const isConnected = status.connected !== false;
-
-      if (isConnected) {
-        setAuthState(true, `当前已连接平台：${url}`, true);
-        await bootWorkspace();
-      } else {
-        setAuthState(true, `当前平台配置：${url} (连接断开/网络异常)`, false);
-      }
-    } else {
-      setAuthState(false);
+    if (!status.authenticated) return;
+    const url = status.base_url || '';
+    const baseUrlInput = document.getElementById('baseUrl');
+    if (baseUrlInput && !baseUrlInput.value && url) {
+      baseUrlInput.value = url;
     }
-  } catch {
-    setAuthState(false);
-  }
+    setHint(el.loginResult, '检测到已保存凭证，请重新登录后进入工作台。', '');
+  } catch {}
 }
 
 el.probeLoginBtn.onclick = async () => {

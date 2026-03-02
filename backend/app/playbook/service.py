@@ -74,6 +74,16 @@ def _dedup_keep_order(values: list[Any]) -> list[Any]:
     return list(dict.fromkeys(values))
 
 
+def _pick_first_dict(data: Any) -> dict[str, Any]:
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
 class PlaybookService:
     def __init__(self) -> None:
         self.engine = WorkflowEngine(max_workers=6)
@@ -252,15 +262,11 @@ class PlaybookService:
                 "node_3_external_intel": {"status": "Pending", "depends_on": ["node_2_entity_profile"]},
                 "node_4_internal_impact_count_parallel": {
                     "status": "Pending",
-                    "depends_on": ["node_2_entity_profile"],
+                    "depends_on": ["node_3_external_intel"],
                 },
                 "node_5_llm_triage_summary": {
                     "status": "Pending",
-                    "depends_on": [
-                        "node_2_entity_profile",
-                        "node_3_external_intel",
-                        "node_4_internal_impact_count_parallel",
-                    ],
+                    "depends_on": ["node_4_internal_impact_count_parallel"],
                 },
             }
 
@@ -268,11 +274,11 @@ class PlaybookService:
             return {
                 "node_1_events_dst_asset": {"status": "Pending", "depends_on": []},
                 "node_2_events_src_asset": {"status": "Pending", "depends_on": ["node_1_events_dst_asset"]},
-                "node_3_logs_dst_asset": {"status": "Pending", "depends_on": ["node_1_events_dst_asset"]},
-                "node_4_logs_src_asset": {"status": "Pending", "depends_on": ["node_1_events_dst_asset"]},
+                "node_3_logs_dst_asset": {"status": "Pending", "depends_on": ["node_2_events_src_asset"]},
+                "node_4_logs_src_asset": {"status": "Pending", "depends_on": ["node_3_logs_dst_asset"]},
                 "node_5_top_external_ip": {
                     "status": "Pending",
-                    "depends_on": ["node_1_events_dst_asset", "node_2_events_src_asset"],
+                    "depends_on": ["node_4_logs_src_asset"],
                 },
                 "node_6_external_intel_enrich": {
                     "status": "Pending",
@@ -280,32 +286,24 @@ class PlaybookService:
                 },
                 "node_7_llm_asset_briefing": {
                     "status": "Pending",
-                    "depends_on": [
-                        "node_1_events_dst_asset",
-                        "node_2_events_src_asset",
-                        "node_3_logs_dst_asset",
-                        "node_4_logs_src_asset",
-                        "node_6_external_intel_enrich",
-                    ],
+                    "depends_on": ["node_6_external_intel_enrich"],
                 },
             }
 
         return {
             "node_1_external_profile": {"status": "Pending", "depends_on": []},
-            "node_2_event_scan_paginated": {"status": "Pending", "depends_on": []},
+            "node_2_event_scan_paginated": {"status": "Pending", "depends_on": ["node_1_external_profile"]},
             "node_3_evidence_enrichment_parallel": {
                 "status": "Pending",
                 "depends_on": ["node_2_event_scan_paginated"],
             },
-            "node_4_internal_activity_count": {"status": "Pending", "depends_on": []},
+            "node_4_internal_activity_count": {
+                "status": "Pending",
+                "depends_on": ["node_3_evidence_enrichment_parallel"],
+            },
             "node_5_llm_timeline_story": {
                 "status": "Pending",
-                "depends_on": [
-                    "node_1_external_profile",
-                    "node_2_event_scan_paginated",
-                    "node_3_evidence_enrichment_parallel",
-                    "node_4_internal_activity_count",
-                ],
+                "depends_on": ["node_4_internal_activity_count"],
             },
         }
 
@@ -691,7 +689,7 @@ class PlaybookService:
                 proof_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/proof")
                 proof_data = {}
                 if proof_resp.get("code") == "Success":
-                    proof_data = (proof_resp.get("data") or [{}])[0]
+                    proof_data = _pick_first_dict(proof_resp.get("data"))
 
                 entity_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
                 entities, _ = extract_entity_items_from_response(entity_resp)
@@ -719,14 +717,19 @@ class PlaybookService:
                 }
 
             results: list[dict[str, Any]] = []
+            errors: list[str] = []
             with ThreadPoolExecutor(max_workers=6) as executor:
                 fut_map = {executor.submit(fetch_one, row): row for row in targets}
                 for fut in as_completed(fut_map):
-                    item = fut.result()
+                    try:
+                        item = fut.result()
+                    except Exception as exc:
+                        errors.append(str(exc) or exc.__class__.__name__)
+                        continue
                     if item:
                         results.append(item)
             results.sort(key=lambda item: next((idx for idx, row in enumerate(targets) if row.get("uuId") == item["uuId"]), 999))
-            return {"sample_evidence": results}
+            return {"sample_evidence": results, "errors": errors}
 
         def node_4_llm_briefing(ctx: dict[str, Any]) -> dict[str, Any]:
             node1 = ctx["nodes"]["node_1_log_count_24h"]
@@ -1004,12 +1007,12 @@ class PlaybookService:
             PipelineNode(
                 "node_4_internal_impact_count_parallel",
                 node_4_internal_impact_count_parallel,
-                depends_on=["node_2_entity_profile"],
+                depends_on=["node_3_external_intel"],
             ),
             PipelineNode(
                 "node_5_llm_triage_summary",
                 node_5_llm_triage_summary,
-                depends_on=["node_2_entity_profile", "node_3_external_intel", "node_4_internal_impact_count_parallel"],
+                depends_on=["node_4_internal_impact_count_parallel"],
             ),
         ]
 
@@ -1019,9 +1022,21 @@ class PlaybookService:
             intel_rows = results.get("node_3_external_intel", {}).get("intel_rows", [])
             impact_rows = results.get("node_4_internal_impact_count_parallel", {}).get("impact_rows", [])
             entity_rows = results.get("node_2_entity_profile", {}).get("entity_rows", [])
+            entity_errors = results.get("node_2_entity_profile", {}).get("errors", [])
+            target_uuids = results.get("node_1_resolve_target", {}).get("incident_uuids", [])
+            target_rows = [{"index": idx, "incident_uuid": uid} for idx, uid in enumerate(target_uuids, start=1)]
 
             cards = [
                 text_payload(summary, title="单点告警深度研判结论"),
+                table_payload(
+                    title="任务目标事件",
+                    columns=[
+                        {"key": "index", "label": "序号"},
+                        {"key": "incident_uuid", "label": "事件UUID"},
+                    ],
+                    rows=target_rows,
+                    namespace="triage_targets",
+                ),
                 table_payload(
                     title="目标IP内部影响计数（近7天）",
                     columns=[
@@ -1059,6 +1074,14 @@ class PlaybookService:
                     namespace="triage_entities",
                 ),
             ]
+            if entity_errors:
+                cards.append(
+                    text_payload(
+                        "实体接口返回部分异常，已按可用数据继续完成研判：\n"
+                        + "\n".join(entity_errors[:5]),
+                        title="任务执行提示",
+                    )
+                )
 
             target_ip = None
             if impact_rows:
@@ -1462,12 +1485,12 @@ class PlaybookService:
         nodes = [
             PipelineNode("node_1_events_dst_asset", node_1_events_dst_asset),
             PipelineNode("node_2_events_src_asset", node_2_events_src_asset, depends_on=["node_1_events_dst_asset"]),
-            PipelineNode("node_3_logs_dst_asset", node_3_logs_dst_asset, depends_on=["node_1_events_dst_asset"]),
-            PipelineNode("node_4_logs_src_asset", node_4_logs_src_asset, depends_on=["node_1_events_dst_asset"]),
+            PipelineNode("node_3_logs_dst_asset", node_3_logs_dst_asset, depends_on=["node_2_events_src_asset"]),
+            PipelineNode("node_4_logs_src_asset", node_4_logs_src_asset, depends_on=["node_3_logs_dst_asset"]),
             PipelineNode(
                 "node_5_top_external_ip",
                 node_5_top_external_ip,
-                depends_on=["node_1_events_dst_asset", "node_2_events_src_asset"],
+                depends_on=["node_4_logs_src_asset"],
             ),
             PipelineNode(
                 "node_6_external_intel_enrich",
@@ -1477,13 +1500,7 @@ class PlaybookService:
             PipelineNode(
                 "node_7_llm_asset_briefing",
                 node_7_llm_asset_briefing,
-                depends_on=[
-                    "node_1_events_dst_asset",
-                    "node_2_events_src_asset",
-                    "node_3_logs_dst_asset",
-                    "node_4_logs_src_asset",
-                    "node_6_external_intel_enrich",
-                ],
+                depends_on=["node_6_external_intel_enrich"],
             ),
         ]
 
@@ -1617,7 +1634,7 @@ class PlaybookService:
                 if not uid:
                     return {}
                 proof_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/proof")
-                proof_data = (proof_resp.get("data") or [{}])[0] if proof_resp.get("code") == "Success" else {}
+                proof_data = _pick_first_dict(proof_resp.get("data")) if proof_resp.get("code") == "Success" else {}
                 entity_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
                 entities, _ = extract_entity_items_from_response(entity_resp)
                 entity_ips = [item.get("ip") for item in entities if item.get("ip")]
@@ -1630,14 +1647,19 @@ class PlaybookService:
                 }
 
             evidence: list[dict[str, Any]] = []
+            errors: list[str] = []
             with ThreadPoolExecutor(max_workers=6) as executor:
                 fut_map = {executor.submit(enrich, row): row for row in targets}
                 for fut in as_completed(fut_map):
-                    item = fut.result()
+                    try:
+                        item = fut.result()
+                    except Exception as exc:
+                        errors.append(str(exc) or exc.__class__.__name__)
+                        continue
                     if item:
                         evidence.append(item)
             evidence.sort(key=lambda item: next((idx for idx, row in enumerate(targets) if row.get("uuId") == item["uuId"]), 999))
-            return {"evidence_items": evidence}
+            return {"evidence_items": evidence, "errors": errors}
 
         def node_4_internal_activity_count(ctx: dict[str, Any]) -> dict[str, Any]:
             _ = ctx
@@ -1699,22 +1721,21 @@ class PlaybookService:
 
         nodes = [
             PipelineNode("node_1_external_profile", node_1_external_profile),
-            PipelineNode("node_2_event_scan_paginated", node_2_event_scan_paginated),
+            PipelineNode("node_2_event_scan_paginated", node_2_event_scan_paginated, depends_on=["node_1_external_profile"]),
             PipelineNode(
                 "node_3_evidence_enrichment_parallel",
                 node_3_evidence_enrichment_parallel,
                 depends_on=["node_2_event_scan_paginated"],
             ),
-            PipelineNode("node_4_internal_activity_count", node_4_internal_activity_count),
+            PipelineNode(
+                "node_4_internal_activity_count",
+                node_4_internal_activity_count,
+                depends_on=["node_3_evidence_enrichment_parallel"],
+            ),
             PipelineNode(
                 "node_5_llm_timeline_story",
                 node_5_llm_timeline_story,
-                depends_on=[
-                    "node_1_external_profile",
-                    "node_2_event_scan_paginated",
-                    "node_3_evidence_enrichment_parallel",
-                    "node_4_internal_activity_count",
-                ],
+                depends_on=["node_4_internal_activity_count"],
             ),
         ]
 
@@ -1724,6 +1745,7 @@ class PlaybookService:
             scan_result = results.get("node_2_event_scan_paginated", {})
             matched_rows = scan_result.get("matched_events", [])
             story_result = results.get("node_5_llm_timeline_story", {})
+            evidence_errors = results.get("node_3_evidence_enrichment_parallel", {}).get("errors", [])
             summary = (
                 f"目标IP {target_ip} 轨迹分析完成：命中 {len(matched_rows)} 条事件，"
                 f"扫描 {scan_result.get('scanned', 0)} 条（上限 {params.get('max_scan', 2000)}），"
@@ -1747,6 +1769,13 @@ class PlaybookService:
                 ),
                 text_payload(story_result.get("story", "暂无时间线叙事。"), title="攻击故事线"),
             ]
+            if evidence_errors:
+                cards.append(
+                    text_payload(
+                        "部分证据拉取失败，已基于可用数据完成轨迹分析：\n" + "\n".join(evidence_errors[:5]),
+                        title="任务执行提示",
+                    )
+                )
 
             next_actions: list[dict[str, Any]] = []
             if params.get("mode") != "export_summary":
