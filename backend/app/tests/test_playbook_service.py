@@ -31,6 +31,31 @@ class PlaybookRequester:
         if path == "/api/xdr/v1/incidents/list":
             page_size = body.get("pageSize", 50)
             page = body.get("page", 1)
+            if body.get("dealStatus") == [0] and body.get("severities") == [3, 4]:
+                return {
+                    "code": "Success",
+                    "data": {
+                        "total": 509,
+                        "item": [
+                            {
+                                "uuId": "incident-real-001",
+                                "name": "异常横向移动告警",
+                                "incidentSeverity": 3,
+                                "dealStatus": 0,
+                                "hostIp": "10.10.0.2",
+                                "endTime": 1739999900,
+                            },
+                            {
+                                "uuId": "incident-real-002",
+                                "name": "疑似C2通信活动",
+                                "incidentSeverity": 4,
+                                "dealStatus": 0,
+                                "hostIp": "10.10.0.3",
+                                "endTime": 1739999800,
+                            },
+                        ],
+                    },
+                }
             if page_size >= 200:
                 if page > 1:
                     return {"code": "Success", "data": {"item": []}}
@@ -194,11 +219,22 @@ class PlaybookServiceTest(unittest.TestCase):
                 )
                 final_run = self._wait_run_finished(session, run.id)
                 self.assertEqual(final_run.status, "Finished")
+                payload = playbook_service.serialize_run(final_run)
+                result = payload.get("result", {})
+                cards = result.get("cards", [])
+                impact_card = next((card for card in cards if card.get("data", {}).get("namespace") == "triage_impact"), {})
+                rows = impact_card.get("data", {}).get("rows", [])
+                self.assertTrue(rows)
+                self.assertIn("src_total", rows[0])
+                self.assertIn("dst_total", rows[0])
 
         payloads = fake_requester.count_payloads
         self.assertTrue(any(p.get("srcIps") == ["8.8.8.8"] for p in payloads))
+        self.assertTrue(any(p.get("dstIps") == ["8.8.8.8"] for p in payloads))
         self.assertTrue(any(p.get("srcIps") == ["8.8.8.8"] and p.get("severities") == [3, 4] for p in payloads))
+        self.assertTrue(any(p.get("dstIps") == ["8.8.8.8"] and p.get("severities") == [3, 4] for p in payloads))
         self.assertTrue(any(p.get("srcIps") == ["8.8.8.8"] and p.get("attackStates") == [2, 3] for p in payloads))
+        self.assertTrue(any(p.get("dstIps") == ["8.8.8.8"] and p.get("attackStates") == [2, 3] for p in payloads))
 
     def test_threat_hunting_scan_limit(self):
         fake_requester = EndlessIncidentsRequester()
@@ -213,6 +249,10 @@ class PlaybookServiceTest(unittest.TestCase):
         self.assertEqual(result["scanned"], 2000)
         self.assertTrue(result["truncated"])
         self.assertEqual(fake_requester.page_calls, 10)
+
+    def test_threat_hunting_param_normalization_caps_max_scan(self):
+        normalized = playbook_service._normalize_params("threat_hunting", {"ip": "9.9.9.9", "max_scan": 100000})
+        self.assertEqual(normalized.get("max_scan"), 10000)
 
     def test_routine_check_returns_cards_and_next_actions(self):
         fake_requester = PlaybookRequester()
@@ -232,6 +272,7 @@ class PlaybookServiceTest(unittest.TestCase):
                 payload = playbook_service.serialize_run(final_run)
                 result = payload.get("result", {})
                 self.assertIn("summary", result)
+                self.assertIn("509", result.get("summary", ""))
                 self.assertGreaterEqual(len(result.get("cards", [])), 3)
                 self.assertGreaterEqual(len(result.get("next_actions", [])), 1)
 
@@ -261,6 +302,40 @@ class PlaybookServiceTest(unittest.TestCase):
                 result = payload.get("result", {})
                 self.assertIn("summary", result)
                 self.assertGreaterEqual(len(result.get("cards", [])), 3)
+                next_actions = result.get("next_actions", [])
+                self.assertTrue(next_actions)
+                self.assertTrue(all(action.get("template_id") == "alert_triage" for action in next_actions))
+                self.assertTrue(all("进行封禁" in (action.get("label") or "") for action in next_actions))
+
+    def test_action_labels_include_concrete_ip(self):
+        fake_requester = PlaybookRequester()
+        with (
+            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
+            patch("app.playbook.service.LLMRouter.complete", return_value="summary"),
+        ):
+            with Session(engine) as session:
+                triage_run = playbook_service.start_run(
+                    session,
+                    template_id="alert_triage",
+                    params={"incident_uuid": "incident-real-001"},
+                    session_id="s-triage-action-label",
+                )
+                triage_final = self._wait_run_finished(session, triage_run.id)
+                triage_result = playbook_service.serialize_run(triage_final).get("result", {})
+                triage_labels = [action.get("label") or "" for action in triage_result.get("next_actions", [])]
+                self.assertTrue(any("8.8.8.8" in label for label in triage_labels))
+
+                hunting_run = playbook_service.start_run(
+                    session,
+                    template_id="threat_hunting",
+                    params={"ip": "8.8.8.8"},
+                    session_id="s-hunting-action-label",
+                )
+                hunting_final = self._wait_run_finished(session, hunting_run.id)
+                hunting_result = playbook_service.serialize_run(hunting_final).get("result", {})
+                hunting_labels = [action.get("label") or "" for action in hunting_result.get("next_actions", [])]
+                self.assertTrue(any("执行IP 8.8.8.8封禁" in label for label in hunting_labels))
+                self.assertIn("告警轨迹分析完成", hunting_result.get("summary", ""))
 
     def test_parallel_nodes_tolerate_dict_proof_payload(self):
         fake_requester = PlaybookRequester(proof_as_dict=True)

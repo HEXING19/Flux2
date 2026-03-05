@@ -26,9 +26,9 @@ const DEFAULT_PLAYBOOK_SCENES = [
     id: 'threat_hunting',
     name: '攻击者活动轨迹',
     button_label: '🕵️ 攻击者活动轨迹生成',
-    description: '默认回溯90天并最多扫描2000条事件，生成攻击故事线和关键证据。',
+    description: '默认回溯90天并最多扫描1万条告警，生成攻击故事线和关键证据。',
     hint: '适合针对某个可疑 IP 做溯源汇报。',
-    default_params: { window_days: 90, max_scan: 2000, evidence_limit: 20 },
+    default_params: { window_days: 90, max_scan: 10000, evidence_limit: 20 },
   },
   {
     id: 'asset_guard',
@@ -62,7 +62,7 @@ const PLAYBOOK_STAGE_META = {
   },
   threat_hunting: {
     node_1_external_profile: { title: '查询外部画像', desc: '获取目标IP外部威胁画像' },
-    node_2_event_scan_paginated: { title: '分页扫描事件', desc: '回溯窗口内检索相关事件' },
+    node_2_event_scan_paginated: { title: '双向扫描告警', desc: '回溯窗口内按源/目的IP检索相关告警' },
     node_3_evidence_enrichment_parallel: { title: '并行补充证据', desc: '拉取时间线和关联实体信息' },
     node_4_internal_activity_count: { title: '统计内部活动', desc: '按窗口统计源/目的活动量' },
     node_5_llm_timeline_story: { title: '生成活动轨迹故事线', desc: '输出侦察到影响的结构化叙事' },
@@ -297,9 +297,7 @@ function cardTemplate(title, className = '') {
 function renderPayload(payload) {
   if (payload.type === 'text') {
     const card = cardTemplate(payload.data.title || '系统消息', payload.data.dangerous ? 'approval-card' : '');
-    const pre = document.createElement('pre');
-    pre.textContent = payload.data.text || '';
-    card.appendChild(pre);
+    card.appendChild(createMarkdownBlock(payload.data.text || ''));
     appendCard(card);
     return;
   }
@@ -353,9 +351,7 @@ function renderPayload(payload) {
 
   if (payload.type === 'approval_card') {
     const card = cardTemplate(payload.data.title || '审批确认', 'approval-card');
-    const pre = document.createElement('pre');
-    pre.textContent = payload.data.summary || '';
-    card.appendChild(pre);
+    card.appendChild(createMarkdownBlock(payload.data.summary || ''));
     const actions = document.createElement('div');
     actions.className = 'action-row';
 
@@ -635,7 +631,126 @@ function isSummaryDuplicated(summary, cards) {
   return !!firstText && firstText === String(summary).trim();
 }
 
-function createUnifiedTable(payload) {
+function escapeHtml(raw) {
+  return String(raw ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatInlineMarkdown(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  return html;
+}
+
+function markdownToHtml(text) {
+  const normalized = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/([^\n])\n([：:]\s+)/g, '$1 $2')
+    .replace(/^\s*[。]\s+/gm, '- ');
+  const lines = normalized.split('\n');
+  const html = [];
+  let inUl = false;
+  let inOl = false;
+
+  function closeLists() {
+    if (inUl) {
+      html.push('</ul>');
+      inUl = false;
+    }
+    if (inOl) {
+      html.push('</ol>');
+      inOl = false;
+    }
+  }
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeLists();
+      return;
+    }
+    if (trimmed === ':' || trimmed === '：') {
+      return;
+    }
+
+    if (trimmed === '---') {
+      closeLists();
+      html.push('<hr />');
+      return;
+    }
+
+    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (heading) {
+      closeLists();
+      const level = heading[1].length;
+      html.push(`<h${level}>${formatInlineMarkdown(heading[2])}</h${level}>`);
+      return;
+    }
+
+    const quote = trimmed.match(/^>\s?(.+)$/);
+    if (quote) {
+      closeLists();
+      html.push(`<blockquote>${formatInlineMarkdown(quote[1])}</blockquote>`);
+      return;
+    }
+
+    const ul = trimmed.match(/^[-*•●◦▪]\s+(.+)$/);
+    if (ul) {
+      if (!inUl) {
+        if (inOl) {
+          html.push('</ol>');
+          inOl = false;
+        }
+        html.push('<ul>');
+        inUl = true;
+      }
+      html.push(`<li>${formatInlineMarkdown(ul[1])}</li>`);
+      return;
+    }
+
+    const colonContinuation = trimmed.match(/^[:：]\s*(.+)$/);
+    if (colonContinuation) {
+      closeLists();
+      html.push(`<p>${formatInlineMarkdown(colonContinuation[1])}</p>`);
+      return;
+    }
+
+    const ol = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (ol) {
+      if (!inOl) {
+        if (inUl) {
+          html.push('</ul>');
+          inUl = false;
+        }
+        html.push('<ol>');
+        inOl = true;
+      }
+      html.push(`<li>${formatInlineMarkdown(ol[1])}</li>`);
+      return;
+    }
+
+    closeLists();
+    html.push(`<p>${formatInlineMarkdown(trimmed)}</p>`);
+  });
+
+  closeLists();
+  return html.join('');
+}
+
+function createMarkdownBlock(text) {
+  const block = document.createElement('div');
+  block.className = 'markdown-block';
+  block.innerHTML = markdownToHtml(text);
+  return block;
+}
+
+function createUnifiedTable(payload, customRows = null) {
   const wrap = document.createElement('div');
   wrap.className = 'table-wrap';
   const table = document.createElement('table');
@@ -650,7 +765,8 @@ function createUnifiedTable(payload) {
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  (payload.data.rows || []).forEach((row) => {
+  const rows = Array.isArray(customRows) ? customRows : (payload.data.rows || []);
+  rows.forEach((row) => {
     const tr = document.createElement('tr');
     (payload.data.columns || []).forEach((c) => {
       const td = document.createElement('td');
@@ -665,79 +781,407 @@ function createUnifiedTable(payload) {
   return wrap;
 }
 
-function renderAlertTriageUnifiedCard(runData) {
+function mountDeferredCharts(container) {
+  const charts = container.querySelectorAll('[data-echarts-deferred="1"]');
+  charts.forEach((chart) => {
+    if (chart.__echartsInstance) return;
+    const instance = echarts.init(chart);
+    instance.setOption(chart.__echartsOption || {});
+    chart.__echartsInstance = instance;
+    window.addEventListener('resize', () => instance.resize());
+  });
+}
+
+function createPlaybookActionButton(action) {
+  const btn = document.createElement('button');
+  btn.className = playbookButtonClass(action.style);
+  btn.textContent = action.label || action.id || '执行';
+  btn.onclick = async () => {
+    try {
+      btn.disabled = true;
+      await runPlaybook(action.template_id, action.params || {}, action.label || action.template_id);
+    } catch (err) {
+      const errorCard = cardTemplate('Playbook 执行失败');
+      const pre = document.createElement('pre');
+      pre.textContent = err.message || '未知错误';
+      errorCard.appendChild(pre);
+      appendCard(errorCard);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  return btn;
+}
+
+function createFormNode(payload) {
+  const form = document.createElement('form');
+  form.className = 'grid-form';
+
+  const fields = payload.data.fields || [];
+  fields.forEach((field) => {
+    const wrap = document.createElement('label');
+    wrap.textContent = field.label || field.key;
+    let inputEl;
+
+    if (field.type === 'select') {
+      inputEl = document.createElement('select');
+      (field.options || []).forEach((option) => {
+        const opt = document.createElement('option');
+        opt.value = option.value;
+        opt.textContent = option.label;
+        inputEl.appendChild(opt);
+      });
+      if (field.value != null) inputEl.value = String(field.value);
+    } else {
+      inputEl = document.createElement('input');
+      inputEl.type = field.type === 'number' ? 'number' : 'text';
+      if (field.placeholder) inputEl.placeholder = field.placeholder;
+      if (field.value != null) inputEl.value = String(field.value);
+    }
+
+    inputEl.name = field.key;
+    if (field.required) inputEl.required = true;
+    wrap.appendChild(inputEl);
+    form.appendChild(wrap);
+  });
+
+  const actionRow = document.createElement('div');
+  actionRow.className = 'action-row';
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'submit';
+  submitBtn.textContent = payload.data.submitLabel || '提交';
+  actionRow.appendChild(submitBtn);
+  form.appendChild(actionRow);
+
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const fd = new FormData(form);
+    const params = {};
+    fields.forEach((field) => {
+      const raw = (fd.get(field.key) || '').toString().trim();
+      if (!raw) return;
+      if (field.key === 'views') {
+        params[field.key] = raw;
+        return;
+      }
+      if (field.type === 'number') {
+        const num = Number(raw);
+        if (!Number.isNaN(num)) params[field.key] = num;
+        return;
+      }
+      params[field.key] = raw;
+    });
+
+    await sendChat(
+      `__FORM_SUBMIT__:${JSON.stringify({
+        token: payload.data.token,
+        intent: payload.data.intent,
+        params,
+      })}`,
+    );
+  };
+
+  return form;
+}
+
+function createUnifiedPayloadSection(payload, index) {
+  const section = document.createElement('div');
+  section.className = 'report-section';
+
+  const title = document.createElement('h4');
+  title.className = 'report-section-title';
+  title.textContent = payload?.data?.title || `区块 ${index + 1}`;
+  section.appendChild(title);
+
+  if (payload?.type === 'text') {
+    section.appendChild(createMarkdownBlock(payload?.data?.text || ''));
+    return section;
+  }
+  if (payload?.type === 'table') {
+    const tableTitle = String(payload?.data?.title || '');
+    const allRows = payload?.data?.rows || [];
+    const rowCount = allRows.length;
+    if (tableTitle.includes('未处置高危事件')) {
+      const defaultRows = allRows.slice(0, 5);
+      const cappedRows = allRows.slice(0, 50);
+      const remainingRows = cappedRows.slice(5);
+      section.appendChild(createUnifiedTable(payload, defaultRows));
+      if (remainingRows.length) {
+        const details = document.createElement('details');
+        details.className = 'report-collapsible';
+        const summaryNode = document.createElement('summary');
+        summaryNode.textContent = `展开查看其余 ${remainingRows.length} 条（最多展示前50条）`;
+        details.appendChild(summaryNode);
+        details.appendChild(createUnifiedTable(payload, remainingRows));
+        section.appendChild(details);
+      }
+      if (allRows.length > 50) {
+        const tip = document.createElement('p');
+        tip.className = 'report-chart-summary';
+        tip.textContent = `当前共 ${allRows.length} 条，仅展示前 50 条。`;
+        section.appendChild(tip);
+      }
+      return section;
+    }
+    const tableNode = createUnifiedTable(payload);
+    const shouldCollapse =
+      tableTitle.includes('命中事件清单') || tableTitle.includes('命中告警清单') || rowCount >= 12;
+    if (shouldCollapse) {
+      const details = document.createElement('details');
+      details.className = 'report-collapsible';
+      const summaryNode = document.createElement('summary');
+      summaryNode.textContent = `展开/收起明细（共 ${rowCount} 条）`;
+      details.appendChild(summaryNode);
+      details.appendChild(tableNode);
+      section.appendChild(details);
+    } else {
+      section.appendChild(tableNode);
+    }
+    return section;
+  }
+  if (payload?.type === 'echarts_graph') {
+    const chart = document.createElement('div');
+    chart.style.height = '260px';
+    chart.dataset.echartsDeferred = '1';
+    chart.__echartsOption = payload?.data?.option || {};
+    section.appendChild(chart);
+    if (payload?.data?.summary) {
+      const p = document.createElement('p');
+      p.className = 'report-chart-summary';
+      p.textContent = payload.data.summary;
+      section.appendChild(p);
+    }
+    return section;
+  }
+  if (payload?.type === 'approval_card') {
+    section.appendChild(createMarkdownBlock(payload?.data?.summary || ''));
+    const actions = document.createElement('div');
+    actions.className = 'action-row';
+    const ok = document.createElement('button');
+    ok.className = 'danger-btn';
+    ok.textContent = '确认执行';
+    ok.onclick = () => {
+      openDangerConfirm(payload?.data?.summary || '', async () => {
+        await sendChat('确认');
+      });
+    };
+    const cancel = document.createElement('button');
+    cancel.className = 'secondary-btn';
+    cancel.textContent = '取消';
+    cancel.onclick = async () => sendChat('取消');
+    actions.appendChild(ok);
+    actions.appendChild(cancel);
+    section.appendChild(actions);
+    return section;
+  }
+  if (payload?.type === 'form_card') {
+    const desc = document.createElement('p');
+    desc.textContent = payload?.data?.description || '';
+    section.appendChild(desc);
+    section.appendChild(createFormNode(payload));
+    return section;
+  }
+
+  const pre = document.createElement('pre');
+  pre.textContent = JSON.stringify(payload?.data || {}, null, 2);
+  section.appendChild(pre);
+  return section;
+}
+
+function buildPayloadExportHtml(payloads, bundleTitle = '任务报告', metaText = '') {
+  const sections = [];
+  (payloads || []).forEach((payload, index) => {
+    const title = escapeHtml(payload?.data?.title || `区块 ${index + 1}`);
+    if (payload?.type === 'text') {
+      sections.push(`<section><h2>${title}</h2>${markdownToHtml(payload?.data?.text || '')}</section>`);
+      return;
+    }
+    if (payload?.type === 'table') {
+      const columns = payload?.data?.columns || [];
+      const rows = payload?.data?.rows || [];
+      const th = columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join('');
+      const tr = rows
+        .map((row) => {
+          const tds = columns
+            .map((c) => {
+              const value = row[c.key];
+              const text = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+              return `<td>${escapeHtml(text)}</td>`;
+            })
+            .join('');
+          return `<tr>${tds}</tr>`;
+        })
+        .join('');
+      sections.push(`<section><h2>${title}</h2><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></section>`);
+      return;
+    }
+    if (payload?.type === 'echarts_graph') {
+      const chartSummary = escapeHtml(payload?.data?.summary || '图表结果');
+      sections.push(`<section><h2>${title}</h2><p>${chartSummary}</p></section>`);
+      return;
+    }
+    if (payload?.type === 'approval_card') {
+      sections.push(`<section><h2>${title}</h2>${markdownToHtml(payload?.data?.summary || '')}</section>`);
+      return;
+    }
+    if (payload?.type === 'form_card') {
+      sections.push(`<section><h2>${title}</h2><p>${escapeHtml(payload?.data?.description || '')}</p></section>`);
+      return;
+    }
+    sections.push(`<section><h2>${title}</h2><pre>${escapeHtml(JSON.stringify(payload?.data || {}, null, 2))}</pre></section>`);
+  });
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(bundleTitle)}</title>
+  <style>
+    body{font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;max-width:980px;margin:24px auto;padding:0 12px;line-height:1.65;color:#111}
+    h1{margin:0 0 6px}
+    .meta{color:#666;margin-bottom:18px}
+    section{border:1px solid #ddd;border-radius:10px;padding:14px 16px;margin-bottom:14px}
+    h2{margin:0 0 10px;font-size:18px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;vertical-align:top}
+    th{background:#f7f7f7}
+    code{background:#f1f1f1;padding:2px 4px;border-radius:4px}
+    pre{white-space:pre-wrap;word-break:break-word;background:#f7f7f7;padding:10px;border-radius:8px}
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(bundleTitle)}</h1>
+  <div class="meta">${escapeHtml(metaText || `导出时间: ${new Date().toLocaleString()}`)}</div>
+  ${sections.join('\n')}
+</body>
+</html>`;
+}
+
+function triggerHtmlDownload(html, filename) {
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+function downloadPayloadReport(payloads, filenamePrefix = 'task-report', bundleTitle = '任务报告') {
+  const html = buildPayloadExportHtml(payloads, bundleTitle);
+  triggerHtmlDownload(html, `${filenamePrefix}-${Date.now()}.html`);
+}
+
+function renderUnifiedPayloadCard(cardTitle, payloads, opts = {}) {
+  const card = cardTemplate(cardTitle || '任务执行结果');
+  card.classList.add('playbook-unified-report', 'playbook-task-card');
+
+  if (opts.downloadable) {
+    const toolRow = document.createElement('div');
+    toolRow.className = 'report-toolbar';
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'secondary-btn';
+    downloadBtn.textContent = opts.downloadLabel || '下载内容（HTML）';
+    downloadBtn.onclick = () => downloadPayloadReport(payloads, opts.filenamePrefix || 'task-report', cardTitle || '任务执行结果');
+    toolRow.appendChild(downloadBtn);
+    card.appendChild(toolRow);
+  }
+
+  (payloads || []).forEach((payload, index) => {
+    card.appendChild(createUnifiedPayloadSection(payload, index));
+  });
+
+  appendCard(card);
+  requestAnimationFrame(() => mountDeferredCharts(card));
+}
+
+function buildPlaybookExportHtml(runData) {
+  const result = runData?.result || {};
+  const cards = Array.isArray(result.cards) ? result.cards : [];
+  const summary = String(result.summary || runData?.error || '').trim();
+  const payloadsForExport = [];
+  if (summary) {
+    payloadsForExport.push({ type: 'text', data: { title: '摘要', text: summary } });
+  }
+  payloadsForExport.push(...cards);
+
+  const actionLabels = (result.next_actions || []).map((action) => action.label || action.id || '执行动作');
+  if (actionLabels.length) {
+    payloadsForExport.push({
+      type: 'text',
+      data: { title: '下一步动作推荐', text: actionLabels.map((label) => `- ${label}`).join('\n') },
+    });
+  }
+  return buildPayloadExportHtml(
+    payloadsForExport,
+    `Playbook 报告 ${runData?.run_id || ''}`,
+    `template: ${runData?.template_id || '-'} · run_id: ${runData?.run_id || '-'} · status: ${runData?.status || '-'}`
+  );
+}
+
+function downloadPlaybookReport(runData) {
+  const html = buildPlaybookExportHtml(runData);
+  triggerHtmlDownload(html, `playbook-${runData?.template_id || 'report'}-run-${runData?.run_id || Date.now()}.html`);
+}
+
+function renderPlaybookUnifiedCard(runData) {
   const result = runData?.result || {};
   const summary = String(result.summary || runData?.error || '').trim();
-  const cards = result.cards || [];
+  const cards = Array.isArray(result.cards) ? result.cards : [];
+  const nextActions = Array.isArray(result.next_actions) ? result.next_actions : [];
 
-  const card = cardTemplate('单点告警深度研判报告');
-  card.classList.add('playbook-unified-report');
+  const card = cardTemplate(`Playbook 报告 · ${runData?.template_id || 'unknown'}`);
+  card.classList.add('playbook-unified-report', 'playbook-task-card');
+
+  const toolRow = document.createElement('div');
+  toolRow.className = 'report-toolbar';
+  const downloadBtn = document.createElement('button');
+  downloadBtn.className = 'secondary-btn';
+  downloadBtn.textContent = '下载报告（HTML）';
+  downloadBtn.onclick = () => downloadPlaybookReport(runData);
+  toolRow.appendChild(downloadBtn);
+  card.appendChild(toolRow);
 
   if (summary) {
     const section = document.createElement('div');
     section.className = 'report-section';
     const title = document.createElement('h4');
     title.className = 'report-section-title';
-    title.textContent = '结论';
+    title.textContent = '摘要';
     section.appendChild(title);
-    const pre = document.createElement('pre');
-    pre.textContent = summary;
-    section.appendChild(pre);
+    section.appendChild(createMarkdownBlock(summary));
     card.appendChild(section);
   }
 
   cards.forEach((payload, index) => {
     if (payload?.type === 'text' && payloadText(payload) === summary) return;
-    const section = document.createElement('div');
-    section.className = 'report-section';
-
-    const title = document.createElement('h4');
-    title.className = 'report-section-title';
-    title.textContent = payload?.data?.title || `区块 ${index + 1}`;
-    section.appendChild(title);
-
-    if (payload?.type === 'text') {
-      const pre = document.createElement('pre');
-      pre.textContent = payload?.data?.text || '';
-      section.appendChild(pre);
-    } else if (payload?.type === 'table') {
-      section.appendChild(createUnifiedTable(payload));
-    } else if (payload?.type === 'echarts_graph') {
-      const p = document.createElement('p');
-      p.textContent = payload?.data?.summary || '图表结果';
-      section.appendChild(p);
-    } else {
-      const pre = document.createElement('pre');
-      pre.textContent = JSON.stringify(payload?.data || {}, null, 2);
-      section.appendChild(pre);
-    }
-    card.appendChild(section);
+    card.appendChild(createUnifiedPayloadSection(payload, index));
   });
 
+  if (nextActions.length) {
+    const section = document.createElement('div');
+    section.className = 'report-section';
+    const title = document.createElement('h4');
+    title.className = 'report-section-title';
+    title.textContent = '下一步动作推荐';
+    section.appendChild(title);
+    const row = document.createElement('div');
+    row.className = 'action-row playbook-next-actions';
+    nextActions.forEach((action) => row.appendChild(createPlaybookActionButton(action)));
+    section.appendChild(row);
+    card.appendChild(section);
+  }
+
   appendCard(card);
+  requestAnimationFrame(() => mountDeferredCharts(card));
 }
 
 function renderPlaybookResult(runData) {
-  const result = runData?.result || {};
-  const summary = String(result.summary || runData?.error || '').trim();
-  const cards = result.cards || [];
-  const shouldRenderSummary = summary && !isSummaryDuplicated(summary, cards);
-
-  if (runData?.template_id === 'alert_triage' && runData?.input?.params?.mode !== 'block_ip') {
-    renderAlertTriageUnifiedCard(runData);
-    renderNextActions(result.next_actions || []);
-    return;
-  }
-
-  if (shouldRenderSummary) {
-    renderPayload({
-      type: 'text',
-      data: { title: `Playbook 结果 · ${runData.template_id}`, text: summary, dangerous: false },
-    });
-  }
-
-  cards.forEach((cardPayload) => renderPayload(cardPayload));
-  renderNextActions(result.next_actions || []);
+  renderPlaybookUnifiedCard(runData);
 }
 
 function buildSceneParams(scene) {
@@ -873,9 +1317,16 @@ async function refreshPlaybookTemplates() {
   }
 }
 
-async function pollPlaybookRun(runId, progressUi) {
-  const maxPoll = 120;
-  for (let i = 0; i < maxPoll; i += 1) {
+function getPlaybookPollTimeoutMs(templateId) {
+  if (templateId === 'threat_hunting') return 15 * 60 * 1000;
+  if (templateId === 'asset_guard') return 10 * 60 * 1000;
+  return 5 * 60 * 1000;
+}
+
+async function pollPlaybookRun(runId, progressUi, templateId) {
+  const timeoutMs = getPlaybookPollTimeoutMs(templateId);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
     const runData = await api(`/api/playbooks/runs/${runId}`);
     updatePlaybookProgress(progressUi, runData);
     if (runData.status === 'Finished' || runData.status === 'Failed') {
@@ -883,7 +1334,7 @@ async function pollPlaybookRun(runId, progressUi) {
     }
     await sleep(1000);
   }
-  throw new Error(`Playbook 运行超时，run_id=${runId}`);
+  throw new Error(`Playbook 运行超时，run_id=${runId}（>${Math.floor(timeoutMs / 1000)}s）`);
 }
 
 async function runPlaybook(templateId, params = {}, triggerLabel = '') {
@@ -922,7 +1373,7 @@ async function runPlaybook(templateId, params = {}, triggerLabel = '') {
     });
   }
 
-  const runData = await pollPlaybookRun(runInfo.run_id, progressUi);
+  const runData = await pollPlaybookRun(runInfo.run_id, progressUi, templateId);
   renderPlaybookResult(runData);
 }
 
@@ -930,7 +1381,8 @@ async function readSSEStream(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = '';
-  let tempPre = null;
+  let currentTextPayload = null;
+  const batchPayloads = [];
 
   while (true) {
     const { value, done } = await reader.read();
@@ -942,21 +1394,66 @@ async function readSSEStream(response) {
     for (const part of parts) {
       if (!part.startsWith('data: ')) continue;
       const raw = part.slice(6).trim();
-      if (raw === '[DONE]') return;
+      if (raw === '[DONE]') {
+        if (currentTextPayload) {
+          batchPayloads.push(currentTextPayload);
+          currentTextPayload = null;
+        }
+        if (batchPayloads.length > 1) {
+          const primaryTitle = batchPayloads[0]?.data?.title || '任务执行结果';
+          renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads, {
+            downloadable: true,
+            downloadLabel: '下载任务内容（HTML）',
+            filenamePrefix: 'chat-task-report',
+          });
+        } else if (batchPayloads.length === 1) {
+          renderPayload(batchPayloads[0]);
+        }
+        return;
+      }
       const event = JSON.parse(raw);
 
       if (event.type === 'text_start') {
-        const p = event.payload;
-        const tempCard = cardTemplate(p.data.title || '系统消息', p.data.dangerous ? 'approval-card' : '');
-        tempPre = document.createElement('pre');
-        tempCard.appendChild(tempPre);
-        appendCard(tempCard);
+        const p = event.payload || {};
+        currentTextPayload = {
+          ...p,
+          data: {
+            ...(p.data || {}),
+            text: '',
+          },
+        };
       } else if (event.type === 'text_delta') {
-        if (tempPre) tempPre.textContent += event.delta;
+        if (currentTextPayload) {
+          currentTextPayload.data.text += event.delta || '';
+        }
+      } else if (event.type === 'text_end') {
+        if (currentTextPayload) {
+          if (!currentTextPayload.data.text) {
+            currentTextPayload.data.text = event.text || '';
+          }
+          batchPayloads.push(currentTextPayload);
+          currentTextPayload = null;
+        }
       } else if (event.type === 'payload') {
-        renderPayload(event.payload);
+        batchPayloads.push(event.payload);
+      } else if (event.type === 'payload_batch') {
+        batchPayloads.push(...(event.payloads || []));
       }
     }
+  }
+
+  if (currentTextPayload) {
+    batchPayloads.push(currentTextPayload);
+  }
+  if (batchPayloads.length > 1) {
+    const primaryTitle = batchPayloads[0]?.data?.title || '任务执行结果';
+    renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads, {
+      downloadable: true,
+      downloadLabel: '下载任务内容（HTML）',
+      filenamePrefix: 'chat-task-report',
+    });
+  } else if (batchPayloads.length === 1) {
+    renderPayload(batchPayloads[0]);
   }
 }
 

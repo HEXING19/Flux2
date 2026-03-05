@@ -4,7 +4,7 @@ import json
 import ipaddress
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -29,6 +29,23 @@ from .registry import PlaybookRegistry
 SEVERITY_LABEL = {0: "信息", 1: "低危", 2: "中危", 3: "高危", 4: "严重"}
 DEAL_STATUS_LABEL = {0: "待处置", 10: "处置中", 40: "已处置", 50: "已挂起", 60: "接受风险", 70: "已遏制"}
 IPV4_PATTERN = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+INTEL_SEVERITY_CN = {
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+    "critical": "严重",
+    "unknown": "未知",
+}
+INTEL_SOURCE_CN = {
+    "threatbook": "ThreatBook情报",
+    "local_fallback": "本地启发式",
+}
+INTEL_TAG_CN = {
+    "c2": "C2控制",
+    "scanner": "扫描器",
+    "suspicious": "可疑",
+    "unknown": "未知",
+}
 
 
 def utc_now() -> datetime:
@@ -183,7 +200,7 @@ class PlaybookService:
 
         if template_id == "threat_hunting":
             normalized["window_days"] = max(1, min(180, _to_int(normalized.get("window_days"), 90)))
-            normalized["max_scan"] = max(200, min(2000, _to_int(normalized.get("max_scan"), 2000)))
+            normalized["max_scan"] = max(200, min(10000, _to_int(normalized.get("max_scan"), 10000)))
             normalized["evidence_limit"] = max(1, min(20, _to_int(normalized.get("evidence_limit"), 20)))
             mode = str(normalized.get("mode") or "analyze").strip().lower()
             normalized["mode"] = mode if mode in {"analyze", "export_summary"} else "analyze"
@@ -553,20 +570,49 @@ class PlaybookService:
             }
 
     @staticmethod
-    def _build_fake_trend(total: int, points: int = 8) -> tuple[list[str], list[int]]:
-        now = datetime.now()
-        labels = []
-        values = []
-        divisor = max(1, points)
-        base = max(0, int(total / divisor))
-        for idx in range(points):
-            slot = now - timedelta(hours=(points - idx - 1) * 3)
+    def _localize_intel_tags(tags: Any) -> list[str]:
+        if not isinstance(tags, list):
+            return []
+        localized: list[str] = []
+        for tag in tags:
+            text = str(tag or "").strip()
+            if not text:
+                continue
+            localized.append(INTEL_TAG_CN.get(text.lower(), text))
+        return localized or ["未知"]
+
+    def _localize_intel_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        severity_raw = str(row.get("severity") or "unknown").lower()
+        source_raw = str(row.get("source") or "local_fallback").lower()
+        confidence = _to_int(row.get("confidence"), 0)
+        return {
+            **row,
+            "severity": INTEL_SEVERITY_CN.get(severity_raw, severity_raw or "未知"),
+            "confidence": f"{max(0, min(100, confidence))}%",
+            "tags": self._localize_intel_tags(row.get("tags")),
+            "source": INTEL_SOURCE_CN.get(source_raw, source_raw or "未知"),
+        }
+
+    def _build_log_trend_series(
+        self,
+        requester: APIRequester,
+        *,
+        start_ts: int,
+        end_ts: int,
+        buckets: int = 12,
+    ) -> tuple[list[str], list[int]]:
+        bucket_count = max(4, min(24, _to_int(buckets, 12)))
+        window = max(1, end_ts - start_ts)
+        bucket_size = max(1, window // bucket_count)
+        labels: list[str] = []
+        values: list[int] = []
+        for idx in range(bucket_count):
+            seg_start = start_ts + idx * bucket_size
+            seg_end = end_ts if idx == bucket_count - 1 else min(end_ts, seg_start + bucket_size)
+            counted = self._count_logs(requester, start_ts=seg_start, end_ts=seg_end)
+            slot = datetime.fromtimestamp(seg_end)
             labels.append(slot.strftime("%m-%d %H:%M"))
-            factor = 0.85 + (idx % 4) * 0.07
-            values.append(max(0, int(base * factor)))
-        if values:
-            delta = total - sum(values)
-            values[-1] += delta
+            values.append(max(0, _to_int(counted.get("total"), 0)))
         return labels, values
 
     @staticmethod
@@ -591,16 +637,59 @@ class PlaybookService:
         *,
         system: str,
         fallback: str,
+        hard_timeout_seconds: int = 45,
     ) -> str:
-        try:
+        # The provider timeout is best-effort and may still block for several minutes.
+        # Guard playbook node latency with an outer hard timeout so long model calls
+        # do not make the whole run appear "stuck" to the UI.
+        def complete_once() -> str:
             with session_scope() as session:
                 llm = LLMRouter(session)
-                answer = llm.complete(prompt, system=system)
-                if answer and answer.strip():
-                    return answer.strip()
+                return llm.complete(prompt, system=system)
+
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playbook-llm")
+        future = executor.submit(complete_once)
+        try:
+            answer = future.result(timeout=max(5, _to_int(hard_timeout_seconds, 45)))
+            if answer and answer.strip():
+                return answer.strip()
+        except FutureTimeoutError:
+            future.cancel()
         except Exception:
             pass
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         return fallback
+
+    @staticmethod
+    def _emphasize_key_points(text: str) -> str:
+        if not text:
+            return ""
+        keys = (
+            "总体态势",
+            "关键风险",
+            "建议动作",
+            "攻击真实性概率",
+            "关键证据",
+            "优先建议动作",
+            "风险等级",
+            "处置结论",
+        )
+        lines: list[str] = []
+        for line in str(text).splitlines():
+            stripped = line.lstrip()
+            indent = line[: len(line) - len(stripped)]
+            rewritten = stripped
+            for key in keys:
+                for sep in ("：", ":"):
+                    prefix = f"{key}{sep}"
+                    if rewritten.startswith(prefix):
+                        rewritten = rewritten.replace(prefix, f"**{key}{sep}**", 1)
+                        break
+            if "建议立即封禁" in rewritten and "**建议立即封禁**" not in rewritten:
+                rewritten = rewritten.replace("建议立即封禁", "**建议立即封禁**")
+            lines.append(f"{indent}{rewritten}")
+        return "\n".join(lines)
 
     def _resolve_incident_uuids(self, params: dict[str, Any], runtime_session_id: str) -> list[str]:
         uuids: list[str] = []
@@ -656,13 +745,15 @@ class PlaybookService:
                 "dealStatus": [0],
                 "severities": [3, 4],
                 "page": 1,
-                "pageSize": 50,
+                "pageSize": 200,
                 "sort": "endTime:desc,severity:desc",
                 "timeField": "endTime",
             }
             resp = requester.request("POST", "/api/xdr/v1/incidents/list", json_body=req)
-            items = resp.get("data", {}).get("item", []) if resp.get("code") == "Success" else []
+            data = resp.get("data", {}) if resp.get("code") == "Success" else {}
+            items = data.get("item", []) or []
             rows = [self._normalize_event_row(item, idx) for idx, item in enumerate(items, start=1)]
+            total_count = _to_int(_pick(data, "total", "count", "totalCount"), len(rows))
             uuids = [row["uuId"] for row in rows if row.get("uuId")]
             if uuids:
                 context_manager.store_index_mapping(runtime_context["session_id"], "events", uuids)
@@ -672,6 +763,7 @@ class PlaybookService:
                 )
             return {
                 "high_events": rows,
+                "high_events_total": total_count,
                 "error": None if resp.get("code") == "Success" else str(resp.get("message") or "事件查询失败"),
                 "source": "POST /api/xdr/v1/incidents/list",
                 "request": req,
@@ -735,15 +827,17 @@ class PlaybookService:
             node1 = ctx["nodes"]["node_1_log_count_24h"]
             node2 = ctx["nodes"]["node_2_unhandled_high_events_24h"]
             node3 = ctx["nodes"]["node_3_sample_detail_parallel"]
+            high_total = _to_int(node2.get("high_events_total"), len(node2.get("high_events", [])))
             fallback = (
                 f"总体态势：过去24小时网络安全日志总量 {node1.get('log_total_24h', 0)}，"
-                f"未处置高危事件 {len(node2.get('high_events', []))} 条。\n"
+                f"未处置高危事件 {high_total} 条。\n"
                 "关键风险：已抽样高危事件证据，存在外部实体关联，需优先处理前3条告警。\n"
                 "建议动作：先执行“深度研判前3条事件”，再对首个高风险IP进行90天活动轨迹分析。"
             )
             prompt = (
                 "你是企业SOC值班专家，请根据输入生成“今日安全早报”，要求三段结构：总体态势、关键风险、建议动作。"
                 f"\n日志总量: {node1.get('log_total_24h', 0)}"
+                f"\n未处置高危事件总数: {high_total}"
                 f"\n未处置高危事件样本: {json.dumps(node2.get('high_events', [])[:5], ensure_ascii=False)}"
                 f"\n样本举证: {json.dumps(node3.get('sample_evidence', [])[:3], ensure_ascii=False)}"
             )
@@ -752,7 +846,11 @@ class PlaybookService:
                 system="输出中文，结论化、可执行，避免泛化。",
                 fallback=fallback,
             )
-            return {"briefing": briefing}
+            accurate_overview = (
+                f"总体态势：今日共产生安全日志 {node1.get('log_total_24h', 0)} 条，"
+                f"未处置高危及严重级别安全事件 {high_total} 起。"
+            )
+            return {"briefing": briefing, "accurate_overview": accurate_overview}
 
         nodes = [
             PipelineNode("node_1_log_count_24h", node_1_log_count_24h),
@@ -782,9 +880,19 @@ class PlaybookService:
             node1 = results.get("node_1_log_count_24h", {})
             node2 = results.get("node_2_unhandled_high_events_24h", {})
             node3 = results.get("node_3_sample_detail_parallel", {})
-            summary = results.get("node_4_llm_briefing", {}).get("briefing", "早报生成完成。")
+            llm_summary = results.get("node_4_llm_briefing", {}).get("briefing", "早报生成完成。")
+            accurate_overview = results.get("node_4_llm_briefing", {}).get("accurate_overview", "")
+            summary = self._emphasize_key_points(
+                f"{accurate_overview}\n{llm_summary}".strip() if accurate_overview else llm_summary
+            )
             rows = node2.get("high_events", [])
-            labels, points = self._build_fake_trend(node1.get("log_total_24h", 0), points=8)
+            high_total = _to_int(node2.get("high_events_total"), len(rows))
+            labels, points = self._build_log_trend_series(
+                requester,
+                start_ts=_to_int(node1.get("startTimestamp"), to_ts(utc_now()) - 24 * 3600),
+                end_ts=_to_int(node1.get("endTimestamp"), to_ts(utc_now())),
+                buckets=12,
+            )
             chart_option = {
                 "tooltip": {"trigger": "axis"},
                 "xAxis": {"type": "category", "data": labels},
@@ -795,7 +903,7 @@ class PlaybookService:
             cards = [
                 text_payload(summary, title="今日安全早报"),
                 echarts_payload(
-                    title="24h 日志总量趋势（V1伪趋势）",
+                    title="24h 日志总量趋势（按2小时统计）",
                     option=chart_option,
                     summary=f"过去24小时日志总量：{node1.get('log_total_24h', 0)}",
                 ),
@@ -812,6 +920,10 @@ class PlaybookService:
                     ],
                     rows=rows,
                     namespace="events",
+                ),
+                text_payload(
+                    f"24小时未处置高危/严重事件总数：**{high_total}**。表格展示最新样本明细。",
+                    title="统计口径说明",
                 ),
             ]
 
@@ -928,29 +1040,56 @@ class PlaybookService:
             start_ts = end_ts - params.get("window_days", 7) * 86400
 
             def count_for_ip(ip: str) -> dict[str, Any]:
-                total = self._count_logs(
+                src_total = self._count_logs(
                     requester,
                     start_ts=start_ts,
                     end_ts=end_ts,
                     extra_filters={"srcIps": [ip]},
                 )["total"]
-                high = self._count_logs(
+                dst_total = self._count_logs(
+                    requester,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    extra_filters={"dstIps": [ip]},
+                )["total"]
+                src_high = self._count_logs(
                     requester,
                     start_ts=start_ts,
                     end_ts=end_ts,
                     extra_filters={"srcIps": [ip], "severities": [3, 4]},
                 )["total"]
-                compromised = self._count_logs(
+                dst_high = self._count_logs(
+                    requester,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    extra_filters={"dstIps": [ip], "severities": [3, 4]},
+                )["total"]
+                src_compromised = self._count_logs(
                     requester,
                     start_ts=start_ts,
                     end_ts=end_ts,
                     extra_filters={"srcIps": [ip], "attackStates": [2, 3]},
                 )["total"]
+                dst_compromised = self._count_logs(
+                    requester,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    extra_filters={"dstIps": [ip], "attackStates": [2, 3]},
+                )["total"]
+                total = src_total + dst_total
+                high = src_high + dst_high
+                compromised = src_compromised + dst_compromised
                 score = high * 2 + compromised * 3
                 return {
                     "ip": ip,
+                    "src_total": src_total,
+                    "dst_total": dst_total,
                     "total": total,
+                    "src_high_risk": src_high,
+                    "dst_high_risk": dst_high,
                     "high_risk": high,
+                    "src_compromised": src_compromised,
+                    "dst_compromised": dst_compromised,
                     "compromised": compromised,
                     "blast_radius_score": score,
                 }
@@ -1018,8 +1157,11 @@ class PlaybookService:
 
         def finalizer(results: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             _ = ctx
-            summary = results.get("node_5_llm_triage_summary", {}).get("summary", "研判已完成。")
+            summary = self._emphasize_key_points(
+                results.get("node_5_llm_triage_summary", {}).get("summary", "研判已完成。")
+            )
             intel_rows = results.get("node_3_external_intel", {}).get("intel_rows", [])
+            localized_intel_rows = [self._localize_intel_row(row) for row in intel_rows]
             impact_rows = results.get("node_4_internal_impact_count_parallel", {}).get("impact_rows", [])
             entity_rows = results.get("node_2_entity_profile", {}).get("entity_rows", [])
             entity_errors = results.get("node_2_entity_profile", {}).get("errors", [])
@@ -1041,8 +1183,14 @@ class PlaybookService:
                     title="目标IP内部影响计数（近7天）",
                     columns=[
                         {"key": "ip", "label": "IP"},
+                        {"key": "src_total", "label": "源总访问"},
+                        {"key": "dst_total", "label": "目的总访问"},
                         {"key": "total", "label": "总访问量"},
+                        {"key": "src_high_risk", "label": "源高危"},
+                        {"key": "dst_high_risk", "label": "目的高危"},
                         {"key": "high_risk", "label": "高危访问量"},
+                        {"key": "src_compromised", "label": "源成功/失陷"},
+                        {"key": "dst_compromised", "label": "目的成功/失陷"},
                         {"key": "compromised", "label": "成功/失陷量"},
                         {"key": "blast_radius_score", "label": "影响评分"},
                     ],
@@ -1053,12 +1201,12 @@ class PlaybookService:
                     title="实体外部情报",
                     columns=[
                         {"key": "ip", "label": "IP"},
-                        {"key": "severity", "label": "severity"},
-                        {"key": "tags", "label": "tags"},
-                        {"key": "confidence", "label": "confidence"},
-                        {"key": "source", "label": "source"},
+                        {"key": "severity", "label": "威胁等级"},
+                        {"key": "tags", "label": "威胁标签"},
+                        {"key": "confidence", "label": "置信度"},
+                        {"key": "source", "label": "情报来源"},
                     ],
-                    rows=intel_rows,
+                    rows=localized_intel_rows,
                     namespace="triage_intel",
                 ),
                 table_payload(
@@ -1086,19 +1234,38 @@ class PlaybookService:
             target_ip = None
             if impact_rows:
                 target_ip = impact_rows[0].get("ip")
-            if not target_ip and intel_rows:
-                target_ip = intel_rows[0].get("ip")
+            if not target_ip and localized_intel_rows:
+                target_ip = localized_intel_rows[0].get("ip")
 
             next_actions: list[dict[str, Any]] = []
-            if target_ip:
+            candidate_ips = _dedup_keep_order(
+                [
+                    row.get("ip")
+                    for row in impact_rows + localized_intel_rows
+                    if isinstance(row.get("ip"), str) and IPV4_PATTERN.match(row.get("ip"))
+                ]
+            )[:3]
+            if not candidate_ips and isinstance(target_ip, str) and IPV4_PATTERN.match(target_ip):
+                candidate_ips = [target_ip]
+            if candidate_ips:
+                cards.append(
+                    text_payload(
+                        "本次下一步动作涉及 IP："
+                        + "、".join(f"`{ip}`" for ip in candidate_ips)
+                        + "。请按下方动作逐项执行。",
+                        title="下一步动作目标IP",
+                    )
+                )
+
+            for ip in candidate_ips:
                 next_actions.append(
                     {
-                        "id": "triage_block_target",
-                        "label": "封禁该 IP（进入审批）",
+                        "id": f"triage_block_{ip.replace('.', '_')}",
+                        "label": f"是否进行IP {ip}进行封禁（进入审批）",
                         "template_id": "alert_triage",
                         "params": {
                             "mode": "block_ip",
-                            "ip": target_ip,
+                            "ip": ip,
                             "session_id": runtime_context["session_id"],
                         },
                         "style": "danger",
@@ -1106,10 +1273,10 @@ class PlaybookService:
                 )
                 next_actions.append(
                     {
-                        "id": "triage_hunt_target",
-                        "label": "生成该 IP 90 天活动轨迹",
+                        "id": f"triage_hunt_{ip.replace('.', '_')}",
+                        "label": f"生成IP {ip} 的90天活动轨迹",
                         "template_id": "threat_hunting",
-                        "params": {"ip": target_ip},
+                        "params": {"ip": ip},
                         "style": "secondary",
                     }
                 )
@@ -1221,10 +1388,14 @@ class PlaybookService:
         ip: str,
         start_ts: int,
         end_ts: int,
-        max_scan: int = 2000,
+        max_scan: int = 10000,
         page_size: int = 200,
+        max_store_matches: int = 500,
+        extra_filters: dict[str, Any] | None = None,
+        require_ip_match: bool = True,
     ) -> dict[str, Any]:
         matched: list[dict[str, Any]] = []
+        matched_total = 0
         scanned = 0
         page = 1
         pages = 0
@@ -1239,6 +1410,7 @@ class PlaybookService:
                 "startTimestamp": start_ts,
                 "endTimestamp": end_ts,
             }
+            req.update(extra_filters or {})
             resp = requester.request("POST", "/api/xdr/v1/incidents/list", json_body=req)
             if resp.get("code") != "Success":
                 break
@@ -1252,8 +1424,10 @@ class PlaybookService:
                     truncated = True
                     break
                 scanned += 1
-                if self._incident_match_ip(item, ip):
-                    matched.append(self._normalize_event_row(item, len(matched) + 1))
+                if (not require_ip_match) or self._incident_match_ip(item, ip):
+                    matched_total += 1
+                    if len(matched) < max_store_matches:
+                        matched.append(self._normalize_event_row(item, len(matched) + 1))
             if len(items) < page_size:
                 break
             if scanned >= max_scan:
@@ -1263,6 +1437,7 @@ class PlaybookService:
 
         return {
             "matched_events": matched,
+            "matched_total": matched_total,
             "scanned": scanned,
             "pages": pages,
             "truncated": truncated,
@@ -1511,13 +1686,15 @@ class PlaybookService:
             node3 = results.get("node_3_logs_dst_asset", {})
             node4 = results.get("node_4_logs_src_asset", {})
             node6 = results.get("node_6_external_intel_enrich", {})
-            summary = results.get("node_7_llm_asset_briefing", {}).get("briefing", "核心资产防线透视已完成。")
+            summary = self._emphasize_key_points(
+                results.get("node_7_llm_asset_briefing", {}).get("briefing", "核心资产防线透视已完成。")
+            )
 
             stats_rows = [
                 {"direction": "入向（目标为资产）", "event_count": node1.get("count", 0), "log_count": node3.get("log_total", 0)},
                 {"direction": "出向（源为资产）", "event_count": node2.get("count", 0), "log_count": node4.get("log_total", 0)},
             ]
-            intel_rows = node6.get("intel_rows", [])
+            intel_rows = [self._localize_intel_row(row) for row in node6.get("intel_rows", [])]
             cards = [
                 text_payload(summary, title="核心资产态势结论"),
                 table_payload(
@@ -1544,33 +1721,30 @@ class PlaybookService:
                     namespace="asset_guard_intel",
                 ),
                 text_payload(
-                    "建议动作：优先对高风险外部IP执行深度研判，并对核心资产相关高危告警进行人工复核。",
+                    "建议动作：优先对 Top 外部访问实体执行封禁审批；并对封禁前后关联高危告警进行人工复核。",
                     title="建议动作",
                 ),
             ]
 
             next_actions: list[dict[str, Any]] = []
-            incident_uuids = _dedup_keep_order(node1.get("uuids", []) + node2.get("uuids", []))
-            if incident_uuids:
-                next_actions.append(
-                    {
-                        "id": "asset_guard_triage",
-                        "label": "🔍 对首条相关事件做深度研判",
-                        "template_id": "alert_triage",
-                        "params": {"incident_uuid": incident_uuids[0], "session_id": runtime_context["session_id"]},
-                        "style": "primary",
-                    }
-                )
             if intel_rows:
-                next_actions.append(
-                    {
-                        "id": "asset_guard_hunting",
-                        "label": "🕵️ 生成高风险外部IP活动轨迹",
-                        "template_id": "threat_hunting",
-                        "params": {"ip": intel_rows[0].get("ip")},
-                        "style": "secondary",
-                    }
-                )
+                for row in intel_rows[:5]:
+                    ip = row.get("ip")
+                    if not isinstance(ip, str) or not IPV4_PATTERN.match(ip):
+                        continue
+                    next_actions.append(
+                        {
+                            "id": f"asset_guard_block_{ip.replace('.', '_')}",
+                            "label": f"是否进行IP {ip}进行封禁（Top外部访问实体，进入审批）",
+                            "template_id": "alert_triage",
+                            "params": {
+                                "mode": "block_ip",
+                                "ip": ip,
+                                "session_id": runtime_context["session_id"],
+                            },
+                            "style": "danger",
+                        }
+                    )
 
             return {
                 "summary": summary,
@@ -1603,15 +1777,48 @@ class PlaybookService:
             now_ts = to_ts(utc_now())
             end_ts = _to_int(params.get("endTimestamp"), now_ts)
             start_ts = _to_int(params.get("startTimestamp"), end_ts - params.get("window_days", 90) * 86400)
-            scan_result = self._scan_incidents_for_ip(
+            src_scan = self._scan_incidents_for_ip(
                 requester,
                 ip=target_ip,
                 start_ts=start_ts,
                 end_ts=end_ts,
-                max_scan=params.get("max_scan", 2000),
+                max_scan=params.get("max_scan", 10000),
                 page_size=200,
+                extra_filters={"srcIps": [target_ip]},
+                require_ip_match=False,
             )
-            uuids = [row["uuId"] for row in scan_result["matched_events"] if row.get("uuId")]
+            dst_scan = self._scan_incidents_for_ip(
+                requester,
+                ip=target_ip,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                max_scan=params.get("max_scan", 10000),
+                page_size=200,
+                extra_filters={"dstIps": [target_ip]},
+                require_ip_match=False,
+            )
+            merged: dict[str, dict[str, Any]] = {}
+
+            def merge_rows(rows: list[dict[str, Any]], direction: str) -> None:
+                for row in rows:
+                    uid = str(row.get("uuId") or "")
+                    key = uid or f"{direction}-{row.get('index', 0)}"
+                    existing = merged.get(key)
+                    if existing:
+                        old_dir = str(existing.get("direction") or "")
+                        if direction not in old_dir:
+                            existing["direction"] = "源/目的"
+                        continue
+                    merged[key] = {**row, "direction": direction}
+
+            merge_rows(src_scan.get("matched_events", []), "源")
+            merge_rows(dst_scan.get("matched_events", []), "目的")
+            merged_rows = list(merged.values())
+            merged_rows.sort(key=lambda item: str(item.get("endTime") or ""), reverse=True)
+            for idx, row in enumerate(merged_rows, start=1):
+                row["index"] = idx
+
+            uuids = [row["uuId"] for row in merged_rows if row.get("uuId")]
             if uuids:
                 context_manager.store_index_mapping(runtime_context["session_id"], "events", uuids)
                 context_manager.update_params(
@@ -1619,7 +1826,13 @@ class PlaybookService:
                     {"last_event_uuid": uuids[0], "last_event_uuids": uuids, "last_entity_ip": target_ip},
                 )
             return {
-                **scan_result,
+                "matched_events": merged_rows,
+                "matched_total": _to_int(src_scan.get("matched_total"), 0) + _to_int(dst_scan.get("matched_total"), 0),
+                "src_alert_total": _to_int(src_scan.get("matched_total"), 0),
+                "dst_alert_total": _to_int(dst_scan.get("matched_total"), 0),
+                "scanned": _to_int(src_scan.get("scanned"), 0) + _to_int(dst_scan.get("scanned"), 0),
+                "pages": _to_int(src_scan.get("pages"), 0) + _to_int(dst_scan.get("pages"), 0),
+                "truncated": bool(src_scan.get("truncated") or dst_scan.get("truncated")),
                 "startTimestamp": start_ts,
                 "endTimestamp": end_ts,
             }
@@ -1696,28 +1909,40 @@ class PlaybookService:
             elif severity in {"low"} and len(matched) <= 2:
                 risk_level = "低"
 
+            src_alert_total = _to_int(ctx["nodes"]["node_2_event_scan_paginated"].get("src_alert_total"), 0)
+            dst_alert_total = _to_int(ctx["nodes"]["node_2_event_scan_paginated"].get("dst_alert_total"), 0)
+            alert_total = src_alert_total + dst_alert_total
+            action_decision = "建议继续观察"
+            if src_alert_total > 0 or (severity in {"high", "critical"} and alert_total > 0) or alert_total >= 20:
+                action_decision = "建议立即封禁"
+
             fallback = (
                 f"风险等级：{risk_level}\n"
                 "攻击故事线：\n"
                 "1) 侦察：目标IP出现对内通信痕迹。\n"
-                "2) 利用：命中可疑事件并关联外部情报标签。\n"
-                "3) 横向：在事件时间线上出现多阶段告警。\n"
-                "4) 结果：建议对高风险节点发起处置审批并持续监控。"
+                "2) 利用：命中可疑告警并关联外部情报标签。\n"
+                "3) 横向：在告警时间线上出现多阶段活动痕迹。\n"
+                "4) 结果：基于告警与情报综合判断给出处置结论。\n"
+                f"处置结论：{action_decision}。"
             )
             prompt = (
                 "请按“侦察->利用->横向->结果”输出攻击故事线，每段附关键证据。"
+                "最后必须给出一行“处置结论：建议立即封禁”或“处置结论：建议继续观察”。"
                 f"\n目标IP: {target_ip}"
                 f"\n画像: {json.dumps(profile, ensure_ascii=False)}"
-                f"\n命中事件: {json.dumps(matched[:10], ensure_ascii=False)}"
+                f"\n命中告警: {json.dumps(matched[:10], ensure_ascii=False)}"
                 f"\n举证: {json.dumps(evidence[:10], ensure_ascii=False)}"
                 f"\n内部活动: {json.dumps(activity, ensure_ascii=False)}"
+                f"\n源IP命中告警数: {src_alert_total}"
+                f"\n目的IP命中告警数: {dst_alert_total}"
+                f"\n规则建议: {action_decision}"
             )
             story = self._safe_llm_complete(
                 prompt,
                 system="你是溯源分析专家，输出结构化叙事。",
                 fallback=fallback,
             )
-            return {"story": story, "risk_level": risk_level}
+            return {"story": story, "risk_level": risk_level, "action_decision": action_decision}
 
         nodes = [
             PipelineNode("node_1_external_profile", node_1_external_profile),
@@ -1744,31 +1969,47 @@ class PlaybookService:
             profile = results.get("node_1_external_profile", {}).get("profile", {})
             scan_result = results.get("node_2_event_scan_paginated", {})
             matched_rows = scan_result.get("matched_events", [])
+            matched_total = _to_int(scan_result.get("matched_total"), len(matched_rows))
+            src_alert_total = _to_int(scan_result.get("src_alert_total"), 0)
+            dst_alert_total = _to_int(scan_result.get("dst_alert_total"), 0)
             story_result = results.get("node_5_llm_timeline_story", {})
             evidence_errors = results.get("node_3_evidence_enrichment_parallel", {}).get("errors", [])
             summary = (
-                f"目标IP {target_ip} 轨迹分析完成：命中 {len(matched_rows)} 条事件，"
-                f"扫描 {scan_result.get('scanned', 0)} 条（上限 {params.get('max_scan', 2000)}），"
+                f"目标IP {target_ip} 告警轨迹分析完成：命中 {matched_total} 条告警"
+                f"（源IP告警 {src_alert_total} / 目的IP告警 {dst_alert_total}），"
+                f"扫描 {scan_result.get('scanned', 0)} 条（单向上限 {params.get('max_scan', 10000)}），"
                 f"风险等级 {story_result.get('risk_level', '中')}。"
             )
+            decision_text = str(story_result.get("action_decision") or "建议继续观察")
+            decision_md = self._emphasize_key_points(f"处置结论：{decision_text}。")
+            display_rows = matched_rows[:200]
 
             cards = [
-                text_payload(summary, title="攻击者活动轨迹结论"),
+                text_payload(self._emphasize_key_points(summary), title="攻击者活动轨迹结论"),
+                text_payload(decision_md, title="处置结论"),
                 table_payload(
-                    title="命中事件清单",
+                    title="命中告警清单（目标IP源/目的）",
                     columns=[
                         {"key": "index", "label": "序号"},
+                        {"key": "direction", "label": "方向"},
                         {"key": "endTime", "label": "时间"},
-                        {"key": "uuId", "label": "事件ID"},
-                        {"key": "name", "label": "事件名"},
+                        {"key": "uuId", "label": "告警ID"},
+                        {"key": "name", "label": "告警名"},
                         {"key": "incidentSeverity", "label": "等级"},
                         {"key": "dealStatus", "label": "状态"},
                     ],
-                    rows=matched_rows,
+                    rows=display_rows,
                     namespace="hunting_events",
                 ),
-                text_payload(story_result.get("story", "暂无时间线叙事。"), title="攻击故事线"),
+                text_payload(self._emphasize_key_points(story_result.get("story", "暂无时间线叙事。")), title="攻击故事线"),
             ]
+            if matched_total > len(display_rows):
+                cards.append(
+                    text_payload(
+                        f"命中告警共 {matched_total} 条，当前表格仅展示前 {len(display_rows)} 条以保证可读性与导出稳定性。",
+                        title="展示说明",
+                    )
+                )
             if evidence_errors:
                 cards.append(
                     text_payload(
@@ -1791,7 +2032,7 @@ class PlaybookService:
             next_actions.append(
                 {
                     "id": "hunting_disposal",
-                    "label": "对高风险节点执行处置审批",
+                    "label": f"执行IP {target_ip}封禁（进入审批）",
                     "template_id": "alert_triage",
                     "params": {
                         "mode": "block_ip",
@@ -1808,7 +2049,7 @@ class PlaybookService:
                 "next_actions": next_actions,
                 "profile": profile,
                 "evidence_sources": [
-                    "POST /api/xdr/v1/incidents/list (分页扫描)",
+                    "POST /api/xdr/v1/incidents/list (源/目的IP双向过滤)",
                     "GET /api/xdr/v1/incidents/{uuid}/proof",
                     "GET /api/xdr/v1/incidents/{uuid}/entities/ip",
                     "POST /api/xdr/v1/analysislog/networksecurity/count",

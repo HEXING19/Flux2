@@ -60,9 +60,9 @@ class PlaybookRegistry:
             "threat_hunting": PlaybookTemplateMeta(
                 id="threat_hunting",
                 name="攻击者活动轨迹",
-                description="围绕目标IP在默认90天窗口内扫描事件并生成时间线故事。",
+                description="围绕目标IP在默认90天窗口内扫描告警并生成时间线故事。",
                 button_label="🕵️ 攻击者活动轨迹生成",
-                default_params={"window_days": 90, "max_scan": 2000, "evidence_limit": 20},
+                default_params={"window_days": 90, "max_scan": 10000, "evidence_limit": 20},
                 params=[
                     PlaybookTemplateParam(
                         key="ip",

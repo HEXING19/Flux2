@@ -484,6 +484,16 @@ body {
   max-width: 100%;
 }
 
+.playbook-task-card {
+  max-width: 100%;
+}
+
+.report-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 8px 0 2px;
+}
+
 .report-section {
   border-top: 1px dashed rgba(255, 255, 255, 0.08);
   padding-top: 12px;
@@ -500,6 +510,90 @@ body {
   margin: 0 0 8px;
   font-size: 13px;
   color: var(--text-main);
+}
+
+.report-chart-summary {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.report-collapsible {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.report-collapsible summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.report-collapsible[open] summary {
+  color: var(--text-main);
+}
+
+.markdown-block {
+  color: #f1f5f9;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.markdown-block h1,
+.markdown-block h2,
+.markdown-block h3,
+.markdown-block h4,
+.markdown-block h5,
+.markdown-block h6 {
+  margin: 10px 0 6px;
+  color: var(--text-main);
+}
+
+.markdown-block p {
+  margin: 8px 0;
+}
+
+.markdown-block strong {
+  color: #ffffff;
+  font-weight: 700;
+  background: rgba(95, 165, 250, 0.14);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.markdown-block ul,
+.markdown-block ol {
+  margin: 8px 0 8px 20px;
+  padding: 0;
+}
+
+.markdown-block li {
+  margin: 4px 0;
+}
+
+.markdown-block code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.markdown-block hr {
+  border: 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+  margin: 10px 0;
+}
+
+.markdown-block blockquote {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-left: 3px solid rgba(95, 165, 250, 0.7);
+  background: rgba(95, 165, 250, 0.08);
+  color: #d7e9ff;
 }
 
 /* Chat Stream */
