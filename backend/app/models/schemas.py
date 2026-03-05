@@ -62,6 +62,7 @@ class CoreAssetIn(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1)
     message: str = Field(min_length=1)
+    active_playbook_run_id: Optional[int] = None
 
 
 class Payload(BaseModel):

@@ -254,6 +254,13 @@ class PlaybookServiceTest(unittest.TestCase):
         normalized = playbook_service._normalize_params("threat_hunting", {"ip": "9.9.9.9", "max_scan": 100000})
         self.assertEqual(normalized.get("max_scan"), 10000)
 
+    def test_alert_triage_block_mode_accepts_batch_ips(self):
+        normalized = playbook_service._normalize_params(
+            "alert_triage",
+            {"mode": "block_ip", "ips": "1.1.1.1, 2.2.2.2,1.1.1.1"},
+        )
+        self.assertEqual(normalized.get("ips"), ["1.1.1.1", "2.2.2.2"])
+
     def test_routine_check_returns_cards_and_next_actions(self):
         fake_requester = PlaybookRequester()
         with (
@@ -305,7 +312,7 @@ class PlaybookServiceTest(unittest.TestCase):
                 next_actions = result.get("next_actions", [])
                 self.assertTrue(next_actions)
                 self.assertTrue(all(action.get("template_id") == "alert_triage" for action in next_actions))
-                self.assertTrue(all("进行封禁" in (action.get("label") or "") for action in next_actions))
+                self.assertTrue(all("封禁" in (action.get("label") or "") for action in next_actions))
 
     def test_action_labels_include_concrete_ip(self):
         fake_requester = PlaybookRequester()

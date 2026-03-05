@@ -3,6 +3,8 @@ const state = {
   isAuthenticated: false,
   playbookTemplates: [],
   coreAssets: [],
+  activePlaybookRunId: null,
+  playbookRunCache: {},
 };
 
 const DEFAULT_PLAYBOOK_SCENES = [
@@ -144,6 +146,9 @@ const el = {
   chatForm: document.getElementById('chatForm'),
   chatMessage: document.getElementById('chatMessage'),
   chatStream: document.getElementById('chatStream'),
+  playbookWorkspacePanel: document.getElementById('playbookWorkspacePanel'),
+  playbookWorkspaceBody: document.getElementById('playbookWorkspaceBody'),
+  closePlaybookWorkspaceBtn: document.getElementById('closePlaybookWorkspace'),
   playbookCards: document.getElementById('playbookCards'),
   playbookHint: document.getElementById('playbookHint'),
   dangerDialog: document.getElementById('dangerDialog'),
@@ -178,6 +183,12 @@ function setAuthState(authenticated, statusText = '', isConnected = true) {
   state.isAuthenticated = authenticated;
   el.landingView.classList.toggle('hidden', authenticated);
   el.workspaceView.classList.toggle('hidden', !authenticated);
+  if (!authenticated) {
+    setPlaybookWorkspaceOpen(false);
+    clearPlaybookWorkspace();
+    state.activePlaybookRunId = null;
+    state.playbookRunCache = {};
+  }
   const mainNav = document.getElementById('mainNav');
   if (mainNav) mainNav.classList.toggle('hidden', !authenticated);
   if (!authenticated) {
@@ -281,6 +292,104 @@ function getProviderPayload() {
 function appendCard(node) {
   el.chatStream.appendChild(node);
   el.chatStream.scrollTop = el.chatStream.scrollHeight;
+}
+
+function setPlaybookWorkspaceOpen(open) {
+  if (!el.playbookWorkspacePanel || !el.workspaceView) return;
+  el.playbookWorkspacePanel.classList.toggle('hidden', !open);
+  el.workspaceView.classList.toggle('panel-open', open);
+}
+
+function clearPlaybookWorkspace() {
+  if (!el.playbookWorkspaceBody) return;
+  el.playbookWorkspaceBody.innerHTML = '';
+  const empty = document.createElement('div');
+  empty.className = 'playbook-workspace-empty';
+  empty.textContent = '触发 Playbook 后将在此展示任务进度与完整报告。';
+  el.playbookWorkspaceBody.appendChild(empty);
+}
+
+function appendPlaybookWorkspaceCard(node) {
+  if (!el.playbookWorkspaceBody) return;
+  const empty = el.playbookWorkspaceBody.querySelector('.playbook-workspace-empty');
+  if (empty) empty.remove();
+  el.playbookWorkspaceBody.appendChild(node);
+  el.playbookWorkspaceBody.scrollTop = el.playbookWorkspaceBody.scrollHeight;
+}
+
+function getPlaybookDisplayName(templateId, fallback = '') {
+  const fallbackName = String(fallback || '').trim();
+  if (fallbackName) return fallbackName;
+  const local = DEFAULT_PLAYBOOK_SCENES.find((scene) => scene.id === templateId)?.name;
+  if (local) return local;
+  const remote = state.playbookTemplates.find((tpl) => tpl.id === templateId)?.name;
+  return remote || templateId || 'Playbook';
+}
+
+function renderPlaybookLaunchFeedback(templateId, triggerLabel = '', runId = null) {
+  const displayName = getPlaybookDisplayName(templateId, triggerLabel);
+  const card = cardTemplate('', 'playbook-launch-card');
+  if (runId != null) {
+    card.dataset.playbookRunId = String(runId);
+  }
+
+  const icon = document.createElement('div');
+  icon.className = 'playbook-launch-icon';
+  icon.textContent = '🖥️';
+  card.appendChild(icon);
+
+  const body = document.createElement('div');
+  body.className = 'playbook-launch-body';
+
+  const title = document.createElement('div');
+  title.className = 'playbook-launch-title';
+  title.textContent = `已为您启动“${displayName}”任务，请在右侧查看进度。`;
+  body.appendChild(title);
+
+  const desc = document.createElement('div');
+  desc.className = 'playbook-launch-desc';
+  desc.textContent = '您可以继续在此向我提问，不会打断任务执行。';
+  body.appendChild(desc);
+  card.appendChild(body);
+
+  if (runId != null) {
+    card.onclick = async () => {
+      try {
+        await openPlaybookRunById(runId, templateId, { resetWorkspace: true });
+      } catch (err) {
+        setHint(el.playbookHint, err.message || '加载 Playbook 运行状态失败', 'error');
+      }
+    };
+  }
+
+  appendCard(card);
+}
+
+async function openPlaybookRunById(runId, templateId = '', opts = {}) {
+  if (!runId) return null;
+  state.activePlaybookRunId = runId;
+  setPlaybookWorkspaceOpen(true);
+  if (opts.resetWorkspace !== false && el.playbookWorkspaceBody) {
+    el.playbookWorkspaceBody.innerHTML = '';
+  }
+
+  const runData = await api(`/api/playbooks/runs/${runId}`);
+  state.playbookRunCache[runId] = runData;
+  const resolvedTemplateId = runData.template_id || templateId || 'unknown';
+  const progressUi = createPlaybookProgressCard(runId, resolvedTemplateId);
+  updatePlaybookProgress(progressUi, runData);
+
+  if (runData.status === 'Finished' || runData.status === 'Failed') {
+    renderPlaybookResult(runData);
+    return runData;
+  }
+
+  const finalRun = await pollPlaybookRun(runId, progressUi, resolvedTemplateId);
+  state.playbookRunCache[runId] = finalRun;
+  if (state.activePlaybookRunId === runId) {
+    renderPlaybookResult(finalRun);
+  }
+  return finalRun;
 }
 
 function cardTemplate(title, className = '') {
@@ -496,9 +605,16 @@ function renderNextActions(actions) {
 }
 
 function createPlaybookProgressCard(runId, templateId) {
+  const displayName = getPlaybookDisplayName(templateId);
   const card = cardTemplate(`Playbook 运行中 · ${templateId}`);
   card.dataset.playbookRunId = String(runId);
-  card.classList.add('playbook-progress-card');
+  card.classList.add('playbook-progress-card', 'workspace-panel-card');
+  card.dataset.playbookTemplate = templateId || '';
+
+  const sub = document.createElement('div');
+  sub.className = 'playbook-progress-template';
+  sub.textContent = displayName;
+  card.appendChild(sub);
 
   const runMeta = document.createElement('div');
   runMeta.className = 'playbook-progress-meta';
@@ -532,7 +648,7 @@ function createPlaybookProgressCard(runId, templateId) {
   details.appendChild(pre);
   card.appendChild(details);
 
-  appendCard(card);
+  appendPlaybookWorkspaceCard(card);
   return { card, pre, stageList, progressText, barFill };
 }
 
@@ -805,7 +921,7 @@ function createPlaybookActionButton(action) {
       const pre = document.createElement('pre');
       pre.textContent = err.message || '未知错误';
       errorCard.appendChild(pre);
-      appendCard(errorCard);
+      appendPlaybookWorkspaceCard(errorCard);
     } finally {
       btn.disabled = false;
     }
@@ -1038,16 +1154,16 @@ function buildPayloadExportHtml(payloads, bundleTitle = '任务报告', metaText
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${escapeHtml(bundleTitle)}</title>
   <style>
-    body{font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;max-width:980px;margin:24px auto;padding:0 12px;line-height:1.65;color:#111}
-    h1{margin:0 0 6px}
-    .meta{color:#666;margin-bottom:18px}
-    section{border:1px solid #ddd;border-radius:10px;padding:14px 16px;margin-bottom:14px}
-    h2{margin:0 0 10px;font-size:18px}
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;max-width:1080px;margin:24px auto;padding:0 14px;line-height:1.72;color:#dbe7ff;background:#081226}
+    h1{margin:0 0 8px;font-size:28px;color:#f3f7ff}
+    .meta{color:#9db2d8;margin-bottom:18px}
+    section{border:1px solid rgba(93,134,212,.55);border-radius:14px;padding:14px 16px;margin-bottom:14px;background:#0c1a3b}
+    h2{margin:0 0 10px;font-size:19px;color:#e7efff}
     table{width:100%;border-collapse:collapse;font-size:13px}
-    th,td{border:1px solid #ddd;padding:8px 10px;text-align:left;vertical-align:top}
-    th{background:#f7f7f7}
-    code{background:#f1f1f1;padding:2px 4px;border-radius:4px}
-    pre{white-space:pre-wrap;word-break:break-word;background:#f7f7f7;padding:10px;border-radius:8px}
+    th,td{border:1px solid rgba(98,137,208,.45);padding:8px 10px;text-align:left;vertical-align:top}
+    th{background:rgba(24,44,87,.9);color:#cfe0ff}
+    code{background:rgba(255,255,255,.08);padding:2px 6px;border-radius:5px}
+    pre{white-space:pre-wrap;word-break:break-word;background:rgba(255,255,255,.05);padding:10px;border-radius:8px}
   </style>
 </head>
 <body>
@@ -1076,20 +1192,37 @@ function downloadPayloadReport(payloads, filenamePrefix = 'task-report', bundleT
   triggerHtmlDownload(html, `${filenamePrefix}-${Date.now()}.html`);
 }
 
-function renderUnifiedPayloadCard(cardTitle, payloads, opts = {}) {
-  const card = cardTemplate(cardTitle || '任务执行结果');
-  card.classList.add('playbook-unified-report', 'playbook-task-card');
+function buildReportHeader(title, buttonText = '', onClick = null) {
+  const header = document.createElement('div');
+  header.className = 'report-header';
 
-  if (opts.downloadable) {
-    const toolRow = document.createElement('div');
-    toolRow.className = 'report-toolbar';
-    const downloadBtn = document.createElement('button');
-    downloadBtn.className = 'secondary-btn';
-    downloadBtn.textContent = opts.downloadLabel || '下载内容（HTML）';
-    downloadBtn.onclick = () => downloadPayloadReport(payloads, opts.filenamePrefix || 'task-report', cardTitle || '任务执行结果');
-    toolRow.appendChild(downloadBtn);
-    card.appendChild(toolRow);
+  const titleNode = document.createElement('h3');
+  titleNode.className = 'report-header-title';
+  titleNode.textContent = title || '任务执行结果';
+  header.appendChild(titleNode);
+
+  if (buttonText && typeof onClick === 'function') {
+    const actionBtn = document.createElement('button');
+    actionBtn.className = 'secondary-btn';
+    actionBtn.textContent = buttonText;
+    actionBtn.onclick = onClick;
+    header.appendChild(actionBtn);
   }
+  return header;
+}
+
+function renderUnifiedPayloadCard(cardTitle, payloads, opts = {}) {
+  const card = cardTemplate('', '');
+  card.classList.add('playbook-unified-report', 'playbook-task-card');
+  card.appendChild(
+    buildReportHeader(
+      cardTitle || '任务执行结果',
+      opts.downloadable ? (opts.downloadLabel || '下载内容（HTML）') : '',
+      opts.downloadable
+        ? () => downloadPayloadReport(payloads, opts.filenamePrefix || 'task-report', cardTitle || '任务执行结果')
+        : null,
+    ),
+  );
 
   (payloads || []).forEach((payload, index) => {
     card.appendChild(createUnifiedPayloadSection(payload, index));
@@ -1133,18 +1266,11 @@ function renderPlaybookUnifiedCard(runData) {
   const summary = String(result.summary || runData?.error || '').trim();
   const cards = Array.isArray(result.cards) ? result.cards : [];
   const nextActions = Array.isArray(result.next_actions) ? result.next_actions : [];
+  const displayName = getPlaybookDisplayName(runData?.template_id || '');
 
-  const card = cardTemplate(`Playbook 报告 · ${runData?.template_id || 'unknown'}`);
-  card.classList.add('playbook-unified-report', 'playbook-task-card');
-
-  const toolRow = document.createElement('div');
-  toolRow.className = 'report-toolbar';
-  const downloadBtn = document.createElement('button');
-  downloadBtn.className = 'secondary-btn';
-  downloadBtn.textContent = '下载报告（HTML）';
-  downloadBtn.onclick = () => downloadPlaybookReport(runData);
-  toolRow.appendChild(downloadBtn);
-  card.appendChild(toolRow);
+  const card = cardTemplate('', '');
+  card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card');
+  card.appendChild(buildReportHeader(`Playbook 报告 · ${displayName}`, '下载报告（HTML）', () => downloadPlaybookReport(runData)));
 
   if (summary) {
     const section = document.createElement('div');
@@ -1176,7 +1302,7 @@ function renderPlaybookUnifiedCard(runData) {
     card.appendChild(section);
   }
 
-  appendCard(card);
+  appendPlaybookWorkspaceCard(card);
   requestAnimationFrame(() => mountDeferredCharts(card));
 }
 
@@ -1265,25 +1391,13 @@ function renderPlaybookCards(templates) {
   scenes.forEach((scene) => {
     const card = document.createElement('article');
     card.className = 'playbook-card-item';
-
-    const title = document.createElement('h4');
-    title.textContent = scene.name || scene.id;
-    card.appendChild(title);
-
-    const desc = document.createElement('p');
-    desc.className = 'scene-desc';
-    desc.textContent = scene.description || '';
-    card.appendChild(desc);
-
-    const hint = document.createElement('p');
-    hint.className = 'scene-hint';
-    hint.textContent = scene.hint || '';
-    card.appendChild(hint);
-
-    const action = document.createElement('div');
-    action.className = 'scene-action';
+    const tooltipText = [scene.description || '', scene.hint || ''].filter(Boolean).join(' ');
+    card.dataset.sceneDesc = tooltipText;
+    if (tooltipText) {
+      card.title = tooltipText;
+    }
     const btn = document.createElement('button');
-    btn.className = 'primary-btn playbook-btn';
+    btn.className = 'playbook-btn';
     btn.textContent = scene.button_label || scene.name || scene.id;
     btn.onclick = async () => {
       try {
@@ -1297,8 +1411,13 @@ function renderPlaybookCards(templates) {
         btn.disabled = false;
       }
     };
-    action.appendChild(btn);
-    card.appendChild(action);
+    card.appendChild(btn);
+    if (tooltipText) {
+      const tooltip = document.createElement('div');
+      tooltip.className = 'scene-tooltip';
+      tooltip.textContent = tooltipText;
+      card.appendChild(tooltip);
+    }
     el.playbookCards.appendChild(card);
   });
 }
@@ -1328,6 +1447,7 @@ async function pollPlaybookRun(runId, progressUi, templateId) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const runData = await api(`/api/playbooks/runs/${runId}`);
+    state.playbookRunCache[runId] = runData;
     updatePlaybookProgress(progressUi, runData);
     if (runData.status === 'Finished' || runData.status === 'Failed') {
       return runData;
@@ -1353,28 +1473,32 @@ async function runPlaybook(templateId, params = {}, triggerLabel = '') {
     session_id: state.sessionId,
   };
 
-  const introCard = cardTemplate('你', 'user');
-  const introPre = document.createElement('pre');
-  introPre.textContent = formatTriggerLabel(templateId, triggerLabel, params);
-  introCard.appendChild(introPre);
+  const introCard = cardTemplate('', 'user playbook-trigger-card');
+  const introBubble = document.createElement('div');
+  introBubble.className = 'playbook-trigger-pill';
+  introBubble.textContent = formatTriggerLabel(templateId, triggerLabel, params);
+  const introAvatar = document.createElement('div');
+  introAvatar.className = 'playbook-trigger-avatar';
+  introAvatar.textContent = '👤';
+  introCard.appendChild(introBubble);
+  introCard.appendChild(introAvatar);
   appendCard(introCard);
 
   const runInfo = await api('/api/playbooks/run', {
     method: 'POST',
     body: JSON.stringify(requestPayload),
   });
-  const progressUi = createPlaybookProgressCard(runInfo.run_id, templateId);
-  if (runInfo.partial_context) {
-    updatePlaybookProgress(progressUi, {
-      run_id: runInfo.run_id,
-      template_id: templateId,
-      status: runInfo.status,
-      context: runInfo.partial_context,
-    });
-  }
-
-  const runData = await pollPlaybookRun(runInfo.run_id, progressUi, templateId);
-  renderPlaybookResult(runData);
+  introCard.dataset.playbookRunId = String(runInfo.run_id);
+  introCard.onclick = async () => {
+    try {
+      await openPlaybookRunById(runInfo.run_id, templateId, { resetWorkspace: true });
+    } catch (err) {
+      setHint(el.playbookHint, err.message || '加载 Playbook 运行状态失败', 'error');
+    }
+  };
+  renderPlaybookLaunchFeedback(templateId, triggerLabel, runInfo.run_id);
+  state.activePlaybookRunId = runInfo.run_id;
+  await openPlaybookRunById(runInfo.run_id, templateId, { resetWorkspace: true });
 }
 
 async function readSSEStream(response) {
@@ -1568,7 +1692,11 @@ async function sendChat(message) {
     return;
   }
 
-  const req = { session_id: state.sessionId, message };
+  const req = {
+    session_id: state.sessionId,
+    message,
+    active_playbook_run_id: state.activePlaybookRunId || null,
+  };
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1640,9 +1768,12 @@ el.loginForm.addEventListener('submit', async (e) => {
 el.logoutBtn.onclick = () => {
   state.sessionId = `session-${Date.now()}`;
   state.playbookTemplates = [];
+  state.activePlaybookRunId = null;
+  state.playbookRunCache = {};
   el.chatStream.innerHTML = '';
   if (el.playbookCards) el.playbookCards.innerHTML = '';
   if (el.playbookHint) setHint(el.playbookHint, '');
+  clearPlaybookWorkspace();
   setHint(el.loginResult, '已退出到登录页（本地会话已重置）。', 'success');
   setAuthState(false);
 };
@@ -1666,6 +1797,12 @@ el.openSettingsBtn.onclick = async () => {
 el.closeSettingsBtn.onclick = () => {
   closeDialog(el.settingsDialog);
 };
+
+if (el.closePlaybookWorkspaceBtn) {
+  el.closePlaybookWorkspaceBtn.onclick = () => {
+    setPlaybookWorkspaceOpen(false);
+  };
+}
 
 el.settingsDialog.addEventListener('click', (event) => {
   const rect = el.settingsDialog.getBoundingClientRect();

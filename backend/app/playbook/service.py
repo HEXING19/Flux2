@@ -197,6 +197,16 @@ class PlaybookService:
                     for token in normalized["incident_uuids"].split(",")
                     if token and token.strip()
                 ]
+            if isinstance(normalized.get("ips"), str):
+                normalized["ips"] = [
+                    token.strip()
+                    for token in re.split(r"[,\s，]+", normalized["ips"])
+                    if token and token.strip()
+                ]
+            if isinstance(normalized.get("ips"), list):
+                normalized["ips"] = _dedup_keep_order(
+                    [str(token).strip() for token in normalized["ips"] if str(token).strip()]
+                )
 
         if template_id == "threat_hunting":
             normalized["window_days"] = max(1, min(180, _to_int(normalized.get("window_days"), 90)))
@@ -223,11 +233,12 @@ class PlaybookService:
             has_uuid_list = bool(params.get("incident_uuids"))
             has_index = bool(params.get("event_index")) or bool(params.get("event_indexes"))
             has_ip = bool(params.get("ip"))
+            has_ips = bool(params.get("ips"))
             mode = params.get("mode", "analyze")
             if mode == "analyze" and not (has_uuid or has_uuid_list or has_index):
                 raise ValueError("alert_triage 缺少 incident_uuid 或 event_index 参数。")
-            if mode == "block_ip" and not (has_ip or has_uuid or has_uuid_list or has_index):
-                raise ValueError("alert_triage(block_ip) 缺少 ip 或事件定位参数。")
+            if mode == "block_ip" and not (has_ip or has_ips or has_uuid or has_uuid_list or has_index):
+                raise ValueError("alert_triage(block_ip) 缺少 ip/ips 或事件定位参数。")
             return
 
         if template_id == "threat_hunting" and not params.get("ip"):
@@ -469,6 +480,20 @@ class PlaybookService:
                 run.error = None
                 session.add(run)
 
+        session_id = str(runtime_context.get("session_id") or "").strip()
+        if not session_id:
+            return
+        summary = str(result_payload.get("summary") or "").strip()
+        context_manager.update_params(
+            session_id,
+            {
+                "last_playbook_run_id": run_id,
+                "last_playbook_template": runtime_context.get("template_id"),
+                "last_playbook_summary": summary,
+                "last_playbook_target_ips": self._extract_next_action_ips(result_payload),
+            },
+        )
+
     def _mark_run_failed(self, run_id: int, error: str) -> None:
         with self._persist_lock:
             with session_scope() as session:
@@ -690,6 +715,22 @@ class PlaybookService:
                 rewritten = rewritten.replace("建议立即封禁", "**建议立即封禁**")
             lines.append(f"{indent}{rewritten}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _extract_next_action_ips(result_payload: dict[str, Any]) -> list[str]:
+        ips: list[str] = []
+        for action in result_payload.get("next_actions", []) if isinstance(result_payload, dict) else []:
+            if not isinstance(action, dict):
+                continue
+            params = action.get("params") if isinstance(action.get("params"), dict) else {}
+            single = params.get("ip")
+            if isinstance(single, str) and single.strip():
+                ips.append(single.strip())
+            for item in params.get("ips") or []:
+                text = str(item).strip()
+                if text:
+                    ips.append(text)
+        return _dedup_keep_order(ips)
 
     def _resolve_incident_uuids(self, params: dict[str, Any], runtime_session_id: str) -> list[str]:
         uuids: list[str] = []
@@ -1303,44 +1344,74 @@ class PlaybookService:
 
         def node_1_resolve_target_ip(ctx: dict[str, Any]) -> dict[str, Any]:
             _ = ctx
+            candidate_ips = params.get("ips")
+            if isinstance(candidate_ips, list):
+                resolved = _dedup_keep_order(
+                    [
+                        str(item).strip()
+                        for item in candidate_ips
+                        if isinstance(item, str) and IPV4_PATTERN.match(str(item).strip())
+                    ]
+                )
+                if resolved:
+                    return {"target_ips": resolved}
             candidate_ip = params.get("ip")
             if isinstance(candidate_ip, str) and IPV4_PATTERN.match(candidate_ip):
-                return {"target_ip": candidate_ip}
+                return {"target_ips": [candidate_ip]}
 
             uuids = self._resolve_incident_uuids(params, runtime_context["session_id"])
+            resolved_from_events: list[str] = []
             for uid in uuids:
                 resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
                 entities, _ = extract_entity_items_from_response(resp)
                 for entity in entities:
                     ip = entity.get("ip")
                     if isinstance(ip, str) and IPV4_PATTERN.match(ip):
-                        return {"target_ip": ip, "incident_uuid": uid}
-            raise ValueError("未能解析待封禁IP，请补充 ip 参数。")
+                        resolved_from_events.append(ip)
+            resolved_from_events = _dedup_keep_order(resolved_from_events)
+            if resolved_from_events:
+                return {"target_ips": resolved_from_events[:10], "incident_uuids": uuids}
+            raise ValueError("未能解析待封禁IP，请补充 ip/ips 参数。")
 
         def node_2_build_block_approval(ctx: dict[str, Any]) -> dict[str, Any]:
-            ip = ctx["nodes"]["node_1_resolve_target_ip"]["target_ip"]
+            target_ips = ctx["nodes"]["node_1_resolve_target_ip"].get("target_ips", [])
+            if not target_ips:
+                raise ValueError("待封禁IP列表为空。")
             block_skill = skills.get("block_action")
             if not block_skill:
                 raise ValueError("系统未加载 block_action 技能。")
 
             payloads: list[dict[str, Any]] = []
+            if len(target_ips) > 1:
+                # 批量封禁先进入可编辑参数表单，便于用户按需删减 IP。
+                payloads = block_skill.execute(
+                    runtime_context["session_id"],
+                    {
+                        "views": target_ips,
+                        "reason": "Playbook深挖建议批量封禁",
+                    },
+                    f"批量封禁 {','.join(target_ips)}",
+                )
+                context_manager.update_params(runtime_context["session_id"], {"last_playbook_target_ips": target_ips})
+                return {"cards": payloads, "target_ips": target_ips}
+
             try:
                 payloads = block_skill.execute(
                     runtime_context["session_id"],
                     {
                         "block_type": "SRC_IP",
-                        "views": [ip],
+                        "views": target_ips,
                         "time_type": "temporary",
                         "time_value": 24,
                         "time_unit": "h",
                         "reason": "Playbook深度研判建议封禁",
                         "confirm": False,
                     },
-                    f"封禁 {ip}",
+                    f"封禁 {','.join(target_ips)}",
                 )
             except ConfirmationRequiredException as exc:
                 token = f"pending-{runtime_context['session_id']}-block_action"
-                pending_params = exc.action_payload.get("params", {"views": [ip], "confirm": True})
+                pending_params = exc.action_payload.get("params", {"views": target_ips, "confirm": True})
                 context_manager.save_pending_action(
                     runtime_context["session_id"],
                     {"intent": "block_action", "params": pending_params, "skill": "BlockActionSkill"},
@@ -1353,7 +1424,8 @@ class PlaybookService:
                         details=exc.action_payload,
                     )
                 ]
-            return {"cards": payloads, "target_ip": ip}
+            context_manager.update_params(runtime_context["session_id"], {"last_playbook_target_ips": target_ips})
+            return {"cards": payloads, "target_ips": target_ips}
 
         nodes = [
             PipelineNode("node_1_resolve_target_ip", node_1_resolve_target_ip),
@@ -1367,9 +1439,15 @@ class PlaybookService:
         def finalizer(results: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             _ = ctx
             node2 = results.get("node_2_build_block_approval", {})
-            ip = node2.get("target_ip")
+            ips = node2.get("target_ips") or []
             cards = node2.get("cards", [])
-            summary = f"已为 {ip} 生成封禁审批卡，请确认后执行。" if ip else "已生成封禁审批卡。"
+            if ips:
+                if len(ips) == 1:
+                    summary = f"已为 {ips[0]} 生成封禁审批卡，请确认后执行。"
+                else:
+                    summary = f"已为 {len(ips)} 个IP生成批量封禁审批卡，请确认后执行。"
+            else:
+                summary = "已生成封禁审批卡。"
             if not cards:
                 cards = [text_payload(summary, title="封禁审批")]
             return {
@@ -1695,8 +1773,64 @@ class PlaybookService:
                 {"direction": "出向（源为资产）", "event_count": node2.get("count", 0), "log_count": node4.get("log_total", 0)},
             ]
             intel_rows = [self._localize_intel_row(row) for row in node6.get("intel_rows", [])]
+            weekday_labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            weekly_labels: list[str] = []
+            weekly_values: list[int] = []
+            now_dt = utc_now()
+            for offset in range(6, -1, -1):
+                day_start = (now_dt - timedelta(days=offset)).replace(hour=0, minute=0, second=0, microsecond=0)
+                day_end = day_start + timedelta(days=1)
+                src_high = self._count_logs(
+                    requester,
+                    start_ts=to_ts(day_start),
+                    end_ts=to_ts(day_end),
+                    extra_filters={"srcIps": [asset_ip], "severities": [3, 4]},
+                )["total"]
+                dst_high = self._count_logs(
+                    requester,
+                    start_ts=to_ts(day_start),
+                    end_ts=to_ts(day_end),
+                    extra_filters={"dstIps": [asset_ip], "severities": [3, 4]},
+                )["total"]
+                weekly_labels.append(weekday_labels[day_start.weekday()])
+                weekly_values.append(src_high + dst_high)
+
+            baseline = max(5, int(sum(weekly_values) / max(1, len(weekly_values)) * 1.35))
+            peak_days = [
+                weekly_labels[idx]
+                for idx, value in enumerate(weekly_values)
+                if value >= baseline
+            ]
+            chart_insight = (
+                f"AI 透视结论：{'、'.join(peak_days) if peak_days else '近7天'}出现异常流量峰值，"
+                f"建议优先审查核心资产 {asset_ip} 的横向扫描与暴露面策略。"
+            )
+            chart_option = {
+                "tooltip": {"trigger": "axis"},
+                "xAxis": {"type": "category", "data": weekly_labels},
+                "yAxis": {"type": "value"},
+                "series": [
+                    {
+                        "name": "双向高危流量",
+                        "type": "bar",
+                        "data": weekly_values,
+                        "itemStyle": {"color": "#3f7df5"},
+                        "markLine": {
+                            "symbol": "none",
+                            "lineStyle": {"type": "dashed", "color": "#ef4444"},
+                            "label": {"formatter": "阈值告警基线"},
+                            "data": [{"yAxis": baseline}],
+                        },
+                    }
+                ],
+            }
             cards = [
                 text_payload(summary, title="核心资产态势结论"),
+                echarts_payload(
+                    title="流量威胁双向评估（近7天）",
+                    option=chart_option,
+                    summary=chart_insight,
+                ),
                 table_payload(
                     title="资产双向告警统计",
                     columns=[
@@ -1727,24 +1861,34 @@ class PlaybookService:
             ]
 
             next_actions: list[dict[str, Any]] = []
-            if intel_rows:
-                for row in intel_rows[:5]:
-                    ip = row.get("ip")
-                    if not isinstance(ip, str) or not IPV4_PATTERN.match(ip):
-                        continue
-                    next_actions.append(
-                        {
-                            "id": f"asset_guard_block_{ip.replace('.', '_')}",
-                            "label": f"是否进行IP {ip}进行封禁（Top外部访问实体，进入审批）",
-                            "template_id": "alert_triage",
-                            "params": {
-                                "mode": "block_ip",
-                                "ip": ip,
-                                "session_id": runtime_context["session_id"],
-                            },
-                            "style": "danger",
-                        }
+            batch_ips = [
+                row.get("ip")
+                for row in intel_rows[:5]
+                if isinstance(row.get("ip"), str) and IPV4_PATTERN.match(str(row.get("ip")))
+            ]
+            batch_ips = _dedup_keep_order([str(ip) for ip in batch_ips if ip])
+            if batch_ips:
+                cards.append(
+                    text_payload(
+                        "下一步封禁建议涉及以下IP："
+                        + "、".join(f"`{ip}`" for ip in batch_ips)
+                        + "。点击下方动作后可在审批表单中按需删除不希望封禁的IP。",
+                        title="批量封禁目标",
                     )
+                )
+                next_actions.append(
+                    {
+                        "id": "asset_guard_block_batch",
+                        "label": f"是否批量封禁 Top 外部访问实体（{len(batch_ips)}个IP，进入审批）",
+                        "template_id": "alert_triage",
+                        "params": {
+                            "mode": "block_ip",
+                            "ips": batch_ips,
+                            "session_id": runtime_context["session_id"],
+                        },
+                        "style": "danger",
+                    }
+                )
 
             return {
                 "summary": summary,

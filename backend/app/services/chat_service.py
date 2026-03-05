@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Optional
 
 from sqlmodel import Session, select
 
@@ -11,7 +11,7 @@ from app.core.exceptions import ConfirmationRequiredException, MissingParameterE
 from app.core.payload import approval_payload, text_payload
 from app.core.requester import get_requester_from_credential
 from app.llm.router import LLMRouter
-from app.models.db_models import AuditAction, XDRCredential
+from app.models.db_models import AuditAction, PlaybookRun, XDRCredential
 from app.pipeline.service import IntentPipeline
 from app.skills.registry import SkillRegistry
 
@@ -27,6 +27,109 @@ class ChatService:
         self.pipeline = IntentPipeline(self.registry)
         self.intent_parser = IntentParser()
         self.llm = LLMRouter(session)
+
+    @staticmethod
+    def _safe_json_load(raw: str | None, fallback: Any) -> Any:
+        if not raw:
+            return fallback
+        try:
+            return json.loads(raw)
+        except Exception:
+            return fallback
+
+    @staticmethod
+    def _extract_run_ips(run: PlaybookRun) -> list[str]:
+        result = ChatService._safe_json_load(run.result_json, {})
+        next_actions = result.get("next_actions") if isinstance(result, dict) else []
+        ips: list[str] = []
+        for action in next_actions or []:
+            params = action.get("params") if isinstance(action, dict) else {}
+            if not isinstance(params, dict):
+                continue
+            single = params.get("ip")
+            if isinstance(single, str) and single.strip():
+                ips.append(single.strip())
+            for item in params.get("ips") or []:
+                text = str(item).strip()
+                if text:
+                    ips.append(text)
+        dedup: list[str] = []
+        seen: set[str] = set()
+        for ip in ips:
+            if ip in seen:
+                continue
+            seen.add(ip)
+            dedup.append(ip)
+        return dedup
+
+    def _bind_active_playbook_context(self, session_id: str, active_playbook_run_id: Optional[int]) -> None:
+        if not active_playbook_run_id:
+            return
+        run = self.session.get(PlaybookRun, active_playbook_run_id)
+        if not run:
+            return
+        input_data = self._safe_json_load(run.input_json, {})
+        run_session = str(input_data.get("session_id") or "").strip()
+        if run_session and run_session != session_id:
+            return
+        result = self._safe_json_load(run.result_json, {})
+        summary = ""
+        if isinstance(result, dict):
+            summary = str(result.get("summary") or "").strip()
+        context_manager.update_params(
+            session_id,
+            {
+                "active_playbook_run_id": run.id,
+                "active_playbook_template": run.template,
+                "active_playbook_status": run.status,
+                "last_playbook_run_id": run.id,
+                "last_playbook_template": run.template,
+                "last_playbook_summary": summary or context_manager.get_param(session_id, "last_playbook_summary"),
+                "last_playbook_target_ips": self._extract_run_ips(run),
+            },
+        )
+
+    @staticmethod
+    def _looks_like_playbook_followup(message: str) -> bool:
+        text = message.strip()
+        keywords = (
+            "深挖",
+            "继续分析",
+            "继续研判",
+            "这个任务",
+            "这个报告",
+            "上述",
+            "这个结果",
+            "这些ip",
+            "这些IP",
+            "这些",
+            "它们",
+            "批量",
+            "全部封禁",
+            "上面的",
+            "继续问",
+            "进一步",
+        )
+        return any(token in text for token in keywords)
+
+    def _inject_playbook_params_if_needed(self, session_id: str, intent: str, params: dict[str, Any], message: str) -> dict[str, Any]:
+        merged = dict(params or {})
+        if intent != "block_action":
+            return merged
+        if merged.get("views"):
+            return merged
+        if not self._looks_like_playbook_followup(message):
+            return merged
+        candidate_ips = context_manager.get_param(session_id, "last_playbook_target_ips")
+        if not isinstance(candidate_ips, list) or not candidate_ips:
+            return merged
+        views = [str(ip).strip() for ip in candidate_ips if str(ip).strip()]
+        if not views:
+            return merged
+        merged["views"] = views
+        merged.setdefault("block_type", "SRC_IP")
+        merged.setdefault("reason", "基于Playbook深挖建议执行批量封禁")
+        return merged
 
     def _audit(self, session_id: str, action_name: str, dangerous: bool, status: str, detail: dict[str, Any]) -> None:
         try:
@@ -109,8 +212,10 @@ class ChatService:
         merged = {**(pending.get("params") or {}), **params}
         return self._execute_intent(session_id, intent, merged, message)
 
-    def _handle_single(self, session_id: str, message: str) -> list[dict[str, Any]]:
+    def _handle_single(self, session_id: str, message: str, active_playbook_run_id: Optional[int] = None) -> list[dict[str, Any]]:
+        self._bind_active_playbook_context(session_id, active_playbook_run_id)
         parsed = self.intent_parser.parse(message)
+        parsed.params = self._inject_playbook_params_if_needed(session_id, parsed.intent, parsed.params, message)
 
         if parsed.intent == "confirm_pending":
             pending = context_manager.pop_pending_action(session_id)
@@ -137,15 +242,25 @@ class ChatService:
             return [text_payload("已取消待执行的危险操作。")]
 
         if parsed.intent == "chat_fallback":
-            answer = self.llm.complete(
-                parsed.params.get("query", message),
-                system="你是企业安全运营助手，回答必须简洁并给出可执行步骤。",
-            )
+            base_query = parsed.params.get("query", message)
+            if self._looks_like_playbook_followup(message):
+                summary = str(context_manager.get_param(session_id, "last_playbook_summary") or "").strip()
+                playbook_template = str(context_manager.get_param(session_id, "last_playbook_template") or "").strip()
+                target_ips = context_manager.get_param(session_id, "last_playbook_target_ips")
+                ip_hint = ""
+                if isinstance(target_ips, list) and target_ips:
+                    ip_hint = "，关联IP：" + "、".join(str(ip) for ip in target_ips[:8])
+                if summary:
+                    base_query = (
+                        f"基于当前会话最近一次Playbook（{playbook_template or 'unknown'}）继续深挖。"
+                        f"摘要：{summary}{ip_hint}\n用户问题：{message}"
+                    )
+            answer = self.llm.complete(base_query, system="你是企业安全运营助手，回答必须简洁并给出可执行步骤。")
             return [text_payload(answer)]
 
         return self._execute_intent(session_id, parsed.intent, parsed.params, message)
 
-    def handle(self, session_id: str, message: str) -> list[dict[str, Any]]:
+    def handle(self, session_id: str, message: str, active_playbook_run_id: Optional[int] = None) -> list[dict[str, Any]]:
         normalized = message.strip()
         if not normalized:
             return [text_payload("请输入要执行的安全指令。")]
@@ -155,9 +270,9 @@ class ChatService:
 
         segments = [part.strip() for part in re.split(r"[；;\n]+", normalized) if part.strip()]
         if len(segments) <= 1:
-            return self._handle_single(session_id, normalized)
+            return self._handle_single(session_id, normalized, active_playbook_run_id=active_playbook_run_id)
 
         payloads: list[dict[str, Any]] = []
         for segment in segments:
-            payloads.extend(self._handle_single(session_id, segment))
+            payloads.extend(self._handle_single(session_id, segment, active_playbook_run_id=active_playbook_run_id))
         return payloads

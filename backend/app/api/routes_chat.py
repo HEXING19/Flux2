@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterator
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -19,12 +20,12 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 @router.post("")
 def chat(payload: ChatRequest, session: Session = Depends(get_session)):
     service = ChatService(session)
-    data = service.handle(payload.session_id, payload.message)
+    data = service.handle(payload.session_id, payload.message, active_playbook_run_id=payload.active_playbook_run_id)
     return JSONResponse({"session_id": payload.session_id, "payloads": data})
 
 
-def _event_stream(service: ChatService, session_id: str, message: str) -> Iterator[str]:
-    payloads = service.handle(session_id, message)
+def _event_stream(service: ChatService, session_id: str, message: str, active_playbook_run_id: Optional[int] = None) -> Iterator[str]:
+    payloads = service.handle(session_id, message, active_playbook_run_id=active_playbook_run_id)
     for payload in payloads:
         if payload.get("type") == "text":
             text = payload.get("data", {}).get("text", "")
@@ -43,4 +44,7 @@ def _event_stream(service: ChatService, session_id: str, message: str) -> Iterat
 @router.post("/stream")
 def chat_stream(payload: ChatRequest, session: Session = Depends(get_session)):
     service = ChatService(session)
-    return StreamingResponse(_event_stream(service, payload.session_id, payload.message), media_type="text/event-stream")
+    return StreamingResponse(
+        _event_stream(service, payload.session_id, payload.message, active_playbook_run_id=payload.active_playbook_run_id),
+        media_type="text/event-stream",
+    )
