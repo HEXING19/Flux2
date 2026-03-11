@@ -18,7 +18,7 @@ from app.core.payload import approval_payload, echarts_payload, table_payload, t
 from app.core.requester import APIRequester, get_requester_from_credential
 from app.core.threatbook import resolve_threatbook_api_key
 from app.llm.router import LLMRouter
-from app.models.db_models import CoreAsset, PlaybookRun, XDRCredential
+from app.models.db_models import CoreAsset, PlaybookRun, SafetyGateRule, XDRCredential
 from app.skills.event_skills import extract_entity_items_from_response
 from app.skills.registry import SkillRegistry
 from app.workflow.engine import PipelineNode, WorkflowEngine
@@ -45,6 +45,24 @@ INTEL_TAG_CN = {
     "scanner": "扫描器",
     "suspicious": "可疑",
     "unknown": "未知",
+}
+BUILTIN_PROTECTED_IPS = {
+    "8.8.8.8",
+    "8.8.4.4",
+    "1.1.1.1",
+    "1.0.0.1",
+    "114.114.114.114",
+    "223.5.5.5",
+    "223.6.6.6",
+    "119.29.29.29",
+    "127.0.0.1",
+    "0.0.0.0",
+}
+BUILTIN_PROTECTED_CIDRS = {
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
 }
 
 
@@ -99,6 +117,31 @@ def _pick_first_dict(data: Any) -> dict[str, Any]:
             if isinstance(item, dict):
                 return item
     return {}
+
+
+def _parse_ipv4(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not IPV4_PATTERN.match(text):
+        return None
+    try:
+        parsed = ipaddress.ip_address(text)
+    except ValueError:
+        return None
+    if not isinstance(parsed, ipaddress.IPv4Address):
+        return None
+    return str(parsed)
+
+
+def _is_private_ipv4(ip: str) -> bool:
+    try:
+        parsed = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if not isinstance(parsed, ipaddress.IPv4Address):
+        return False
+    return parsed.is_private or parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_reserved
 
 
 class PlaybookService:
@@ -173,6 +216,385 @@ class PlaybookService:
             "error": run.error,
             "started_at": run.started_at,
             "finished_at": run.finished_at,
+        }
+
+    @staticmethod
+    def _is_protected_ip(ip: str, protected_ips: set[str], protected_cidrs: list[ipaddress.IPv4Network]) -> bool:
+        if ip in protected_ips:
+            return True
+        try:
+            parsed = ipaddress.ip_address(ip)
+        except ValueError:
+            return True
+        if not isinstance(parsed, ipaddress.IPv4Address):
+            return True
+        return any(parsed in net for net in protected_cidrs)
+
+    def _load_protected_ip_filters(
+        self,
+        session: Session | None = None,
+    ) -> tuple[set[str], list[ipaddress.IPv4Network]]:
+        protected_ips = set(BUILTIN_PROTECTED_IPS)
+        protected_cidrs: list[ipaddress.IPv4Network] = []
+        for cidr in BUILTIN_PROTECTED_CIDRS:
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+                if isinstance(net, ipaddress.IPv4Network):
+                    protected_cidrs.append(net)
+            except ValueError:
+                continue
+
+        def _merge_rules(rows: list[SafetyGateRule]) -> None:
+            for row in rows:
+                rule_type = str(row.rule_type or "").strip().lower()
+                target = str(row.target or "").strip()
+                if not target:
+                    continue
+                if rule_type == "ip":
+                    ip = _parse_ipv4(target)
+                    if ip:
+                        protected_ips.add(ip)
+                    continue
+                if rule_type == "cidr":
+                    try:
+                        net = ipaddress.ip_network(target, strict=False)
+                    except ValueError:
+                        continue
+                    if isinstance(net, ipaddress.IPv4Network):
+                        protected_cidrs.append(net)
+
+        if session is not None:
+            rows = session.exec(select(SafetyGateRule)).all()
+            _merge_rules(list(rows))
+        else:
+            with session_scope() as inner_session:
+                rows = inner_session.exec(select(SafetyGateRule)).all()
+                _merge_rules(list(rows))
+        return protected_ips, protected_cidrs
+
+    def _normalize_candidate_ips(
+        self,
+        candidates: list[str],
+        *,
+        host_ips: set[str],
+        protected_ips: set[str],
+        protected_cidrs: list[ipaddress.IPv4Network],
+    ) -> list[str]:
+        strict: list[str] = []
+        relaxed: list[str] = []
+        seen: set[str] = set()
+        for raw in candidates:
+            ip = _parse_ipv4(raw)
+            if not ip or ip in seen:
+                continue
+            seen.add(ip)
+            if ip in host_ips:
+                continue
+            if self._is_protected_ip(ip, protected_ips, protected_cidrs):
+                continue
+            if _is_private_ipv4(ip):
+                relaxed.append(ip)
+                continue
+            strict.append(ip)
+        return strict or relaxed
+
+    @staticmethod
+    def _classify_entity_ip_direction(entity: dict[str, Any]) -> str:
+        if not isinstance(entity, dict):
+            return "unknown"
+        if entity.get("isSrc") is True or str(entity.get("isSrc") or "") == "1":
+            return "source"
+        if entity.get("isDst") is True or str(entity.get("isDst") or "") == "1":
+            return "outbound"
+        sample = " ".join(
+            str(entity.get(key) or "").lower()
+            for key in (
+                "ipType",
+                "direction",
+                "flowDirection",
+                "relation",
+                "role",
+                "type",
+                "label",
+                "name",
+                "desc",
+                "description",
+            )
+        )
+        if any(token in sample for token in ("src", "source", "攻击源", "源ip", "源地址", "attacker")):
+            return "source"
+        if any(token in sample for token in ("dst", "dest", "destination", "外联", "目标", "目的", "victim")):
+            return "outbound"
+        return "unknown"
+
+    @staticmethod
+    def _recommend_disposition(severity_cn: str, confidence: int, tags: list[str]) -> str:
+        sev = str(severity_cn or "").strip()
+        risk_tags = {str(tag or "").strip() for tag in tags if str(tag or "").strip()}
+        if sev in {"高", "严重"}:
+            return "建议封禁"
+        if confidence >= 80:
+            return "建议封禁"
+        if {"C2控制", "扫描器"} & risk_tags and confidence >= 60:
+            return "建议封禁"
+        if sev == "中" and confidence >= 60:
+            return "建议封禁"
+        return "建议观察"
+
+    def _build_routine_block_targets(
+        self,
+        requester: APIRequester,
+        rows: list[dict[str, Any]],
+        *,
+        protected_ips: set[str],
+        protected_cidrs: list[ipaddress.IPv4Network],
+    ) -> dict[str, Any]:
+        host_ips = {_parse_ipv4(row.get("hostIp")) for row in rows}
+        host_ips = {ip for ip in host_ips if ip}
+
+        source_candidates: list[str] = []
+        outbound_candidates: list[str] = []
+        unknown_entity_candidates: list[str] = []
+        for row in rows:
+            src_ip = _parse_ipv4(row.get("srcIp"))
+            dst_ip = _parse_ipv4(row.get("dstIp"))
+            if src_ip:
+                source_candidates.append(src_ip)
+            if dst_ip:
+                outbound_candidates.append(dst_ip)
+
+        source_ips = self._normalize_candidate_ips(
+            source_candidates,
+            host_ips=host_ips,
+            protected_ips=protected_ips,
+            protected_cidrs=protected_cidrs,
+        )
+        outbound_ips = self._normalize_candidate_ips(
+            outbound_candidates,
+            host_ips=host_ips,
+            protected_ips=protected_ips,
+            protected_cidrs=protected_cidrs,
+        )
+
+        looked_up = False
+        if not source_ips:
+            looked_up = True
+            for row in rows:
+                uid = str(row.get("uuId") or "").strip()
+                if not uid:
+                    continue
+                resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
+                entities, _ = extract_entity_items_from_response(resp)
+                for entity in entities:
+                    ip = _parse_ipv4(entity.get("ip"))
+                    if not ip:
+                        continue
+                    direction = self._classify_entity_ip_direction(entity)
+                    if direction == "source":
+                        source_candidates.append(ip)
+                    elif direction == "outbound":
+                        outbound_candidates.append(ip)
+                    else:
+                        unknown_entity_candidates.append(ip)
+            if not source_candidates:
+                source_candidates.extend(unknown_entity_candidates)
+            if not outbound_candidates:
+                outbound_candidates.extend(unknown_entity_candidates)
+            source_ips = self._normalize_candidate_ips(
+                source_candidates,
+                host_ips=host_ips,
+                protected_ips=protected_ips,
+                protected_cidrs=protected_cidrs,
+            )
+            outbound_ips = self._normalize_candidate_ips(
+                outbound_candidates,
+                host_ips=host_ips,
+                protected_ips=protected_ips,
+                protected_cidrs=protected_cidrs,
+            )
+
+        return {
+            "source_ips": source_ips[:3],
+            "outbound_ips": outbound_ips[:3],
+            "host_ips": sorted(host_ips),
+            "full_entity_lookup": looked_up,
+        }
+
+    def block_malicious_sources(
+        self,
+        session: Session,
+        *,
+        session_id: str,
+        ips: list[str],
+        block_type: str = "SRC_IP",
+        reason: str | None = None,
+        duration_hours: int = 24,
+        device_id: str | None = None,
+        rule_name: str | None = None,
+    ) -> dict[str, Any]:
+        if not session_id or not str(session_id).strip():
+            raise ValueError("缺少 session_id。")
+
+        cleaned_ips: list[str] = []
+        for raw in ips or []:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            ip = _parse_ipv4(text)
+            if not ip:
+                continue
+            if ip not in cleaned_ips:
+                cleaned_ips.append(ip)
+        if not cleaned_ips:
+            raise ValueError("未提供合法的 IPv4 封禁目标。")
+
+        protected_ips, protected_cidrs = self._load_protected_ip_filters(session)
+        filtered_ips = [ip for ip in cleaned_ips if not self._is_protected_ip(ip, protected_ips, protected_cidrs)]
+        if not filtered_ips:
+            raise ValueError("目标 IP 均命中“默认受保护基础组件/安全防线”规则，已自动拦截本次封禁。")
+
+        credential = session.exec(select(XDRCredential).order_by(XDRCredential.id.desc())).first()
+        requester = get_requester_from_credential(credential)
+        device_resp = requester.request("POST", "/api/xdr/v1/device/blockdevice/list", json_body={"type": ["AF"]})
+        raw_devices = device_resp.get("data", {}).get("item", []) if device_resp.get("code") == "Success" else []
+        online_devices = [d for d in raw_devices if d.get("deviceStatus") == "online"]
+        if not online_devices:
+            raise ValueError("当前没有在线AF联动设备，无法直接下发封禁。")
+
+        selected_device = None
+        if device_id:
+            selected_device = next((d for d in online_devices if str(d.get("deviceId")) == str(device_id)), None)
+            if not selected_device:
+                raise ValueError("所选联动设备不存在或不在线，请重新选择。")
+        elif len(online_devices) == 1:
+            selected_device = online_devices[0]
+        else:
+            raise ValueError("存在多个在线联动设备，请先选择设备后再下发封禁。")
+
+        block_devices = [
+            {
+                "devId": selected_device.get("deviceId"),
+                "devName": selected_device.get("deviceName"),
+                "devType": selected_device.get("deviceType"),
+                "devVersion": selected_device.get("deviceVersion"),
+            }
+        ]
+        skills = SkillRegistry(requester, context_manager)
+        block_skill = skills.get("block_action")
+        if not block_skill:
+            raise ValueError("系统未加载 block_action 技能。")
+
+        safe_hours = max(1, min(360, _to_int(duration_hours, 24)))
+        normalized_type = str(block_type or "SRC_IP").strip().upper()
+        if normalized_type not in {"SRC_IP", "DST_IP"}:
+            raise ValueError("block_type 仅支持 SRC_IP 或 DST_IP。")
+        params = {
+            "views": filtered_ips,
+            "block_type": normalized_type,
+            "mode": "in",
+            "time_type": "temporary",
+            "time_value": safe_hours,
+            "time_unit": "h",
+            "reason": reason or "由安全早报一键处置触发",
+            "devices": block_devices,
+            "name": (rule_name or "").strip() or None,
+            "confirm": True,
+        }
+        payloads = block_skill.execute(str(session_id).strip(), params, "安全早报一键处置封禁恶意攻击源")
+        success_payload = next((p for p in payloads if p.get("type") == "text"), {})
+        success_text = str(success_payload.get("data", {}).get("text") or "").strip()
+        if success_text and "封禁执行成功" in success_text:
+            return {
+                "success": True,
+                "message": success_text,
+                "ips": filtered_ips,
+                "payloads": payloads,
+            }
+        if payloads and payloads[0].get("type") == "form_card":
+            raise ValueError("封禁参数缺失，未能下发。请补充设备/时长后重试。")
+        raise ValueError(success_text or "封禁执行失败，请检查联动设备状态与接口权限。")
+
+    def preview_block_targets(
+        self,
+        session: Session,
+        *,
+        session_id: str,
+        ips: list[str],
+        block_type: str = "SRC_IP",
+    ) -> dict[str, Any]:
+        _ = session_id
+        _ = block_type
+        cleaned_ips: list[str] = []
+        for raw in ips or []:
+            ip = _parse_ipv4(raw)
+            if ip and ip not in cleaned_ips:
+                cleaned_ips.append(ip)
+        if not cleaned_ips:
+            raise ValueError("未提供合法的 IPv4 目标。")
+
+        protected_ips, protected_cidrs = self._load_protected_ip_filters(session)
+        filtered_ips = [ip for ip in cleaned_ips if not self._is_protected_ip(ip, protected_ips, protected_cidrs)]
+        skipped_ips = [ip for ip in cleaned_ips if ip not in filtered_ips]
+        if not filtered_ips:
+            raise ValueError("目标 IP 均命中“默认受保护基础组件/安全防线”规则。")
+
+        credential = session.exec(select(XDRCredential).order_by(XDRCredential.id.desc())).first()
+        requester = get_requester_from_credential(credential)
+
+        device_resp = requester.request("POST", "/api/xdr/v1/device/blockdevice/list", json_body={"type": ["AF"]})
+        raw_devices = device_resp.get("data", {}).get("item", []) if device_resp.get("code") == "Success" else []
+        online_devices = [d for d in raw_devices if d.get("deviceStatus") == "online"]
+        device_options = [
+            {
+                "device_id": str(d.get("deviceId") or ""),
+                "device_name": str(d.get("deviceName") or "-"),
+                "device_type": str(d.get("deviceType") or "-"),
+                "device_version": str(d.get("deviceVersion") or "-"),
+            }
+            for d in online_devices
+            if d.get("deviceId")
+        ]
+
+        intel_rows: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            future_map = {executor.submit(self._query_intel, ip): ip for ip in filtered_ips}
+            for fut in as_completed(future_map):
+                ip = future_map[fut]
+                try:
+                    raw_intel = fut.result()
+                except Exception:
+                    raw_intel = {"ip": ip, "severity": "unknown", "confidence": 0, "tags": [], "source": "local_fallback"}
+                localized = self._localize_intel_row(raw_intel if isinstance(raw_intel, dict) else {"ip": ip})
+                confidence_num = _to_int(raw_intel.get("confidence"), 0)
+                tags = localized.get("tags") or []
+                intel_rows.append(
+                    {
+                        "ip": ip,
+                        "severity": localized.get("severity", "未知"),
+                        "confidence": localized.get("confidence", "0%"),
+                        "tags": ",".join(tags),
+                        "source": localized.get("source", "未知"),
+                        "suggestion": self._recommend_disposition(
+                            localized.get("severity", "未知"),
+                            confidence_num,
+                            tags if isinstance(tags, list) else [],
+                        ),
+                        "reputation": str(raw_intel.get("reputation") or "unknown"),
+                        "message": str(raw_intel.get("message") or ""),
+                    }
+                )
+        intel_rows.sort(key=lambda row: filtered_ips.index(row["ip"]) if row["ip"] in filtered_ips else 9999)
+
+        normalized_type = str(block_type or "SRC_IP").strip().upper()
+        if normalized_type not in {"SRC_IP", "DST_IP"}:
+            normalized_type = "SRC_IP"
+        return {
+            "session_id": session_id,
+            "block_type": normalized_type,
+            "ips": filtered_ips,
+            "skipped_ips": skipped_ips,
+            "device_options": device_options,
+            "intel_rows": intel_rows,
         }
 
     def _normalize_params(self, template_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -645,13 +1067,17 @@ class PlaybookService:
         severity_code = _to_int(_pick(item, "incidentSeverity", "severity"), -1)
         deal_status_code = _to_int(_pick(item, "dealStatus", "status"), -1)
         uu_id = _pick(item, "uuId", "uuid", "incidentId", default="")
+        src_ip = _pick(item, "srcIp", "sourceIp", default="-")
+        dst_ip = _pick(item, "dstIp", "destIp", "destinationIp", default="-")
         return {
             "index": index,
             "uuId": uu_id,
             "name": _pick(item, "name", "incidentName", "title", default="未知事件"),
             "incidentSeverity": SEVERITY_LABEL.get(severity_code, str(severity_code)),
             "dealStatus": DEAL_STATUS_LABEL.get(deal_status_code, str(deal_status_code)),
-            "hostIp": _pick(item, "hostIp", "srcIp", "assetIp", default="-"),
+            "hostIp": _pick(item, "hostIp", "assetIp", "srcIp", default="-"),
+            "srcIp": src_ip,
+            "dstIp": dst_ip,
             "description": _pick(item, "description", "desc", "detail", default=""),
             "endTime": _format_ts(_pick(item, "endTime", "latestTime", "occurTime", default=0)),
         }
@@ -928,6 +1354,13 @@ class PlaybookService:
             )
             rows = node2.get("high_events", [])
             high_total = _to_int(node2.get("high_events_total"), len(rows))
+            protected_ips, protected_cidrs = self._load_protected_ip_filters()
+            block_targets = self._build_routine_block_targets(
+                requester,
+                rows,
+                protected_ips=protected_ips,
+                protected_cidrs=protected_cidrs,
+            )
             labels, points = self._build_log_trend_series(
                 requester,
                 start_ts=_to_int(node1.get("startTimestamp"), to_ts(utc_now()) - 24 * 3600),
@@ -979,6 +1412,8 @@ class PlaybookService:
                 host_ip = rows[0].get("hostIp")
                 if isinstance(host_ip, str) and IPV4_PATTERN.match(host_ip):
                     first_ip = host_ip
+            if not first_ip and block_targets.get("source_ips"):
+                first_ip = str(block_targets["source_ips"][0])
 
             next_actions: list[dict[str, Any]] = []
             if top_uuids:
@@ -1009,6 +1444,7 @@ class PlaybookService:
                 "summary": summary,
                 "cards": cards,
                 "next_actions": next_actions,
+                "block_targets": block_targets,
                 "evidence_sources": [
                     "POST /api/xdr/v1/analysislog/networksecurity/count",
                     "POST /api/xdr/v1/incidents/list",

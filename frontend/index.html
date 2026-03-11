@@ -88,11 +88,6 @@
         <div class="panel-header">
           <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
         </div>
-        <div class="playbook-hub">
-          <div class="playbook-hub-title">场景百宝箱 (Playbook Hub)</div>
-          <div id="playbookCards" class="playbook-cards"></div>
-          <p id="playbookHint" class="hint"></p>
-        </div>
         <div id="chatStream" class="chat-stream">
           <div class="chat-card">
             <strong>系统向导</strong>
@@ -107,6 +102,12 @@
           </div>
         </div>
         <div class="chat-input-area">
+          <div class="playbook-hub">
+            <div class="playbook-hub-title">场景百宝箱 (Playbook Hub)</div>
+            <div id="playbookCards" class="playbook-cards"></div>
+            <p id="playbookHint" class="hint"></p>
+          </div>
+          <div id="slashCommandMenu" class="slash-command-menu hidden" role="listbox" aria-label="快捷指令"></div>
           <form id="chatForm" class="chat-input-form">
             <input type="text" id="chatMessage" placeholder="输入自然语言指令进行意图捕获与执行..." autocomplete="off" />
             <button type="submit" class="primary-btn">执行</button>
@@ -290,6 +291,61 @@
         <button id="dangerCancel" class="secondary-btn">撤销操作指令</button>
         <button id="dangerConfirm" class="danger-btn"
           style="box-shadow: 0 0 10px rgba(211,47,47,0.4)">通过审计并下发执行</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="routineBlockDialog" class="danger-dialog routine-block-dialog">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3 id="routineBlockTitle" style="color:var(--sec-medium);">一键处置配置</h3>
+      </div>
+
+      <div class="routine-block-section">
+        <p class="routine-block-label">待下发目标IP</p>
+        <div id="routineBlockTargetList" class="routine-block-target-list"></div>
+        <p id="routineBlockSkipped" class="routine-block-skipped hidden"></p>
+      </div>
+
+      <div class="routine-block-section">
+        <p class="routine-block-label">威胁情报参考（用于确认是否封禁）</p>
+        <div class="table-wrap routine-block-intel-wrap">
+          <table class="routine-block-intel-table">
+            <thead>
+              <tr>
+                <th>IP</th>
+                <th>风险等级</th>
+                <th>置信度</th>
+                <th>标签</th>
+                <th>来源</th>
+                <th>建议动作</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="routineBlockIntelBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="routine-block-form">
+        <label>联动设备
+          <select id="routineBlockDevice"></select>
+        </label>
+        <label>封禁时长（小时）
+          <input type="number" id="routineBlockHours" min="1" max="360" value="24" />
+        </label>
+        <label>规则名称
+          <input type="text" id="routineBlockRuleName" placeholder="可留空自动命名" />
+        </label>
+        <label class="full-width">备注
+          <input type="text" id="routineBlockReason" placeholder="填写处置备注，便于审计追溯" />
+        </label>
+        <p id="routineBlockHint" class="hint full-width"></p>
+      </div>
+
+      <div class="action-row" style="justify-content: flex-end;">
+        <button id="routineBlockCancel" class="secondary-btn">取消</button>
+        <button id="routineBlockConfirm" class="danger-btn">确认并一键处置</button>
       </div>
     </div>
   </dialog>

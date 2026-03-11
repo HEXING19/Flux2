@@ -1,17 +1,22 @@
 const state = {
   sessionId: `session-${Date.now()}`,
   isAuthenticated: false,
+  xdrBaseUrl: '',
   playbookTemplates: [],
   coreAssets: [],
   activePlaybookRunId: null,
   playbookRunCache: {},
+  routineBlockDraft: null,
+  slashVisible: false,
+  slashActiveIndex: 0,
+  slashFiltered: [],
 };
 
 const DEFAULT_PLAYBOOK_SCENES = [
   {
     id: 'routine_check',
     name: '今日安全早报',
-    button_label: '☕ 生成今日安全早报',
+    button_label: '☕ 今日安全早报',
     description: '自动聚合过去24小时日志总量、未处置高危事件和样本证据，生成值班晨报。',
     hint: '适合每天交接班时快速掌握整体安全态势。',
     default_params: { window_hours: 24, sample_size: 3 },
@@ -19,7 +24,7 @@ const DEFAULT_PLAYBOOK_SCENES = [
   {
     id: 'alert_triage',
     name: '单点告警深度研判',
-    button_label: '🔍 一键深度研判',
+    button_label: '🔎 单点告警深度研判',
     description: '围绕指定事件做实体画像、外部情报和内部影响计数，输出封禁/观察建议。',
     hint: '可在“事件查询”后按序号研判，或直接输入事件 UUID。',
     default_params: { window_days: 7, mode: 'analyze' },
@@ -27,7 +32,7 @@ const DEFAULT_PLAYBOOK_SCENES = [
   {
     id: 'threat_hunting',
     name: '攻击者活动轨迹',
-    button_label: '🕵️ 攻击者活动轨迹生成',
+    button_label: '🎯 攻击者活动轨迹',
     description: '默认回溯90天并最多扫描1万条告警，生成攻击故事线和关键证据。',
     hint: '适合针对某个可疑 IP 做溯源汇报。',
     default_params: { window_days: 90, max_scan: 10000, evidence_limit: 20 },
@@ -35,10 +40,37 @@ const DEFAULT_PLAYBOOK_SCENES = [
   {
     id: 'asset_guard',
     name: '核心资产防线透视',
-    button_label: '🏥 核心资产一键体检',
+    button_label: '🛡️ 核心资产防线透视',
     description: '围绕核心资产IP进行双向态势体检，输出管理层可读的风险摘要和建议动作。',
     hint: '适合给业务负责人做核心资产每日/每周态势汇报。',
     default_params: { window_hours: 24, top_external_ip: 5 },
+  },
+];
+
+const SLASH_COMMANDS = [
+  {
+    id: 'routine_check',
+    command: '/今日安全早报',
+    aliases: ['/routine_check', '/早报'],
+    description: '启动今日安全早报自动编排。',
+  },
+  {
+    id: 'alert_triage',
+    command: '/单点告警深度研判',
+    aliases: ['/alert_triage', '/研判'],
+    description: '围绕指定事件做深度研判并给出处置建议。',
+  },
+  {
+    id: 'threat_hunting',
+    command: '/攻击者活动轨迹',
+    aliases: ['/threat_hunting', '/轨迹'],
+    description: '生成攻击者活动轨迹与关键证据。',
+  },
+  {
+    id: 'asset_guard',
+    command: '/核心资产防线透视',
+    aliases: ['/asset_guard', '/核心资产'],
+    description: '围绕核心资产输出风险态势报告。',
   },
 ];
 
@@ -107,6 +139,16 @@ const PROVIDER_META = {
   },
 };
 
+const IPV4_REGEX = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+const CVE_REGEX = /\bCVE-\d{4}-\d{4,7}\b/gi;
+const RISK_SEVERITY_RANK = {
+  严重: 4,
+  高危: 3,
+  中危: 2,
+  低危: 1,
+  信息: 0,
+};
+
 const el = {
   landingView: document.getElementById('landingView'),
   workspaceView: document.getElementById('workspaceView'),
@@ -146,6 +188,7 @@ const el = {
   chatForm: document.getElementById('chatForm'),
   chatMessage: document.getElementById('chatMessage'),
   chatStream: document.getElementById('chatStream'),
+  slashCommandMenu: document.getElementById('slashCommandMenu'),
   playbookWorkspacePanel: document.getElementById('playbookWorkspacePanel'),
   playbookWorkspaceBody: document.getElementById('playbookWorkspaceBody'),
   closePlaybookWorkspaceBtn: document.getElementById('closePlaybookWorkspace'),
@@ -153,6 +196,18 @@ const el = {
   playbookHint: document.getElementById('playbookHint'),
   dangerDialog: document.getElementById('dangerDialog'),
   dangerText: document.getElementById('dangerText'),
+  routineBlockDialog: document.getElementById('routineBlockDialog'),
+  routineBlockTitle: document.getElementById('routineBlockTitle'),
+  routineBlockTargetList: document.getElementById('routineBlockTargetList'),
+  routineBlockSkipped: document.getElementById('routineBlockSkipped'),
+  routineBlockIntelBody: document.getElementById('routineBlockIntelBody'),
+  routineBlockDevice: document.getElementById('routineBlockDevice'),
+  routineBlockHours: document.getElementById('routineBlockHours'),
+  routineBlockReason: document.getElementById('routineBlockReason'),
+  routineBlockRuleName: document.getElementById('routineBlockRuleName'),
+  routineBlockHint: document.getElementById('routineBlockHint'),
+  routineBlockCancel: document.getElementById('routineBlockCancel'),
+  routineBlockConfirm: document.getElementById('routineBlockConfirm'),
 };
 
 async function api(path, options = {}) {
@@ -188,6 +243,7 @@ function setAuthState(authenticated, statusText = '', isConnected = true) {
     clearPlaybookWorkspace();
     state.activePlaybookRunId = null;
     state.playbookRunCache = {};
+    hideSlashCommandMenu();
   }
   const mainNav = document.getElementById('mainNav');
   if (mainNav) mainNav.classList.toggle('hidden', !authenticated);
@@ -611,6 +667,15 @@ function createPlaybookProgressCard(runId, templateId) {
   card.classList.add('playbook-progress-card', 'workspace-panel-card');
   card.dataset.playbookTemplate = templateId || '';
 
+  const header = document.createElement('div');
+  header.className = 'playbook-progress-header';
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'playbook-progress-toggle';
+  toggleBtn.textContent = '收起';
+  header.appendChild(toggleBtn);
+  card.appendChild(header);
+
   const sub = document.createElement('div');
   sub.className = 'playbook-progress-template';
   sub.textContent = displayName;
@@ -634,9 +699,13 @@ function createPlaybookProgressCard(runId, templateId) {
   progressText.textContent = '初始化中...';
   card.appendChild(progressText);
 
+  const detailsWrap = document.createElement('div');
+  detailsWrap.className = 'playbook-progress-details';
+  card.appendChild(detailsWrap);
+
   const stageList = document.createElement('div');
   stageList.className = 'playbook-stage-list';
-  card.appendChild(stageList);
+  detailsWrap.appendChild(stageList);
 
   const details = document.createElement('details');
   details.className = 'playbook-tech-details';
@@ -646,10 +715,30 @@ function createPlaybookProgressCard(runId, templateId) {
   const pre = document.createElement('pre');
   pre.textContent = `run_id=${runId}\n初始化中...`;
   details.appendChild(pre);
-  card.appendChild(details);
+  detailsWrap.appendChild(details);
+
+  const progressUi = {
+    card,
+    pre,
+    stageList,
+    progressText,
+    barFill,
+    detailsWrap,
+    toggleBtn,
+    userCollapsed: false,
+    autoCollapsed: false,
+  };
+
+  toggleBtn.onclick = () => {
+    const nextCollapsed = !detailsWrap.classList.contains('collapsed');
+    progressUi.userCollapsed = nextCollapsed;
+    progressUi.autoCollapsed = false;
+    detailsWrap.classList.toggle('collapsed', nextCollapsed);
+    toggleBtn.textContent = nextCollapsed ? '展开详情' : '收起';
+  };
 
   appendPlaybookWorkspaceCard(card);
-  return { card, pre, stageList, progressText, barFill };
+  return progressUi;
 }
 
 function getStageMeta(templateId, runData) {
@@ -688,6 +777,16 @@ function updatePlaybookProgress(progressUi, runData) {
 
   const statusText = mapNodeStatus(runData?.status).text;
   progressUi.progressText.textContent = `状态：${statusText} · 进度：${finished}/${total}`;
+  const completed = runData?.status === 'Finished' || runData?.status === 'Failed';
+  if (completed && !progressUi.userCollapsed && !progressUi.autoCollapsed) {
+    progressUi.autoCollapsed = true;
+    progressUi.detailsWrap.classList.add('collapsed');
+    progressUi.toggleBtn.textContent = '展开详情';
+  } else if (!completed && !progressUi.userCollapsed) {
+    progressUi.autoCollapsed = false;
+    progressUi.detailsWrap.classList.remove('collapsed');
+    progressUi.toggleBtn.textContent = '收起';
+  }
 
   const stageMeta = getStageMeta(runData?.template_id, runData);
   const orderedNodeIds = Object.keys(stageMeta).length ? Object.keys(stageMeta) : Object.keys(nodeStatus);
@@ -927,6 +1026,952 @@ function createPlaybookActionButton(action) {
     }
   };
   return btn;
+}
+
+function toMetricNumber(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.round(num));
+}
+
+function formatMetric(value) {
+  return toMetricNumber(value).toLocaleString('zh-CN');
+}
+
+function dedupText(values) {
+  const arr = Array.isArray(values) ? values : [];
+  const cleaned = arr.map((item) => String(item || '').trim()).filter(Boolean);
+  return [...new Set(cleaned)];
+}
+
+function isValidIpv4(ip) {
+  const parts = String(ip || '').trim().split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+}
+
+function isPrivateIpv4(ip) {
+  if (!isValidIpv4(ip)) return false;
+  const [a, b] = String(ip).split('.').map((n) => Number(n));
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  return false;
+}
+
+function extractIpv4List(text) {
+  const found = String(text || '').match(IPV4_REGEX) || [];
+  return dedupText(found.filter((ip) => isValidIpv4(ip)));
+}
+
+function extractCveList(...texts) {
+  const list = [];
+  texts.forEach((text) => {
+    const found = String(text || '').match(CVE_REGEX) || [];
+    found.forEach((cve) => list.push(String(cve).toUpperCase()));
+  });
+  return dedupText(list);
+}
+
+function normalizeSeverity(value) {
+  const text = String(value || '').trim();
+  if (text.includes('严重')) return '严重';
+  if (text.includes('高危') || text === '高') return '高危';
+  if (text.includes('中危') || text === '中') return '中危';
+  if (text.includes('低危') || text === '低') return '低危';
+  return '信息';
+}
+
+function severityRank(value) {
+  return RISK_SEVERITY_RANK[normalizeSeverity(value)] ?? 0;
+}
+
+function classifyRiskType(row, cves) {
+  const text = `${row?.name || ''} ${row?.description || ''}`.toLowerCase();
+  if (cves.length) return '漏洞利用';
+  if (text.includes('webshell') || text.includes('后门') || text.includes('冰蝎')) return '后门植入';
+  if (text.includes('反序列化')) return '反序列化攻击';
+  if (text.includes('java')) return 'Java 应用攻击';
+  if (text.includes('rce') || text.includes('远程代码执行')) return 'RCE 远程代码执行';
+  if (text.includes('扫描')) return '扫描攻击';
+  return '异常攻击行为';
+}
+
+function parseHighEventTotal(cards, fallback = 0) {
+  const textCards = (cards || []).filter((card) => card?.type === 'text');
+  for (const card of textCards) {
+    const text = String(card?.data?.text || '');
+    const match = text.match(/总数[：:]\s*(?:\*\*)?(\d+)/);
+    if (match) return toMetricNumber(match[1]);
+  }
+  return toMetricNumber(fallback);
+}
+
+function parseLogTotal(cards, summary = '') {
+  const chart = (cards || []).find((card) => card?.type === 'echarts_graph');
+  const fromChartSummary = String(chart?.data?.summary || '').match(/(\d[\d,]*)/);
+  if (fromChartSummary) return toMetricNumber(fromChartSummary[1].replace(/,/g, ''));
+  const fromSummary = String(summary || '').match(/安全日志\s*([\d,]+)/);
+  if (fromSummary) return toMetricNumber(fromSummary[1].replace(/,/g, ''));
+  return 0;
+}
+
+function buildRoutineCheckViewModel(runData) {
+  const result = runData?.result || {};
+  const cards = Array.isArray(result.cards) ? result.cards : [];
+  const summary = String(result.summary || '').trim();
+  const tableCard = cards.find(
+    (card) => card?.type === 'table' && String(card?.data?.title || '').includes('未处置高危事件'),
+  ) || cards.find((card) => card?.type === 'table');
+  const chartCard = cards.find((card) => card?.type === 'echarts_graph');
+  const rows = Array.isArray(tableCard?.data?.rows) ? tableCard.data.rows : [];
+  const resultBlockTargets = result?.block_targets || {};
+
+  const highEventTotal = parseHighEventTotal(cards, rows.length);
+  const logTotal = parseLogTotal(cards, summary);
+
+  const assetCount = new Map();
+  rows.forEach((row) => {
+    const ip = String(row?.hostIp || '').trim();
+    if (!isValidIpv4(ip)) return;
+    assetCount.set(ip, (assetCount.get(ip) || 0) + 1);
+  });
+  const affectedAssets = assetCount.size;
+
+  const trendRawValues = Array.isArray(chartCard?.data?.option?.series?.[0]?.data)
+    ? chartCard.data.option.series[0].data
+    : [];
+  const trendRawLabels = Array.isArray(chartCard?.data?.option?.xAxis?.data)
+    ? chartCard.data.option.xAxis.data
+    : [];
+  const trendValues = trendRawValues.slice(-7).map((value) => toMetricNumber(value));
+  const trendLabels = trendRawLabels.slice(-7).map((label) => String(label || '').slice(5, 10));
+  while (trendValues.length < 7) trendValues.unshift(0);
+  while (trendLabels.length < 7) trendLabels.unshift('--');
+
+  const avgAssetCount = affectedAssets ? rows.length / affectedAssets : 0;
+  const topAssets = [...assetCount.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([ip, count]) => {
+      const diff = avgAssetCount > 0 ? Math.round(((count - avgAssetCount) / avgAssetCount) * 100) : 0;
+      const trend = `${diff >= 0 ? '+' : ''}${diff}%`;
+      return { ip, count, trend };
+    });
+
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const key = String(row?.name || row?.uuId || '').trim() || `risk-${grouped.size + 1}`;
+    const cves = extractCveList(row?.name, row?.description);
+    const current = grouped.get(key) || {
+      id: key,
+      title: row?.name || '未知风险',
+      severity: normalizeSeverity(row?.incidentSeverity),
+      type: classifyRiskType(row, cves),
+      desc: String(row?.description || '').trim(),
+      assets: [],
+      cves: [],
+      count: 0,
+    };
+    current.count += 1;
+    current.severity = severityRank(row?.incidentSeverity) > severityRank(current.severity)
+      ? normalizeSeverity(row?.incidentSeverity)
+      : current.severity;
+    const hostIp = String(row?.hostIp || '').trim();
+    if (isValidIpv4(hostIp)) current.assets.push(hostIp);
+    current.cves = dedupText([...(current.cves || []), ...cves]);
+    if (!current.desc) current.desc = String(row?.description || '').trim();
+    grouped.set(key, current);
+  });
+
+  const risks = [...grouped.values()]
+    .map((risk, index) => ({
+      ...risk,
+      id: `R${index + 1}`,
+      assets: dedupText(risk.assets).slice(0, 6),
+      cve: risk.cves[0] || '',
+      desc: risk.desc || '该风险暂无补充描述，请在 XDR 平台查看完整事件详情。',
+    }))
+    .sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || b.count - a.count)
+    .slice(0, 3);
+
+  const hostIps = new Set([...assetCount.keys()]);
+  const sourceCandidates = [];
+  const outboundCandidates = [];
+  rows.forEach((row) => {
+    const srcIp = String(row?.srcIp || '').trim();
+    const dstIp = String(row?.dstIp || '').trim();
+    if (isValidIpv4(srcIp)) {
+      sourceCandidates.push(srcIp);
+    }
+    if (isValidIpv4(dstIp)) {
+      outboundCandidates.push(dstIp);
+    }
+    extractIpv4List(`${row?.name || ''} ${row?.description || ''}`).forEach((ip) => sourceCandidates.push(ip));
+  });
+  (result.next_actions || []).forEach((action) => {
+    const params = action?.params || {};
+    if (isValidIpv4(params?.ip)) sourceCandidates.push(params.ip);
+    (params?.ips || []).forEach((ip) => sourceCandidates.push(ip));
+  });
+  const sourceIpsFromResult = dedupText(resultBlockTargets?.source_ips || []).filter((ip) => isValidIpv4(ip));
+  let sourceIps = dedupText(sourceCandidates).filter((ip) => isValidIpv4(ip) && !hostIps.has(ip) && !isPrivateIpv4(ip));
+  if (!sourceIps.length) {
+    sourceIps = dedupText(sourceCandidates).filter((ip) => isValidIpv4(ip) && !hostIps.has(ip));
+  }
+  if (sourceIpsFromResult.length) {
+    sourceIps = sourceIpsFromResult;
+  }
+  sourceIps = sourceIps.slice(0, 3);
+
+  const outboundIpsFromResult = dedupText(resultBlockTargets?.outbound_ips || []).filter((ip) => isValidIpv4(ip));
+  let outboundIps = dedupText(outboundCandidates).filter((ip) => isValidIpv4(ip) && !hostIps.has(ip) && !isPrivateIpv4(ip));
+  if (!outboundIps.length) {
+    outboundIps = dedupText(outboundCandidates).filter((ip) => isValidIpv4(ip) && !hostIps.has(ip));
+  }
+  if (outboundIpsFromResult.length) {
+    outboundIps = outboundIpsFromResult;
+  }
+  outboundIps = outboundIps.slice(0, 3);
+
+  const isolateHosts = risks
+    .filter((risk) => severityRank(risk.severity) >= severityRank('高危'))
+    .flatMap((risk) => risk.assets)
+    .filter((ip) => isValidIpv4(ip));
+  const fallbackIsolate = [...hostIps];
+  const isolateItems = dedupText(isolateHosts.length ? isolateHosts : fallbackIsolate).slice(0, 3);
+
+  const vulnItems = [];
+  risks.forEach((risk) => {
+    if (!risk.cve) return;
+    (risk.assets || []).forEach((ip) => vulnItems.push(`${ip} (${risk.cve})`));
+  });
+  if (!vulnItems.length) {
+    rows.slice(0, 3).forEach((row) => {
+      const cve = extractCveList(row?.name, row?.description)[0];
+      const ip = String(row?.hostIp || '').trim();
+      if (cve && isValidIpv4(ip)) vulnItems.push(`${ip} (${cve})`);
+    });
+  }
+
+  const dayText = (() => {
+    const t = runData?.finished_at || runData?.started_at;
+    const date = t ? new Date(t) : new Date();
+    if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+    return date.toISOString().slice(0, 10);
+  })();
+
+  return {
+    dayText,
+    summary,
+    logTotal,
+    highEventTotal,
+    affectedAssets,
+    trendLabels,
+    trendValues,
+    topAssets,
+    risks,
+    sourceIps,
+    outboundIps,
+    isolateItems,
+    vulnItems: dedupText(vulnItems).slice(0, 3),
+    nextActions: Array.isArray(result.next_actions) ? result.next_actions : [],
+  };
+}
+
+async function copyTextCompat(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (navigator?.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fallback below
+    }
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand('copy');
+    textarea.remove();
+    return !!ok;
+  } catch {
+    return false;
+  }
+}
+
+async function handleCopyText(value) {
+  const ok = await copyTextCompat(value);
+  if (ok) {
+    setHint(el.playbookHint, `已复制：${value}`, 'success');
+    return;
+  }
+  setHint(el.playbookHint, '复制失败，请手动复制。', 'error');
+}
+
+function createRoutineCopyTag(text) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'routine-copy-tag';
+  const value = String(text || '').trim();
+  btn.textContent = value;
+  btn.title = `点击复制 ${value}`;
+  btn.onclick = async () => {
+    await handleCopyText(value);
+  };
+  return btn;
+}
+
+function createRoutineCopyMiniButton(text) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'routine-copy-mini-btn';
+  btn.textContent = '复制';
+  const value = String(text || '').trim();
+  btn.title = `复制 ${value}`;
+  btn.onclick = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    await handleCopyText(value);
+  };
+  return btn;
+}
+
+function buildRoutineActionItem(action) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'routine-action-item';
+
+  const head = document.createElement('div');
+  head.className = 'routine-action-head';
+  const title = document.createElement('p');
+  title.className = 'routine-action-title';
+  title.textContent = action.title;
+  const type = document.createElement('span');
+  type.className = 'routine-action-type';
+  type.textContent = action.type;
+  head.appendChild(title);
+  head.appendChild(type);
+  wrapper.appendChild(head);
+
+  const impact = document.createElement('div');
+  impact.className = 'routine-action-impact';
+  impact.textContent = `影响：${action.impact}`;
+  wrapper.appendChild(impact);
+
+  const listTitle = document.createElement('p');
+  listTitle.className = 'routine-action-list-title';
+  listTitle.textContent = '拟处理/排查对象清单';
+  wrapper.appendChild(listTitle);
+
+  const list = document.createElement('div');
+  list.className = 'routine-action-list';
+  (action.items || []).forEach((item) => {
+    const line = document.createElement('div');
+    line.className = 'routine-action-list-item';
+    const textNode = document.createElement('span');
+    textNode.className = 'routine-action-list-text';
+    textNode.textContent = item;
+    line.appendChild(textNode);
+    const ips = extractIpv4List(item);
+    if (ips.length) {
+      line.classList.add('has-copy');
+      line.appendChild(createRoutineCopyMiniButton(ips[0]));
+    }
+    list.appendChild(line);
+  });
+  wrapper.appendChild(list);
+
+  if (action.buttonText) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'routine-action-btn';
+    btn.textContent = action.buttonText;
+    if (action.disabled) btn.disabled = true;
+    if (typeof action.onClick === 'function') {
+      btn.onclick = async () => {
+        if (action.disabled) return;
+        btn.disabled = true;
+        try {
+          await action.onClick();
+        } finally {
+          btn.disabled = !!action.disabled;
+        }
+      };
+    }
+    wrapper.appendChild(btn);
+  }
+  return wrapper;
+}
+
+async function executeRoutineBlockSources(ips, opts = {}) {
+  if (!ips.length) {
+    throw new Error('未识别到可处置的目标 IP。');
+  }
+  const payload = {
+    session_id: state.sessionId,
+    ips,
+    block_type: opts.blockType || 'SRC_IP',
+    reason: opts.reason || '由安全早报一键处置触发',
+    duration_hours: Math.max(1, Math.min(360, Number(opts.durationHours) || 24)),
+    device_id: opts.deviceId || null,
+    rule_name: opts.ruleName || null,
+  };
+  const response = await api('/api/playbooks/routine-check/block-sources', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return response;
+}
+
+async function fetchRoutineBlockPreview(ips, blockType = 'SRC_IP') {
+  return api('/api/playbooks/routine-check/block-preview', {
+    method: 'POST',
+    body: JSON.stringify({
+      session_id: state.sessionId,
+      ips,
+      block_type: blockType,
+    }),
+  });
+}
+
+function resetRoutineBlockDialog() {
+  if (el.routineBlockTargetList) el.routineBlockTargetList.innerHTML = '';
+  if (el.routineBlockIntelBody) el.routineBlockIntelBody.innerHTML = '';
+  if (el.routineBlockDevice) el.routineBlockDevice.innerHTML = '';
+  if (el.routineBlockSkipped) {
+    el.routineBlockSkipped.classList.add('hidden');
+    el.routineBlockSkipped.textContent = '';
+  }
+  if (el.routineBlockHint) {
+    el.routineBlockHint.classList.remove('success', 'error');
+    el.routineBlockHint.textContent = '';
+  }
+}
+
+function setRoutineBlockHint(message, type = '') {
+  if (!el.routineBlockHint) return;
+  el.routineBlockHint.textContent = message || '';
+  el.routineBlockHint.classList.remove('success', 'error');
+  if (type) el.routineBlockHint.classList.add(type);
+}
+
+function removeRoutineBlockIp(ip) {
+  if (!state.routineBlockDraft) return;
+  state.routineBlockDraft.selectedIps = (state.routineBlockDraft.selectedIps || []).filter((item) => item !== ip);
+  renderRoutineBlockDialogContent();
+}
+
+function createRoutineTargetChip(ip) {
+  const chip = document.createElement('div');
+  chip.className = 'routine-block-target-chip';
+  const text = document.createElement('span');
+  text.className = 'routine-block-target-text';
+  text.textContent = ip;
+  chip.appendChild(text);
+  chip.appendChild(createRoutineCopyMiniButton(ip));
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'routine-block-remove-btn';
+  removeBtn.textContent = '移除';
+  removeBtn.onclick = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    removeRoutineBlockIp(ip);
+  };
+  chip.appendChild(removeBtn);
+  return chip;
+}
+
+function renderRoutineBlockDialogContent() {
+  const draft = state.routineBlockDraft;
+  if (!draft) return;
+  const selectedIps = draft.selectedIps || [];
+  if (el.routineBlockTitle) {
+    el.routineBlockTitle.textContent = `${draft.actionTitle || '一键处置'}（${selectedIps.length}个目标）`;
+  }
+  if (el.routineBlockTargetList) {
+    el.routineBlockTargetList.innerHTML = '';
+    selectedIps.forEach((ip) => {
+      el.routineBlockTargetList.appendChild(createRoutineTargetChip(ip));
+    });
+    if (!selectedIps.length) {
+      const empty = document.createElement('span');
+      empty.className = 'routine-block-empty';
+      empty.textContent = '暂无待下发目标，请至少保留一个IP。';
+      el.routineBlockTargetList.appendChild(empty);
+    }
+  }
+  if (el.routineBlockIntelBody) {
+    el.routineBlockIntelBody.innerHTML = '';
+    selectedIps.forEach((ip) => {
+      const row = (draft.intelRowsByIp || {})[ip] || {};
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${ip}</td>
+        <td>${row.severity || '-'}</td>
+        <td>${row.confidence || '-'}</td>
+        <td>${row.tags || '-'}</td>
+        <td>${row.source || '-'}</td>
+        <td>${row.suggestion || '建议观察'}</td>
+        <td><button type="button" class="routine-table-remove-btn">移除</button></td>
+      `;
+      const removeBtn = tr.querySelector('.routine-table-remove-btn');
+      if (removeBtn) {
+        removeBtn.onclick = () => {
+          removeRoutineBlockIp(ip);
+        };
+      }
+      el.routineBlockIntelBody.appendChild(tr);
+    });
+    if (!selectedIps.length) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="7">暂无待下发目标，请先保留至少一个IP。</td>';
+      el.routineBlockIntelBody.appendChild(tr);
+    }
+  }
+
+  const hasOnlineDevice = Array.isArray(draft.deviceOptions) && draft.deviceOptions.length > 0;
+  if (el.routineBlockConfirm) {
+    el.routineBlockConfirm.disabled = !hasOnlineDevice || !selectedIps.length;
+  }
+  if (!selectedIps.length) {
+    setRoutineBlockHint('请至少保留一个目标IP后再下发。', 'error');
+  } else if (!hasOnlineDevice) {
+    setRoutineBlockHint('当前没有在线AF联动设备，暂无法直接下发。', 'error');
+  } else {
+    setRoutineBlockHint('请核对威胁情报、设备与封禁时长后下发。', '');
+  }
+}
+
+function buildDefaultRuleName(prefix = 'routine') {
+  const now = new Date();
+  const pad = (v) => String(v).padStart(2, '0');
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+  return `Flux_${prefix}_${ts}`;
+}
+
+async function openRoutineBlockDialog(config) {
+  if (!el.routineBlockDialog) return;
+  const ips = Array.isArray(config?.ips) ? config.ips : [];
+  if (!ips.length) {
+    setHint(el.playbookHint, config?.emptyMessage || '当前没有可下发封禁的目标 IP。', 'error');
+    return;
+  }
+
+  try {
+    resetRoutineBlockDialog();
+    setRoutineBlockHint('正在加载在线设备与威胁情报...', '');
+    const preview = await fetchRoutineBlockPreview(ips, config.blockType || 'SRC_IP');
+    const targets = preview?.ips || [];
+    if (!targets.length) {
+      setHint(el.playbookHint, '目标 IP 均已被安全防线保护，无法下发封禁。', 'error');
+      return;
+    }
+
+    const intelRows = preview?.intel_rows || [];
+    const intelRowsByIp = {};
+    intelRows.forEach((row) => {
+      const ip = String(row?.ip || '').trim();
+      if (!ip) return;
+      intelRowsByIp[ip] = row;
+    });
+    const devices = preview?.device_options || [];
+
+    state.routineBlockDraft = {
+      actionTitle: config.actionTitle || '一键处置',
+      resultTitle: config.resultTitle || '网侧封禁结果',
+      blockType: preview.block_type || config.blockType || 'SRC_IP',
+      allIps: [...targets],
+      selectedIps: [...targets],
+      skippedIps: preview.skipped_ips || [],
+      deviceOptions: devices,
+      intelRowsByIp,
+    };
+
+    const skipped = preview?.skipped_ips || [];
+    if (el.routineBlockSkipped && skipped.length) {
+      el.routineBlockSkipped.classList.remove('hidden');
+      el.routineBlockSkipped.textContent = `已自动过滤受保护IP：${skipped.join('、')}`;
+    }
+
+    if (el.routineBlockDevice) {
+      el.routineBlockDevice.innerHTML = '';
+      devices.forEach((item) => {
+        const option = document.createElement('option');
+        option.value = item.device_id;
+        option.textContent = `${item.device_name} (${item.device_id})`;
+        el.routineBlockDevice.appendChild(option);
+      });
+      if (!devices.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '暂无在线AF设备';
+        el.routineBlockDevice.appendChild(option);
+      }
+    }
+
+    if (el.routineBlockHours) el.routineBlockHours.value = '24';
+    if (el.routineBlockReason) {
+      el.routineBlockReason.value = config.defaultReason || '由安全早报一键处置触发';
+    }
+    if (el.routineBlockRuleName) {
+      el.routineBlockRuleName.value = buildDefaultRuleName(config.blockType === 'DST_IP' ? 'outbound' : 'source');
+    }
+    renderRoutineBlockDialogContent();
+    openDialog(el.routineBlockDialog);
+  } catch (err) {
+    setHint(el.playbookHint, err.message || '加载封禁预览失败', 'error');
+  }
+}
+
+async function submitRoutineBlockDialog() {
+  if (!state.routineBlockDraft) return;
+  const selectedIps = state.routineBlockDraft.selectedIps || [];
+  if (!selectedIps.length) {
+    setRoutineBlockHint('请至少保留一个目标IP后再下发。', 'error');
+    return;
+  }
+  const deviceId = String(el.routineBlockDevice?.value || '').trim();
+  if (!deviceId) {
+    setRoutineBlockHint('请选择在线联动设备。', 'error');
+    return;
+  }
+  const hours = Math.max(1, Math.min(360, Number(el.routineBlockHours?.value) || 24));
+  const reason = String(el.routineBlockReason?.value || '').trim() || '由安全早报一键处置触发';
+  const ruleName = String(el.routineBlockRuleName?.value || '').trim() || null;
+  if (el.routineBlockConfirm) el.routineBlockConfirm.disabled = true;
+  try {
+    const data = await executeRoutineBlockSources(selectedIps, {
+      blockType: state.routineBlockDraft.blockType,
+      reason,
+      durationHours: hours,
+      deviceId,
+      ruleName,
+    });
+    closeDialog(el.routineBlockDialog);
+    setHint(el.playbookHint, data.message || '封禁执行成功。', 'success');
+    const resultCard = cardTemplate(state.routineBlockDraft.resultTitle || '网侧封禁结果');
+    const selectedText = selectedIps.length ? `\n\n已下发目标IP：${selectedIps.join('、')}` : '';
+    const filteredText = (state.routineBlockDraft.skippedIps || []).length
+      ? `\n\n已自动跳过受保护IP：${state.routineBlockDraft.skippedIps.join('、')}`
+      : '';
+    resultCard.appendChild(createMarkdownBlock(`${data.message || '已完成下发。'}${selectedText}${filteredText}`));
+    appendPlaybookWorkspaceCard(resultCard);
+    state.routineBlockDraft = null;
+  } catch (err) {
+    setRoutineBlockHint(err.message || '下发失败，请检查参数。', 'error');
+  } finally {
+    if (el.routineBlockConfirm && state.routineBlockDraft) {
+      const hasOnlineDevice = Array.isArray(state.routineBlockDraft.deviceOptions) && state.routineBlockDraft.deviceOptions.length > 0;
+      const selectedIpsNow = state.routineBlockDraft.selectedIps || [];
+      el.routineBlockConfirm.disabled = !hasOnlineDevice || !selectedIpsNow.length;
+    }
+  }
+}
+
+function renderRoutineFollowupCard(nextActions) {
+  if (!nextActions || !nextActions.length) return;
+  const card = cardTemplate('', '');
+  card.classList.add('playbook-task-card', 'workspace-panel-card', 'routine-followup-card');
+
+  const title = document.createElement('h4');
+  title.className = 'routine-followup-title';
+  title.textContent = '下一步动作推荐';
+  card.appendChild(title);
+
+  const row = document.createElement('div');
+  row.className = 'action-row playbook-next-actions';
+  nextActions.forEach((action) => row.appendChild(createPlaybookActionButton(action)));
+  card.appendChild(row);
+
+  appendPlaybookWorkspaceCard(card);
+}
+
+function renderRoutineCheckCard(runData) {
+  const vm = buildRoutineCheckViewModel(runData);
+  const card = cardTemplate('', '');
+  card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card', 'routine-report-card');
+
+  const header = document.createElement('div');
+  header.className = 'routine-report-header';
+  const titleWrap = document.createElement('div');
+  const title = document.createElement('h3');
+  title.className = 'routine-report-title';
+  title.textContent = 'Playbook 安全日报';
+  const dateBadge = document.createElement('span');
+  dateBadge.className = 'routine-report-date';
+  dateBadge.textContent = vm.dayText;
+  title.appendChild(dateBadge);
+  titleWrap.appendChild(title);
+  const subtitle = document.createElement('p');
+  subtitle.className = 'routine-report-subtitle';
+  subtitle.textContent = '根据最新威胁情报生成的自动化处置建议';
+  titleWrap.appendChild(subtitle);
+  header.appendChild(titleWrap);
+  card.appendChild(header);
+
+  const stats = document.createElement('div');
+  stats.className = 'routine-stats-grid';
+  [
+    { label: '需要优先关注的事件', value: formatMetric(vm.highEventTotal), className: 'risk' },
+    { label: '今日安全日志', value: formatMetric(vm.logTotal), className: 'log' },
+    { label: '受影响资产数', value: formatMetric(vm.affectedAssets), className: 'asset' },
+  ].forEach((item) => {
+    const stat = document.createElement('div');
+    stat.className = `routine-stat-card ${item.className}`;
+    const label = document.createElement('p');
+    label.className = 'routine-stat-label';
+    label.textContent = item.label;
+    const value = document.createElement('p');
+    value.className = 'routine-stat-value';
+    value.textContent = item.value;
+    stat.appendChild(label);
+    stat.appendChild(value);
+    stats.appendChild(stat);
+  });
+  card.appendChild(stats);
+
+  const mainGrid = document.createElement('div');
+  mainGrid.className = 'routine-main-grid';
+  const left = document.createElement('div');
+  left.className = 'routine-left-column';
+  const right = document.createElement('div');
+  right.className = 'routine-right-column';
+  mainGrid.appendChild(left);
+  mainGrid.appendChild(right);
+  card.appendChild(mainGrid);
+
+  const trendBox = document.createElement('section');
+  trendBox.className = 'routine-panel';
+  const trendTitle = document.createElement('h4');
+  trendTitle.className = 'routine-panel-title';
+  trendTitle.textContent = '近期安全态势趋势 (近7段)';
+  trendBox.appendChild(trendTitle);
+  const bars = document.createElement('div');
+  bars.className = 'routine-trend-bars';
+  const maxVal = Math.max(...vm.trendValues, 1);
+  vm.trendValues.forEach((value, index) => {
+    const col = document.createElement('div');
+    col.className = 'routine-trend-col';
+    const bar = document.createElement('div');
+    bar.className = `routine-trend-bar ${index === vm.trendValues.length - 1 ? 'current' : ''}`;
+    const ratio = Math.max(6, Math.round((value / maxVal) * 100));
+    bar.style.height = `${ratio}%`;
+    bar.title = String(value);
+    col.appendChild(bar);
+    bars.appendChild(col);
+  });
+  trendBox.appendChild(bars);
+  const trendLabels = document.createElement('div');
+  trendLabels.className = 'routine-trend-labels';
+  vm.trendLabels.forEach((label, index) => {
+    const span = document.createElement('span');
+    span.textContent = index === vm.trendLabels.length - 1 ? '今天' : label;
+    trendLabels.appendChild(span);
+  });
+  trendBox.appendChild(trendLabels);
+  left.appendChild(trendBox);
+
+  const assetsBox = document.createElement('section');
+  assetsBox.className = 'routine-panel';
+  const assetsTitle = document.createElement('h4');
+  assetsTitle.className = 'routine-panel-title';
+  assetsTitle.textContent = '受攻击最频繁资产 (TOP 3)';
+  assetsBox.appendChild(assetsTitle);
+  const assetsGrid = document.createElement('div');
+  assetsGrid.className = 'routine-assets-grid';
+  (vm.topAssets.length ? vm.topAssets : [{ ip: '-', count: 0, trend: '+0%' }]).forEach((asset) => {
+    const node = document.createElement('div');
+    node.className = 'routine-asset-card';
+    const ipRow = document.createElement('div');
+    ipRow.className = 'routine-asset-ip-row';
+    const ipNode = document.createElement('p');
+    ipNode.className = 'routine-asset-ip';
+    ipNode.textContent = asset.ip;
+    ipRow.appendChild(ipNode);
+    if (isValidIpv4(asset.ip)) {
+      ipRow.appendChild(createRoutineCopyMiniButton(asset.ip));
+    }
+    node.appendChild(ipRow);
+    const countNode = document.createElement('p');
+    countNode.className = 'routine-asset-count';
+    countNode.textContent = formatMetric(asset.count);
+    node.appendChild(countNode);
+    const trendNode = document.createElement('p');
+    trendNode.className = 'routine-asset-trend';
+    trendNode.textContent = `较平均 ${asset.trend}`;
+    node.appendChild(trendNode);
+    assetsGrid.appendChild(node);
+  });
+  assetsBox.appendChild(assetsGrid);
+  left.appendChild(assetsBox);
+
+  const riskWrap = document.createElement('div');
+  riskWrap.className = 'routine-risk-wrap';
+  const riskTitle = document.createElement('h4');
+  riskTitle.className = 'routine-risk-title';
+  riskTitle.textContent = '关键风险清单';
+  riskWrap.appendChild(riskTitle);
+  const riskRows = vm.risks.length ? vm.risks : [{
+    id: 'R1',
+    severity: '中危',
+    type: '暂无',
+    title: '暂无风险样本',
+    desc: '当前未提取到高危事件样本，请稍后重试。',
+    assets: [],
+    cve: '',
+  }];
+  riskRows.forEach((risk) => {
+    const item = document.createElement('article');
+    item.className = 'routine-risk-item';
+    item.style.borderLeftColor = severityRank(risk.severity) >= severityRank('严重') ? '#ef4444' : '#f59e0b';
+
+    const top = document.createElement('div');
+    top.className = 'routine-risk-head';
+    const leftMeta = document.createElement('div');
+    const metaLine = document.createElement('div');
+    metaLine.className = 'routine-risk-meta';
+    const sev = document.createElement('span');
+    sev.className = `routine-risk-severity ${severityRank(risk.severity) >= severityRank('严重') ? 'high' : 'medium'}`;
+    sev.textContent = risk.severity;
+    const typ = document.createElement('span');
+    typ.className = 'routine-risk-type';
+    typ.textContent = risk.type;
+    metaLine.appendChild(sev);
+    metaLine.appendChild(typ);
+    const riskName = document.createElement('h5');
+    riskName.className = 'routine-risk-name';
+    riskName.textContent = risk.title;
+    leftMeta.appendChild(metaLine);
+    leftMeta.appendChild(riskName);
+    top.appendChild(leftMeta);
+
+    if (risk.cve) {
+      const cveLink = document.createElement('a');
+      cveLink.className = 'routine-risk-cve';
+      cveLink.href = `https://nvd.nist.gov/vuln/detail/${risk.cve.toLowerCase()}`;
+      cveLink.target = '_blank';
+      cveLink.rel = 'noopener noreferrer';
+      cveLink.textContent = risk.cve;
+      top.appendChild(cveLink);
+    }
+    item.appendChild(top);
+
+    const desc = document.createElement('p');
+    desc.className = 'routine-risk-desc';
+    desc.textContent = risk.desc;
+    item.appendChild(desc);
+
+    const assets = document.createElement('div');
+    assets.className = 'routine-risk-assets';
+    const label = document.createElement('span');
+    label.className = 'routine-risk-assets-label';
+    label.textContent = '涉及资产:';
+    assets.appendChild(label);
+    const tagWrap = document.createElement('div');
+    tagWrap.className = 'routine-risk-tags';
+    (risk.assets || []).forEach((ip) => tagWrap.appendChild(createRoutineCopyTag(ip)));
+    assets.appendChild(tagWrap);
+    item.appendChild(assets);
+    riskWrap.appendChild(item);
+  });
+  left.appendChild(riskWrap);
+
+  const actionPanel = document.createElement('section');
+  actionPanel.className = 'routine-action-panel';
+  const actionTitle = document.createElement('h4');
+  actionTitle.className = 'routine-action-panel-title';
+  actionTitle.textContent = '处置建议方案';
+  actionPanel.appendChild(actionTitle);
+
+  const openManualIsolation = async () => {
+    const guide = '主机隔离接口暂未完全打通，请先手动前往 XDR 平台执行主机网络隔离。';
+    setHint(el.playbookHint, guide, 'error');
+    const manualCard = cardTemplate('主机隔离提示');
+    const hostText = vm.isolateItems.length ? vm.isolateItems.join('、') : '请在平台按风险清单逐台确认';
+    manualCard.appendChild(createMarkdownBlock(`${guide}\n\n建议优先隔离主机：${hostText}`));
+    appendPlaybookWorkspaceCard(manualCard);
+    if (state.xdrBaseUrl) {
+      window.open(state.xdrBaseUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const blockSources = async () => {
+    await openRoutineBlockDialog({
+      actionTitle: '封禁恶意攻击源',
+      resultTitle: '网侧封禁结果',
+      blockType: 'SRC_IP',
+      ips: vm.sourceIps,
+      defaultReason: '由安全早报一键处置触发（攻击源封禁）',
+      emptyMessage: '当前未提取到可封禁的攻击源 IP，请先执行深度研判后再处置。',
+    });
+  };
+
+  const blockOutboundIps = async () => {
+    await openRoutineBlockDialog({
+      actionTitle: '封锁恶意外联IP',
+      resultTitle: '外联封锁结果',
+      blockType: 'DST_IP',
+      ips: vm.outboundIps,
+      defaultReason: '由安全早报一键处置触发（恶意外联封锁）',
+      emptyMessage: '当前未提取到可封锁的恶意外联 IP。',
+    });
+  };
+
+  const actions = [
+    {
+      id: 'isolate',
+      title: '风险主机网络隔离',
+      type: '隔离',
+      impact: '高：主机业务将中断',
+      items: vm.isolateItems.length ? vm.isolateItems : ['暂无可提取主机'],
+      buttonText: '确认并一键隔离',
+      onClick: openManualIsolation,
+    },
+    {
+      id: 'block',
+      title: '封禁恶意攻击源',
+      type: '拦截',
+      impact: '中：需确认业务合法出口 IP',
+      items: vm.sourceIps.length ? vm.sourceIps : ['暂无可提取攻击源'],
+      buttonText: '确认并一键处置',
+      disabled: !vm.sourceIps.length,
+      onClick: blockSources,
+    },
+    {
+      id: 'block_outbound',
+      title: '封锁恶意外联IP',
+      type: '拦截',
+      impact: '中：需确认目的地址确为恶意外联',
+      items: vm.outboundIps.length ? vm.outboundIps : ['暂无可提取恶意外联IP'],
+      buttonText: '确认并一键封锁',
+      disabled: !vm.outboundIps.length,
+      onClick: blockOutboundIps,
+    },
+    {
+      id: 'scan',
+      title: '针对性漏洞一键排查',
+      type: '巡检',
+      impact: '低：轻量扫描流量',
+      items: vm.vulnItems.length ? vm.vulnItems : ['暂无可提取漏洞巡检目标'],
+      buttonText: '',
+      onClick: null,
+    },
+  ];
+  actions.forEach((action) => actionPanel.appendChild(buildRoutineActionItem(action)));
+  right.appendChild(actionPanel);
+
+  appendPlaybookWorkspaceCard(card);
+  renderRoutineFollowupCard(vm.nextActions);
 }
 
 function createFormNode(payload) {
@@ -1203,9 +2248,19 @@ function buildReportHeader(title, buttonText = '', onClick = null) {
 
   if (buttonText && typeof onClick === 'function') {
     const actionBtn = document.createElement('button');
+    actionBtn.type = 'button';
     actionBtn.className = 'secondary-btn';
     actionBtn.textContent = buttonText;
-    actionBtn.onclick = onClick;
+    actionBtn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      actionBtn.disabled = true;
+      try {
+        await onClick(event);
+      } finally {
+        actionBtn.disabled = false;
+      }
+    });
     header.appendChild(actionBtn);
   }
   return header;
@@ -1256,9 +2311,16 @@ function buildPlaybookExportHtml(runData) {
   );
 }
 
-function downloadPlaybookReport(runData) {
-  const html = buildPlaybookExportHtml(runData);
-  triggerHtmlDownload(html, `playbook-${runData?.template_id || 'report'}-run-${runData?.run_id || Date.now()}.html`);
+async function downloadPlaybookReport(runData) {
+  const runId = runData?.run_id;
+  let latestRunData = runData;
+  if (runId) {
+    latestRunData = await api(`/api/playbooks/runs/${runId}`);
+    state.playbookRunCache[runId] = latestRunData;
+  }
+  const html = buildPlaybookExportHtml(latestRunData);
+  triggerHtmlDownload(html, `playbook-${latestRunData?.template_id || 'report'}-run-${latestRunData?.run_id || Date.now()}.html`);
+  setHint(el.playbookHint, `报告已生成并开始下载（run_id: ${latestRunData?.run_id || '-'}）。`, 'success');
 }
 
 function renderPlaybookUnifiedCard(runData) {
@@ -1270,7 +2332,15 @@ function renderPlaybookUnifiedCard(runData) {
 
   const card = cardTemplate('', '');
   card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card');
-  card.appendChild(buildReportHeader(`Playbook 报告 · ${displayName}`, '下载报告（HTML）', () => downloadPlaybookReport(runData)));
+  card.appendChild(
+    buildReportHeader(`Playbook 报告 · ${displayName}`, '下载报告（HTML）', async () => {
+      try {
+        await downloadPlaybookReport(runData);
+      } catch (err) {
+        setHint(el.playbookHint, err.message || '报告下载失败', 'error');
+      }
+    }),
+  );
 
   if (summary) {
     const section = document.createElement('div');
@@ -1307,6 +2377,10 @@ function renderPlaybookUnifiedCard(runData) {
 }
 
 function renderPlaybookResult(runData) {
+  if (runData?.template_id === 'routine_check') {
+    renderRoutineCheckCard(runData);
+    return;
+  }
   renderPlaybookUnifiedCard(runData);
 }
 
@@ -1374,12 +2448,9 @@ function formatTriggerLabel(templateId, triggerLabel, params) {
   return `触发场景: ${baseLabel}`;
 }
 
-function renderPlaybookCards(templates) {
-  if (!el.playbookCards) return;
-  el.playbookCards.innerHTML = '';
-
+function resolvePlaybookScenes(templates = state.playbookTemplates) {
   const byId = new Map((templates || []).map((tpl) => [tpl.id, tpl]));
-  const scenes = DEFAULT_PLAYBOOK_SCENES.map((scene) => {
+  return DEFAULT_PLAYBOOK_SCENES.map((scene) => {
     const remote = byId.get(scene.id) || {};
     return {
       ...scene,
@@ -1387,17 +2458,26 @@ function renderPlaybookCards(templates) {
       default_params: { ...scene.default_params, ...(remote.default_params || {}) },
     };
   });
+}
+
+function getSceneById(sceneId) {
+  return resolvePlaybookScenes().find((scene) => scene.id === sceneId) || null;
+}
+
+function renderPlaybookCards(templates) {
+  if (!el.playbookCards) return;
+  el.playbookCards.innerHTML = '';
+
+  const scenes = resolvePlaybookScenes(templates);
 
   scenes.forEach((scene) => {
     const card = document.createElement('article');
     card.className = 'playbook-card-item';
-    const tooltipText = [scene.description || '', scene.hint || ''].filter(Boolean).join(' ');
-    card.dataset.sceneDesc = tooltipText;
-    if (tooltipText) {
-      card.title = tooltipText;
-    }
+    card.dataset.scene = scene.id;
+
     const btn = document.createElement('button');
     btn.className = 'playbook-btn';
+    btn.type = 'button';
     btn.textContent = scene.button_label || scene.name || scene.id;
     btn.onclick = async () => {
       try {
@@ -1412,12 +2492,31 @@ function renderPlaybookCards(templates) {
       }
     };
     card.appendChild(btn);
-    if (tooltipText) {
+
+    if (scene.description || scene.hint) {
       const tooltip = document.createElement('div');
       tooltip.className = 'scene-tooltip';
-      tooltip.textContent = tooltipText;
+
+      const ttTitle = document.createElement('div');
+      ttTitle.className = 'scene-tooltip-title';
+      ttTitle.textContent = scene.name || scene.id;
+      tooltip.appendChild(ttTitle);
+
+      if (scene.description) {
+        const ttDesc = document.createElement('div');
+        ttDesc.className = 'scene-tooltip-desc';
+        ttDesc.textContent = scene.description;
+        tooltip.appendChild(ttDesc);
+      }
+      if (scene.hint) {
+        const ttHint = document.createElement('div');
+        ttHint.className = 'scene-tooltip-hint';
+        ttHint.textContent = `提示：${scene.hint}`;
+        tooltip.appendChild(ttHint);
+      }
       card.appendChild(tooltip);
     }
+
     el.playbookCards.appendChild(card);
   });
 }
@@ -1429,10 +2528,172 @@ async function refreshPlaybookTemplates() {
     state.playbookTemplates = templates;
     renderPlaybookCards(templates);
     setHint(el.playbookHint, `已加载 ${templates.length} 个场景模板。`, 'success');
+    updateSlashMenuFromInput();
   } catch (err) {
     state.playbookTemplates = [];
     renderPlaybookCards([]);
     setHint(el.playbookHint, err.message || 'Playbook 模板加载失败', 'error');
+    updateSlashMenuFromInput();
+  }
+}
+
+function resolveSlashCommands() {
+  const sceneById = new Map(resolvePlaybookScenes().map((scene) => [scene.id, scene]));
+  return SLASH_COMMANDS.map((item) => {
+    const scene = sceneById.get(item.id) || {};
+    return {
+      ...item,
+      sceneName: scene.name || item.id,
+      buttonLabel: scene.button_label || scene.name || item.id,
+      hint: scene.hint || '',
+    };
+  });
+}
+
+function hideSlashCommandMenu() {
+  state.slashVisible = false;
+  state.slashActiveIndex = 0;
+  state.slashFiltered = [];
+  if (el.slashCommandMenu) {
+    el.slashCommandMenu.classList.add('hidden');
+    el.slashCommandMenu.innerHTML = '';
+  }
+}
+
+function renderSlashCommandMenu(items) {
+  if (!el.slashCommandMenu) return;
+  if (!items.length) {
+    hideSlashCommandMenu();
+    return;
+  }
+  state.slashVisible = true;
+  state.slashFiltered = items;
+  if (state.slashActiveIndex >= items.length) {
+    state.slashActiveIndex = 0;
+  }
+
+  el.slashCommandMenu.classList.remove('hidden');
+  el.slashCommandMenu.innerHTML = '';
+
+  items.forEach((item, index) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'slash-command-item';
+    option.dataset.commandId = item.id;
+    option.dataset.commandIndex = String(index);
+    option.setAttribute('role', 'option');
+    const left = document.createElement('div');
+    left.className = 'slash-command-main';
+    const cmd = document.createElement('div');
+    cmd.className = 'slash-command';
+    cmd.textContent = item.command;
+    const desc = document.createElement('div');
+    desc.className = 'slash-command-desc';
+    desc.textContent = item.description || item.hint || item.sceneName;
+    left.appendChild(cmd);
+    left.appendChild(desc);
+    option.appendChild(left);
+
+    const badge = document.createElement('span');
+    badge.className = 'slash-command-badge';
+    badge.textContent = item.sceneName || item.id;
+    option.appendChild(badge);
+
+    option.addEventListener('mouseenter', () => {
+      setSlashActiveIndex(index);
+    });
+    option.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
+    option.addEventListener('click', async () => {
+      await executeSlashCommand(item);
+    });
+    el.slashCommandMenu.appendChild(option);
+  });
+
+  paintSlashActiveOption();
+}
+
+function filterSlashCommands(inputText) {
+  const text = String(inputText || '').trim();
+  if (!text.startsWith('/')) return [];
+  const query = text.slice(1).trim().toLowerCase();
+  const commands = resolveSlashCommands();
+  if (!query) return commands;
+  return commands.filter((item) => {
+    const haystack = [item.command, item.sceneName, item.description, ...(item.aliases || [])].join(' ').toLowerCase();
+    return haystack.includes(query);
+  });
+}
+
+function updateSlashMenuFromInput() {
+  const inputValue = el.chatMessage?.value || '';
+  const filtered = filterSlashCommands(inputValue);
+  if (filtered.length) {
+    renderSlashCommandMenu(filtered);
+  } else {
+    hideSlashCommandMenu();
+  }
+}
+
+function paintSlashActiveOption() {
+  if (!el.slashCommandMenu) return;
+  const items = el.slashCommandMenu.querySelectorAll('.slash-command-item');
+  items.forEach((node) => {
+    const idx = Number(node.dataset.commandIndex || -1);
+    const active = idx === state.slashActiveIndex;
+    node.classList.toggle('active', active);
+    node.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+}
+
+function setSlashActiveIndex(index) {
+  if (!state.slashFiltered.length) return;
+  const max = state.slashFiltered.length;
+  state.slashActiveIndex = ((index % max) + max) % max;
+  paintSlashActiveOption();
+}
+
+function moveSlashActive(step) {
+  if (!state.slashFiltered.length) return;
+  setSlashActiveIndex(state.slashActiveIndex + step);
+}
+
+function getActiveSlashCommand() {
+  if (!state.slashFiltered.length) return null;
+  return state.slashFiltered[state.slashActiveIndex] || state.slashFiltered[0] || null;
+}
+
+function resolveSlashCommand(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text.startsWith('/')) return null;
+  const commands = resolveSlashCommands();
+  const lower = text.toLowerCase();
+  return (
+    commands.find((item) => item.command.toLowerCase() === lower)
+    || commands.find((item) => (item.aliases || []).some((alias) => alias.toLowerCase() === lower))
+    || (text === '/' ? commands[0] : null)
+  );
+}
+
+async function executeSlashCommand(command) {
+  if (!command) return;
+  const scene = getSceneById(command.id);
+  if (!scene) {
+    setHint(el.playbookHint, `未找到场景：${command.id}`, 'error');
+    return;
+  }
+  hideSlashCommandMenu();
+  if (el.chatMessage) {
+    el.chatMessage.value = '';
+    el.chatMessage.focus();
+  }
+  try {
+    const params = buildSceneParams(scene);
+    if (!params) return;
+    await runPlaybook(scene.id, params, scene.name || scene.id);
+  } catch (err) {
+    setHint(el.playbookHint, err.message || '快捷指令执行失败', 'error');
   }
 }
 
@@ -1733,6 +2994,7 @@ async function checkAuthStatus() {
     const status = await api('/api/auth/status');
     if (!status.authenticated) return;
     const url = status.base_url || '';
+    state.xdrBaseUrl = url;
     const baseUrlInput = document.getElementById('baseUrl');
     if (baseUrlInput && !baseUrlInput.value && url) {
       baseUrlInput.value = url;
@@ -1757,6 +3019,7 @@ el.loginForm.addEventListener('submit', async (e) => {
     const payload = collectLoginPayload();
     const result = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) });
     setHint(el.loginResult, result.message, 'success');
+    state.xdrBaseUrl = payload.base_url;
     setAuthState(true, `已登录平台：${payload.base_url}`);
     await bootWorkspace();
   } catch (err) {
@@ -1767,12 +3030,15 @@ el.loginForm.addEventListener('submit', async (e) => {
 
 el.logoutBtn.onclick = () => {
   state.sessionId = `session-${Date.now()}`;
+  state.xdrBaseUrl = '';
   state.playbookTemplates = [];
   state.activePlaybookRunId = null;
   state.playbookRunCache = {};
+  state.routineBlockDraft = null;
   el.chatStream.innerHTML = '';
   if (el.playbookCards) el.playbookCards.innerHTML = '';
   if (el.playbookHint) setHint(el.playbookHint, '');
+  closeDialog(el.routineBlockDialog);
   clearPlaybookWorkspace();
   setHint(el.loginResult, '已退出到登录页（本地会话已重置）。', 'success');
   setAuthState(false);
@@ -1804,12 +3070,37 @@ if (el.closePlaybookWorkspaceBtn) {
   };
 }
 
+if (el.routineBlockCancel) {
+  el.routineBlockCancel.onclick = () => {
+    state.routineBlockDraft = null;
+    closeDialog(el.routineBlockDialog);
+  };
+}
+
+if (el.routineBlockConfirm) {
+  el.routineBlockConfirm.onclick = async () => {
+    await submitRoutineBlockDialog();
+  };
+}
+
 el.settingsDialog.addEventListener('click', (event) => {
   const rect = el.settingsDialog.getBoundingClientRect();
   const isOutside =
     event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
   if (isOutside) closeDialog(el.settingsDialog);
 });
+
+if (el.routineBlockDialog) {
+  el.routineBlockDialog.addEventListener('click', (event) => {
+    const rect = el.routineBlockDialog.getBoundingClientRect();
+    const isOutside =
+      event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+    if (isOutside) {
+      state.routineBlockDraft = null;
+      closeDialog(el.routineBlockDialog);
+    }
+  });
+}
 
 
 el.providerType.addEventListener('change', initProviderUI);
@@ -1987,10 +3278,79 @@ if (el.coreAssetForm) {
 window.refreshSafetyRules = refreshSafetyRules;
 window.refreshCoreAssets = refreshCoreAssets;
 
+if (el.chatMessage) {
+  el.chatMessage.addEventListener('input', () => {
+    updateSlashMenuFromInput();
+  });
+  el.chatMessage.addEventListener('focus', () => {
+    updateSlashMenuFromInput();
+  });
+  el.chatMessage.addEventListener('keyup', () => {
+    updateSlashMenuFromInput();
+  });
+  el.chatMessage.addEventListener('keydown', async (event) => {
+    if (event.key === '/') {
+      setTimeout(() => {
+        updateSlashMenuFromInput();
+      }, 0);
+    }
+    if (!state.slashVisible) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveSlashActive(1);
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveSlashActive(-1);
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideSlashCommandMenu();
+      return;
+    }
+    if (event.key === 'Enter') {
+      const trimmed = (el.chatMessage.value || '').trim();
+      if (trimmed.startsWith('/')) {
+        event.preventDefault();
+        const command = resolveSlashCommand(trimmed) || getActiveSlashCommand();
+        if (command) {
+          await executeSlashCommand(command);
+        }
+      }
+    }
+  });
+}
+
+if (el.slashCommandMenu) {
+  el.slashCommandMenu.addEventListener('mousedown', (event) => {
+    event.preventDefault();
+  });
+}
+
+document.addEventListener('click', (event) => {
+  if (!state.slashVisible) return;
+  const target = event.target;
+  if (target === el.chatMessage) return;
+  if (el.slashCommandMenu && el.slashCommandMenu.contains(target)) return;
+  hideSlashCommandMenu();
+});
+
 el.chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = el.chatMessage.value.trim();
   if (!message) return;
+  if (message.startsWith('/')) {
+    const command = resolveSlashCommand(message) || getActiveSlashCommand();
+    if (command) {
+      await executeSlashCommand(command);
+      return;
+    }
+    setHint(el.playbookHint, '未匹配到快捷指令，可输入 / 选择四个核心场景。', 'error');
+    return;
+  }
+  hideSlashCommandMenu();
   el.chatMessage.value = '';
 
   const userCard = cardTemplate('你', 'user');
