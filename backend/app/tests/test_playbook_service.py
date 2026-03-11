@@ -343,6 +343,11 @@ class PlaybookServiceTest(unittest.TestCase):
                 hunting_labels = [action.get("label") or "" for action in hunting_result.get("next_actions", [])]
                 self.assertTrue(any("执行IP 8.8.8.8封禁" in label for label in hunting_labels))
                 self.assertIn("告警轨迹分析完成", hunting_result.get("summary", ""))
+                threat_view = hunting_result.get("threat_view", {})
+                self.assertEqual(threat_view.get("target_ip"), "8.8.8.8")
+                self.assertTrue(threat_view.get("kill_chain_stages"))
+                self.assertTrue(threat_view.get("stage_evidence_cards"))
+                self.assertTrue(threat_view.get("alert_table_rows"))
 
     def test_parallel_nodes_tolerate_dict_proof_payload(self):
         fake_requester = PlaybookRequester(proof_as_dict=True)

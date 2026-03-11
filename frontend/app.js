@@ -6,6 +6,7 @@ const state = {
   coreAssets: [],
   activePlaybookRunId: null,
   playbookRunCache: {},
+  playbookOpenTokens: {},
   routineBlockDraft: null,
   slashVisible: false,
   slashActiveIndex: 0,
@@ -243,6 +244,7 @@ function setAuthState(authenticated, statusText = '', isConnected = true) {
     clearPlaybookWorkspace();
     state.activePlaybookRunId = null;
     state.playbookRunCache = {};
+    state.playbookOpenTokens = {};
     hideSlashCommandMenu();
   }
   const mainNav = document.getElementById('mainNav');
@@ -369,6 +371,18 @@ function appendPlaybookWorkspaceCard(node) {
   if (!el.playbookWorkspaceBody) return;
   const empty = el.playbookWorkspaceBody.querySelector('.playbook-workspace-empty');
   if (empty) empty.remove();
+  const runId = String(node?.dataset?.playbookRunId || '').trim();
+  const cardType = String(node?.dataset?.playbookCardType || '').trim();
+  if (runId && cardType) {
+    const existingCards = Array.from(
+      el.playbookWorkspaceBody.querySelectorAll('.chat-card[data-playbook-run-id][data-playbook-card-type]')
+    ).filter((item) => item.dataset.playbookRunId === runId && item.dataset.playbookCardType === cardType);
+    if (existingCards.length) {
+      existingCards[0].replaceWith(node);
+      existingCards.slice(1).forEach((item) => item.remove());
+      return;
+    }
+  }
   el.playbookWorkspaceBody.appendChild(node);
   el.playbookWorkspaceBody.scrollTop = el.playbookWorkspaceBody.scrollHeight;
 }
@@ -423,6 +437,9 @@ function renderPlaybookLaunchFeedback(templateId, triggerLabel = '', runId = nul
 
 async function openPlaybookRunById(runId, templateId = '', opts = {}) {
   if (!runId) return null;
+  const runKey = String(runId);
+  const openToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  state.playbookOpenTokens[runKey] = openToken;
   state.activePlaybookRunId = runId;
   setPlaybookWorkspaceOpen(true);
   if (opts.resetWorkspace !== false && el.playbookWorkspaceBody) {
@@ -430,17 +447,25 @@ async function openPlaybookRunById(runId, templateId = '', opts = {}) {
   }
 
   const runData = await api(`/api/playbooks/runs/${runId}`);
+  if (state.playbookOpenTokens[runKey] !== openToken) {
+    return runData;
+  }
   state.playbookRunCache[runId] = runData;
   const resolvedTemplateId = runData.template_id || templateId || 'unknown';
   const progressUi = createPlaybookProgressCard(runId, resolvedTemplateId);
   updatePlaybookProgress(progressUi, runData);
 
   if (runData.status === 'Finished' || runData.status === 'Failed') {
-    renderPlaybookResult(runData);
+    if (state.playbookOpenTokens[runKey] === openToken) {
+      renderPlaybookResult(runData);
+    }
     return runData;
   }
 
   const finalRun = await pollPlaybookRun(runId, progressUi, resolvedTemplateId);
+  if (state.playbookOpenTokens[runKey] !== openToken) {
+    return finalRun;
+  }
   state.playbookRunCache[runId] = finalRun;
   if (state.activePlaybookRunId === runId) {
     renderPlaybookResult(finalRun);
@@ -664,6 +689,7 @@ function createPlaybookProgressCard(runId, templateId) {
   const displayName = getPlaybookDisplayName(templateId);
   const card = cardTemplate(`Playbook 运行中 · ${templateId}`);
   card.dataset.playbookRunId = String(runId);
+  card.dataset.playbookCardType = 'progress';
   card.classList.add('playbook-progress-card', 'workspace-panel-card');
   card.dataset.playbookTemplate = templateId || '';
 
@@ -1699,6 +1725,10 @@ function renderRoutineFollowupCard(nextActions) {
 function renderRoutineCheckCard(runData) {
   const vm = buildRoutineCheckViewModel(runData);
   const card = cardTemplate('', '');
+  if (runData?.run_id != null) {
+    card.dataset.playbookRunId = String(runData.run_id);
+  }
+  card.dataset.playbookCardType = 'routine-report';
   card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card', 'routine-report-card');
 
   const header = document.createElement('div');
@@ -1972,6 +2002,568 @@ function renderRoutineCheckCard(runData) {
 
   appendPlaybookWorkspaceCard(card);
   renderRoutineFollowupCard(vm.nextActions);
+}
+
+function parseThreatSummaryStats(summary) {
+  const text = String(summary || '');
+  const matched = text.match(/命中\s*(\d+)\s*条告警/);
+  const src = text.match(/源IP告警\s*(\d+)/);
+  const dst = text.match(/目的IP告警\s*(\d+)/);
+  const windowDays = text.match(/(\d+)\s*天/);
+  return {
+    matchedTotal: matched ? toMetricNumber(matched[1]) : 0,
+    srcTotal: src ? toMetricNumber(src[1]) : 0,
+    dstTotal: dst ? toMetricNumber(dst[1]) : 0,
+    windowDays: windowDays ? toMetricNumber(windowDays[1]) : 90,
+  };
+}
+
+function parseThreatStoryStageCards(storyText) {
+  const text = String(storyText || '');
+  if (!text) return [];
+  const cards = [];
+  const sections = text.matchAll(/####\s*(侦察|利用|横向|结果)\s*([\s\S]*?)(?=####\s*(侦察|利用|横向|结果)|$)/g);
+  for (const item of sections) {
+    const stageName = item[1];
+    const body = String(item[2] || '').trim();
+    const alertIds = dedupText((body.match(/(?:incident|alert)-[a-zA-Z0-9-]+/g) || []).map((id) => id.trim())).slice(0, 6);
+    cards.push({
+      stage_name: stageName,
+      stage_badge: `${stageName}阶段`,
+      title: '阶段证据',
+      attack_phase: '',
+      summary: body || '暂无阶段证据说明。',
+      observed: true,
+      alert_ids: alertIds,
+      tags: [],
+      entities: [],
+    });
+  }
+  return cards;
+}
+
+function buildThreatHuntingViewModel(runData) {
+  const ALERT_TABLE_DISPLAY_LIMIT = 10;
+  const result = runData?.result || {};
+  const cards = Array.isArray(result.cards) ? result.cards : [];
+  const threatView = result?.threat_view || {};
+  const summary = String(result.summary || '').trim();
+  const summaryStats = parseThreatSummaryStats(summary);
+
+  const targetIp = String(
+    threatView?.target_ip
+    || runData?.input?.params?.ip
+    || (summary.match(IPV4_REGEX) || [])[0]
+    || '-',
+  ).trim() || '-';
+  const targetType = String(threatView?.target_type || (isPrivateIpv4(targetIp) ? '内部终端' : '外部IP'));
+
+  const stats = {
+    matchedTotal: toMetricNumber(threatView?.stats?.matched_total ?? summaryStats.matchedTotal),
+    srcTotal: toMetricNumber(threatView?.stats?.src_alert_total ?? summaryStats.srcTotal),
+    dstTotal: toMetricNumber(threatView?.stats?.dst_alert_total ?? summaryStats.dstTotal),
+    windowDays: toMetricNumber(threatView?.window_days ?? summaryStats.windowDays ?? 90),
+  };
+
+  const riskLevel = String(threatView?.risk?.level || (summary.match(/风险等级\s*([高中低])/)?.[1] || '中')).trim() || '中';
+  const riskLabelMap = {
+    低: '低风险 (Low)',
+    中: '中风险 (Medium)',
+    高: '高风险 (High)',
+  };
+  const riskDetailMap = {
+    低: '当前窗口未观测到持续性高危攻击行为',
+    中: '存在持续攻击迹象，建议加强监测',
+    高: '存在实质性攻击行为，建议立即处置',
+  };
+
+  const decisionCard = cards.find((item) => item?.type === 'text' && String(item?.data?.title || '').includes('处置结论'));
+  const actionDecision = String(
+    threatView?.risk?.action_decision
+    || decisionCard?.data?.text
+    || '建议继续观察',
+  ).replace(/\*/g, '').trim();
+  const actionHint = String(threatView?.risk?.action_hint || (actionDecision.includes('立即封禁') ? '建议立即执行微隔离/封禁' : '建议持续观察并加强监测')).trim();
+
+  const stageMeta = {
+    侦察: { title: '初步侦察', attack: 'ATT&CK Reconnaissance', cardTitle: '扫描与探测脆弱点', style: 'recon' },
+    利用: { title: '漏洞利用', attack: 'ATT&CK Initial Access / Execution', cardTitle: '漏洞利用与执行', style: 'exploit' },
+    横向: { title: '横向与控制', attack: 'ATT&CK Lateral Movement / Command and Control', cardTitle: '建立控制与横向移动', style: 'lateral' },
+    结果: { title: '结果', attack: 'ATT&CK Exfiltration / Impact', cardTitle: '影响与结果评估', style: 'impact' },
+  };
+  const orderedStages = ['侦察', '利用', '横向', '结果'];
+
+  const rawStageCards = Array.isArray(threatView?.stage_evidence_cards) && threatView.stage_evidence_cards.length
+    ? threatView.stage_evidence_cards
+    : parseThreatStoryStageCards(threatView?.story || cards.find((item) => item?.type === 'text' && String(item?.data?.title || '').includes('攻击故事线'))?.data?.text || '');
+  const stageCardByName = new Map(
+    (rawStageCards || [])
+      .map((item) => [String(item?.stage_name || '').trim(), item])
+      .filter(([name]) => orderedStages.includes(name)),
+  );
+  const stageCards = orderedStages.map((stageName) => {
+    const raw = stageCardByName.get(stageName) || {};
+    return {
+      stageName,
+      stageBadge: raw?.stage_badge || `${stageName}阶段`,
+      title: raw?.title || stageMeta[stageName].cardTitle,
+      attackPhase: raw?.attack_phase || stageMeta[stageName].attack,
+      summary: String(raw?.summary || '当前窗口未观测到该阶段的高置信度告警证据。'),
+      observed: Boolean(raw?.observed),
+      alertIds: dedupText(raw?.alert_ids || []),
+      tags: dedupText(raw?.tags || []),
+      entities: dedupText(raw?.entities || []),
+      style: stageMeta[stageName].style,
+    };
+  });
+
+  const rawChain = Array.isArray(threatView?.kill_chain_stages) ? threatView.kill_chain_stages : [];
+  const rawChainMap = new Map(
+    rawChain
+      .map((item) => [String(item?.stage_name || '').trim(), item])
+      .filter(([name]) => orderedStages.includes(name)),
+  );
+  const killChain = orderedStages.map((stageName) => {
+    const raw = rawChainMap.get(stageName) || {};
+    const fallbackCard = stageCardByName.get(stageName) || {};
+    return {
+      stageName,
+      title: raw?.title || stageMeta[stageName].title,
+      attackPhase: raw?.attack_phase || stageMeta[stageName].attack,
+      observed: typeof raw?.observed === 'boolean' ? raw.observed : Boolean(fallbackCard?.observed),
+      time: String(raw?.time || ''),
+      highlight: String(raw?.highlight || ''),
+      style: stageMeta[stageName].style,
+    };
+  });
+
+  const fallbackTableCard = cards.find((item) => item?.type === 'table' && String(item?.data?.title || '').includes('命中告警清单'));
+  const fallbackTableRows = Array.isArray(fallbackTableCard?.data?.rows) ? fallbackTableCard.data.rows : [];
+  const normalizeDirection = (rawDirection) => {
+    const raw = String(rawDirection || '').trim();
+    if (raw === '源') {
+      return isPrivateIpv4(targetIp) ? '内部 -> 外部' : '外部 -> 内部';
+    }
+    if (raw === '目的') {
+      return isPrivateIpv4(targetIp) ? '外部 -> 内部' : '内部 -> 外部';
+    }
+    if (raw === '源/目的' || raw === '双向') {
+      return '-';
+    }
+    return raw || '-';
+  };
+  const rawAlertRows = Array.isArray(threatView?.alert_table_rows) && threatView.alert_table_rows.length
+    ? threatView.alert_table_rows
+    : fallbackTableRows.map((row) => ({
+      recent_time: row?.endTime || '-',
+      direction: normalizeDirection(row?.direction),
+      alert_name: row?.name || '-',
+      threat_id: row?.threatId || row?.uuId || '-',
+      severity: row?.incidentSeverity || '-',
+      status: row?.dealStatus || '-',
+    }));
+  const alertRows = rawAlertRows.slice(0, ALERT_TABLE_DISPLAY_LIMIT).map((row, idx) => ({
+    index: idx + 1,
+    recentTime: String(row?.recent_time || '-'),
+    direction: normalizeDirection(row?.direction),
+    alertName: String(row?.alert_name || '-'),
+    threatId: String(row?.threat_id || row?.alert_id || row?.uuId || '-'),
+    severity: String(row?.severity || '-'),
+    status: String(row?.status || '-'),
+  }));
+
+  const nextActions = Array.isArray(result?.next_actions) ? result.next_actions : [];
+  const dangerAction = nextActions.find((action) => action?.style === 'danger')
+    || nextActions.find((action) => String(action?.label || '').includes('封禁'))
+    || null;
+  const actionLabel = dangerAction?.label || `执行 IP ${targetIp} 封禁 (提交流程)`;
+
+  const finishedAt = runData?.finished_at || runData?.started_at;
+  let finishedAtText = '-';
+  if (finishedAt) {
+    const dt = new Date(finishedAt);
+    if (!Number.isNaN(dt.getTime())) {
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const d = String(dt.getDate()).padStart(2, '0');
+      const h = String(dt.getHours()).padStart(2, '0');
+      const mm = String(dt.getMinutes()).padStart(2, '0');
+      const s = String(dt.getSeconds()).padStart(2, '0');
+      finishedAtText = `${y}-${m}-${d} ${h}:${mm}:${s}`;
+    }
+  }
+
+  return {
+    targetIp,
+    targetType,
+    finishedAtText,
+    stats,
+    risk: {
+      level: riskLevel,
+      levelLabel: String(threatView?.risk?.level_label || riskLabelMap[riskLevel] || riskLabelMap['中']),
+      levelDetail: String(threatView?.risk?.level_detail || riskDetailMap[riskLevel] || riskDetailMap['中']),
+      actionDecision,
+      actionHint,
+    },
+    killChain,
+    stageCards,
+    alertRows,
+    alertTableTotal: toMetricNumber(threatView?.alert_table_total ?? stats.matchedTotal ?? alertRows.length),
+    alertTableCoreCount: alertRows.length,
+    actionLabel,
+    dangerAction,
+    nextActions,
+  };
+}
+
+function showThreatCardToast(card, message) {
+  const toast = card.querySelector('.threat-report-toast');
+  const text = card.querySelector('.threat-report-toast-text');
+  if (!toast || !text) {
+    setHint(el.playbookHint, message, 'success');
+    return;
+  }
+  text.textContent = message;
+  toast.classList.add('show');
+  const timer = Number(card.dataset.toastTimer || '0');
+  if (timer) {
+    clearTimeout(timer);
+  }
+  const timeoutId = window.setTimeout(() => {
+    toast.classList.remove('show');
+    card.dataset.toastTimer = '0';
+  }, 1800);
+  card.dataset.toastTimer = String(timeoutId);
+}
+
+function renderThreatHuntingCard(runData) {
+  const vm = buildThreatHuntingViewModel(runData);
+  const card = cardTemplate('', '');
+  if (runData?.run_id != null) {
+    card.dataset.playbookRunId = String(runData.run_id);
+  }
+  card.dataset.playbookCardType = 'threat-report';
+  card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card', 'threat-report-card');
+
+  const header = document.createElement('div');
+  header.className = 'threat-report-header';
+  const titleWrap = document.createElement('div');
+  const title = document.createElement('h3');
+  title.className = 'threat-report-title';
+  title.textContent = 'Playbook 报告 · 攻击者活动轨迹';
+  const subtitle = document.createElement('p');
+  subtitle.className = 'threat-report-subtitle';
+  subtitle.textContent = `溯源分析完成时间: ${vm.finishedAtText}`;
+  titleWrap.appendChild(title);
+  titleWrap.appendChild(subtitle);
+  header.appendChild(titleWrap);
+  card.appendChild(header);
+
+  const summaryGrid = document.createElement('div');
+  summaryGrid.className = 'threat-summary-grid';
+
+  const targetStat = document.createElement('div');
+  targetStat.className = 'threat-summary-card';
+  targetStat.innerHTML = '<div class="label">目标溯源 IP</div>';
+  const ipRow = document.createElement('div');
+  ipRow.className = 'threat-ip-value-row';
+  const ipValue = document.createElement('div');
+  ipValue.className = 'value mono';
+  ipValue.textContent = vm.targetIp;
+  const ipCopyBtn = document.createElement('button');
+  ipCopyBtn.type = 'button';
+  ipCopyBtn.className = 'threat-copy-icon-btn';
+  ipCopyBtn.textContent = '复制';
+  ipCopyBtn.title = `复制 ${vm.targetIp}`;
+  ipCopyBtn.onclick = async () => {
+    const ok = await copyTextCompat(vm.targetIp);
+    if (ok) {
+      showThreatCardToast(card, `IP 已复制: ${vm.targetIp}`);
+    } else {
+      setHint(el.playbookHint, '复制失败，请手动复制。', 'error');
+    }
+  };
+  ipRow.appendChild(ipValue);
+  ipRow.appendChild(ipCopyBtn);
+  targetStat.appendChild(ipRow);
+  const targetMeta = document.createElement('div');
+  targetMeta.className = 'meta';
+  targetMeta.innerHTML = `<span>${escapeHtml(vm.targetType)}</span>`;
+  targetStat.appendChild(targetMeta);
+  summaryGrid.appendChild(targetStat);
+
+  const countStat = document.createElement('div');
+  countStat.className = 'threat-summary-card';
+  countStat.innerHTML = `<div class="label">${escapeHtml(String(vm.stats.windowDays))}天内命中告警</div><div class="value">${escapeHtml(formatMetric(vm.stats.matchedTotal))} <span class="unit">条</span></div><div class="meta"><span>源: ${escapeHtml(formatMetric(vm.stats.srcTotal))}</span><span class="sep">|</span><span>目的: ${escapeHtml(formatMetric(vm.stats.dstTotal))}</span></div>`;
+  summaryGrid.appendChild(countStat);
+
+  const riskStat = document.createElement('div');
+  riskStat.className = 'threat-summary-card risk';
+  riskStat.innerHTML = `<div class="label">综合风险评级</div><div class="value">${escapeHtml(vm.risk.levelLabel)}</div><div class="meta">${escapeHtml(vm.risk.levelDetail)}</div>`;
+  summaryGrid.appendChild(riskStat);
+
+  const actionStat = document.createElement('div');
+  actionStat.className = 'threat-summary-card action';
+  actionStat.innerHTML = `<div class="label">智能处置建议</div><div class="value">${escapeHtml(vm.risk.actionHint)}</div><div class="meta">${escapeHtml(vm.risk.actionDecision)}</div>`;
+  summaryGrid.appendChild(actionStat);
+  card.appendChild(summaryGrid);
+
+  const chain = document.createElement('section');
+  chain.className = 'threat-chain-wrap';
+  const chainTitle = document.createElement('h4');
+  chainTitle.className = 'threat-section-title';
+  chainTitle.textContent = '攻击故事线全景图';
+  chain.appendChild(chainTitle);
+
+  const track = document.createElement('div');
+  track.className = 'threat-chain-track';
+  const baseLine = document.createElement('div');
+  baseLine.className = 'threat-chain-line-base';
+  track.appendChild(baseLine);
+  const progressLine = document.createElement('div');
+  progressLine.className = 'threat-chain-line-progress';
+  const lastObserved = (() => {
+    const idx = [...vm.killChain].reverse().findIndex((item) => item.observed);
+    if (idx < 0) return -1;
+    return vm.killChain.length - idx - 1;
+  })();
+  const ratio = lastObserved < 0 ? 0 : Math.max(0, Math.min(1, lastObserved / (vm.killChain.length - 1)));
+  progressLine.style.width = `${Math.round(ratio * 100)}%`;
+  track.appendChild(progressLine);
+  const nodes = document.createElement('div');
+  nodes.className = 'threat-chain-nodes';
+  vm.killChain.forEach((stage) => {
+    const node = document.createElement('div');
+    node.className = `threat-chain-node ${stage.style} ${stage.observed ? 'observed' : 'muted'}`;
+    const dot = document.createElement('div');
+    dot.className = 'threat-chain-dot';
+    dot.textContent = stage.observed ? '●' : '○';
+    const name = document.createElement('div');
+    name.className = 'threat-chain-name';
+    name.textContent = stage.title;
+    const meta = document.createElement('div');
+    meta.className = 'threat-chain-meta';
+    meta.textContent = stage.observed ? (stage.time || stage.highlight || stage.attackPhase) : '未观测到';
+    node.appendChild(dot);
+    node.appendChild(name);
+    node.appendChild(meta);
+    nodes.appendChild(node);
+  });
+  track.appendChild(nodes);
+  chain.appendChild(track);
+  card.appendChild(chain);
+
+  const evidenceWrap = document.createElement('section');
+  evidenceWrap.className = 'threat-evidence-wrap';
+  const evidenceTitle = document.createElement('h4');
+  evidenceTitle.className = 'threat-section-title';
+  evidenceTitle.textContent = '行为阶段详细分析';
+  evidenceWrap.appendChild(evidenceTitle);
+  vm.stageCards.forEach((stage) => {
+    const item = document.createElement('article');
+    item.className = `threat-stage-card ${stage.style} ${stage.observed ? '' : 'muted'}`.trim();
+
+    const line1 = document.createElement('div');
+    line1.className = 'threat-stage-head';
+    const badge = document.createElement('span');
+    badge.className = 'threat-stage-badge';
+    badge.textContent = stage.stageBadge;
+    const titleNode = document.createElement('h5');
+    titleNode.className = 'threat-stage-title';
+    titleNode.textContent = stage.title;
+    line1.appendChild(badge);
+    line1.appendChild(titleNode);
+    item.appendChild(line1);
+
+    const attack = document.createElement('p');
+    attack.className = 'threat-stage-attack';
+    attack.textContent = stage.attackPhase;
+    item.appendChild(attack);
+
+    const summaryNode = document.createElement('p');
+    summaryNode.className = 'threat-stage-summary';
+    summaryNode.textContent = stage.summary;
+    item.appendChild(summaryNode);
+
+    const chips = document.createElement('div');
+    chips.className = 'threat-stage-chips';
+    stage.alertIds.forEach((alertId) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'threat-copy-chip';
+      btn.title = `点击复制完整告警ID: ${alertId}`;
+      btn.textContent = `${alertId.slice(0, 18)}...`;
+      btn.onclick = async () => {
+        const ok = await copyTextCompat(alertId);
+        if (ok) {
+          showThreatCardToast(card, `告警 ID 已复制: ${alertId.slice(0, 18)}...`);
+        } else {
+          setHint(el.playbookHint, '复制失败，请手动复制。', 'error');
+        }
+      };
+      chips.appendChild(btn);
+    });
+    stage.tags.forEach((tag) => {
+      const tagNode = document.createElement('span');
+      tagNode.className = 'threat-tag-chip';
+      tagNode.textContent = `标签: ${tag}`;
+      chips.appendChild(tagNode);
+    });
+    stage.entities.forEach((entity) => {
+      const entityNode = document.createElement('button');
+      entityNode.type = 'button';
+      entityNode.className = 'threat-entity-chip';
+      entityNode.textContent = entity;
+      entityNode.title = `点击复制IP: ${entity}`;
+      entityNode.onclick = async () => {
+        const ok = await copyTextCompat(entity);
+        if (ok) {
+          showThreatCardToast(card, `IP 已复制: ${entity}`);
+        } else {
+          setHint(el.playbookHint, '复制失败，请手动复制。', 'error');
+        }
+      };
+      chips.appendChild(entityNode);
+    });
+    if (chips.childNodes.length) {
+      item.appendChild(chips);
+    }
+    evidenceWrap.appendChild(item);
+  });
+  card.appendChild(evidenceWrap);
+
+  const alertPanel = document.createElement('section');
+  alertPanel.className = 'threat-alert-panel';
+  const collapseHead = document.createElement('button');
+  collapseHead.type = 'button';
+  collapseHead.className = 'threat-alert-head';
+  const headingText = document.createElement('span');
+  headingText.textContent = `命中告警清单 (已聚合重复扫描，共 ${formatMetric(vm.alertTableCoreCount)} 条核心证据)`;
+  const chevron = document.createElement('span');
+  chevron.className = 'threat-alert-chevron';
+  chevron.textContent = '▾';
+  collapseHead.appendChild(headingText);
+  collapseHead.appendChild(chevron);
+  alertPanel.appendChild(collapseHead);
+
+  const alertBody = document.createElement('div');
+  alertBody.className = 'threat-alert-body';
+  const tableWrap = document.createElement('div');
+  tableWrap.className = 'table-wrap';
+  const table = document.createElement('table');
+  table.className = 'threat-alert-table';
+  table.innerHTML = '<thead><tr><th>最近发生时间</th><th>方向</th><th>告警名称</th><th>威胁ID</th></tr></thead>';
+  const tbody = document.createElement('tbody');
+  vm.alertRows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const tdTime = document.createElement('td');
+    tdTime.textContent = row.recentTime;
+    const tdDirection = document.createElement('td');
+    tdDirection.textContent = row.direction;
+    const tdName = document.createElement('td');
+    tdName.textContent = row.alertName;
+    const tdId = document.createElement('td');
+    const idBtn = document.createElement('button');
+    idBtn.type = 'button';
+    idBtn.className = 'threat-alert-copy-btn mono';
+    idBtn.textContent = row.threatId;
+    idBtn.title = `点击复制威胁ID: ${row.threatId}`;
+    idBtn.onclick = async () => {
+      const ok = await copyTextCompat(row.threatId);
+      if (ok) {
+        showThreatCardToast(card, `威胁 ID 已复制: ${row.threatId.slice(0, 18)}...`);
+      } else {
+        setHint(el.playbookHint, '复制失败，请手动复制。', 'error');
+      }
+    };
+    tdId.appendChild(idBtn);
+    tr.appendChild(tdTime);
+    tr.appendChild(tdDirection);
+    tr.appendChild(tdName);
+    tr.appendChild(tdId);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  alertBody.appendChild(tableWrap);
+
+  const panelFooter = document.createElement('div');
+  panelFooter.className = 'threat-alert-footer';
+  panelFooter.textContent = `当前共命中 ${formatMetric(vm.alertTableTotal)} 条，列表展示前 ${formatMetric(vm.alertRows.length)} 条。`;
+  alertBody.appendChild(panelFooter);
+  alertPanel.appendChild(alertBody);
+  card.appendChild(alertPanel);
+
+  let alertOpen = true;
+  collapseHead.onclick = () => {
+    alertOpen = !alertOpen;
+    alertBody.classList.toggle('hidden', !alertOpen);
+    chevron.classList.toggle('collapsed', !alertOpen);
+  };
+
+  const actionBar = document.createElement('section');
+  actionBar.className = 'threat-action-bar';
+  const infoText = document.createElement('p');
+  infoText.className = 'threat-action-info';
+  infoText.textContent = vm.risk.level === '高'
+    ? '结合内部主机恶意活动，确认攻击已造成实质性危害，需立即介入。'
+    : '已检测到可疑攻击行为，建议持续观察并结合业务风险人工确认。';
+  actionBar.appendChild(infoText);
+  const actionRow = document.createElement('div');
+  actionRow.className = 'threat-action-buttons';
+  if (vm.dangerAction) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'threat-danger-btn';
+    btn.textContent = vm.actionLabel;
+    btn.onclick = async () => {
+      try {
+        btn.disabled = true;
+        const params = vm.dangerAction?.params || {};
+        const blockTypeRaw = String(params.block_type || params.blockType || 'SRC_IP').toUpperCase();
+        const blockType = blockTypeRaw === 'DST_IP' ? 'DST_IP' : 'SRC_IP';
+        const ips = [];
+        if (isValidIpv4(params.ip)) ips.push(params.ip);
+        if (Array.isArray(params.ips)) {
+          params.ips.forEach((ip) => {
+            if (isValidIpv4(ip)) ips.push(ip);
+          });
+        }
+        const dedupIps = dedupText(ips).filter((ip) => isValidIpv4(ip));
+        if (dedupIps.length) {
+          await openRoutineBlockDialog({
+            actionTitle: blockType === 'DST_IP' ? '封锁恶意外联IP' : '封禁恶意攻击源',
+            resultTitle: blockType === 'DST_IP' ? '外联封锁结果' : '网侧封禁结果',
+            blockType,
+            ips: dedupIps,
+            defaultReason: '由攻击者活动轨迹一键处置触发',
+            emptyMessage: '当前未提取到可下发封禁的目标 IP。',
+          });
+          return;
+        }
+        await runPlaybook(vm.dangerAction.template_id, params, vm.dangerAction.label || vm.dangerAction.id);
+      } catch (err) {
+        setHint(el.playbookHint, err.message || '执行动作失败', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    actionRow.appendChild(btn);
+  } else {
+    vm.nextActions.forEach((action) => actionRow.appendChild(createPlaybookActionButton(action)));
+  }
+  actionBar.appendChild(actionRow);
+  card.appendChild(actionBar);
+
+  const toast = document.createElement('div');
+  toast.className = 'threat-report-toast';
+  const toastText = document.createElement('span');
+  toastText.className = 'threat-report-toast-text';
+  toastText.textContent = '已复制';
+  toast.appendChild(toastText);
+  card.appendChild(toast);
+
+  appendPlaybookWorkspaceCard(card);
 }
 
 function createFormNode(payload) {
@@ -2331,6 +2923,10 @@ function renderPlaybookUnifiedCard(runData) {
   const displayName = getPlaybookDisplayName(runData?.template_id || '');
 
   const card = cardTemplate('', '');
+  if (runData?.run_id != null) {
+    card.dataset.playbookRunId = String(runData.run_id);
+  }
+  card.dataset.playbookCardType = 'generic-report';
   card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card');
   card.appendChild(
     buildReportHeader(`Playbook 报告 · ${displayName}`, '下载报告（HTML）', async () => {
@@ -2379,6 +2975,10 @@ function renderPlaybookUnifiedCard(runData) {
 function renderPlaybookResult(runData) {
   if (runData?.template_id === 'routine_check') {
     renderRoutineCheckCard(runData);
+    return;
+  }
+  if (runData?.template_id === 'threat_hunting') {
+    renderThreatHuntingCard(runData);
     return;
   }
   renderPlaybookUnifiedCard(runData);
@@ -3034,6 +3634,7 @@ el.logoutBtn.onclick = () => {
   state.playbookTemplates = [];
   state.activePlaybookRunId = null;
   state.playbookRunCache = {};
+  state.playbookOpenTokens = {};
   state.routineBlockDraft = null;
   el.chatStream.innerHTML = '';
   if (el.playbookCards) el.playbookCards.innerHTML = '';

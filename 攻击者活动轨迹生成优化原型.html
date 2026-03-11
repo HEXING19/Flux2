@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Playbook 报告 · 攻击者活动轨迹</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: #0b1120; /* 深色背景 */
+            color: #94a3b8; /* 默认文字颜色 slate-400 */
+        }
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body class="p-6 md:p-10 text-sm">
+
+<div class="max-w-6xl mx-auto space-y-6">
+
+    <!-- Header 区 -->
+    <div class="flex justify-between items-center pb-4 border-b border-slate-800">
+        <div>
+            <h1 class="text-2xl font-bold text-slate-100 flex items-center gap-2">
+                <i data-lucide="shield-alert" class="w-6 h-6 text-red-500"></i>
+                Playbook 报告 · 攻击者活动轨迹
+            </h1>
+            <p class="text-slate-400 mt-1">溯源分析完成时间: 2026-03-11 10:45:00</p>
+        </div>
+    </div>
+
+    <!-- 模块 1：全局摘要卡片区 (Executive Summary) -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <!-- 目标对象 -->
+        <div class="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+            <div class="text-slate-400 text-xs mb-1">目标溯源 IP</div>
+            <div class="text-xl font-bold text-slate-100 font-mono">172.19.97.133</div>
+            <div class="mt-2 text-xs flex gap-2">
+                <span class="px-2 py-0.5 bg-slate-700 text-slate-300 rounded">内部终端</span>
+            </div>
+        </div>
+        <!-- 告警统计 -->
+        <div class="bg-slate-800/50 p-4 rounded-lg border border-slate-700/50">
+            <div class="text-slate-400 text-xs mb-1">90天内命中告警</div>
+            <div class="text-xl font-bold text-slate-100">20,000 <span class="text-sm font-normal text-slate-500">条</span></div>
+            <div class="mt-2 text-xs flex gap-2 text-slate-400">
+                <span>源: 10k</span> <span class="text-slate-600">|</span> <span>目的: 10k</span>
+            </div>
+        </div>
+        <!-- 风险定性 -->
+        <div class="bg-red-900/20 p-4 rounded-lg border border-red-900/50 relative overflow-hidden">
+            <div class="absolute -right-4 -top-4 opacity-10"><i data-lucide="flame" class="w-24 h-24 text-red-500"></i></div>
+            <div class="text-red-400 text-xs mb-1 relative z-10">综合风险评级</div>
+            <div class="text-xl font-bold text-red-400 relative z-10">极高风险 (Critical)</div>
+            <div class="mt-2 text-xs text-red-300/80 relative z-10">存在实质性资产失陷与数据外传迹象</div>
+        </div>
+        <!-- 核心结论 -->
+        <div class="bg-blue-900/20 p-4 rounded-lg border border-blue-900/50">
+            <div class="text-blue-400 text-xs mb-1">智能处置建议</div>
+            <div class="text-lg font-bold text-blue-100 mt-1">建议立即执行微隔离/封禁</div>
+            <div class="mt-2 text-xs text-blue-300/80">已满足自动封禁阈值，等待审批</div>
+        </div>
+    </div>
+
+    <!-- 模块 2：可视化攻击链 (Visual Kill Chain) -->
+    <div class="bg-slate-800/40 rounded-lg border border-slate-700 p-5">
+        <h2 class="text-base font-semibold text-slate-200 mb-6 flex items-center gap-2">
+            <i data-lucide="git-pull-request" class="w-4 h-4"></i>
+            攻击故事线全景图
+        </h2>
+        
+        <div class="relative max-w-4xl mx-auto mb-4">
+            <!-- 连线 -->
+            <div class="absolute top-1/2 left-0 w-full h-1 bg-slate-700 -translate-y-1/2 z-0 rounded"></div>
+            <div class="absolute top-1/2 left-0 w-3/4 h-1 bg-gradient-to-r from-blue-500 via-orange-500 to-red-600 -translate-y-1/2 z-0 rounded"></div>
+            
+            <!-- 节点 -->
+            <div class="relative z-10 flex justify-between">
+                <!-- 节点 1：侦察 -->
+                <div class="flex flex-col items-center group cursor-pointer">
+                    <div class="w-10 h-10 rounded-full bg-slate-900 border-2 border-blue-500 flex items-center justify-center text-blue-400 group-hover:bg-blue-900 transition">
+                        <i data-lucide="radar" class="w-5 h-5"></i>
+                    </div>
+                    <div class="mt-3 text-center">
+                        <div class="font-bold text-slate-200">初步侦察</div>
+                        <div class="text-xs text-slate-500">02:00:12</div>
+                    </div>
+                </div>
+
+                <!-- 节点 2：利用 -->
+                <div class="flex flex-col items-center group cursor-pointer">
+                    <div class="w-10 h-10 rounded-full bg-slate-900 border-2 border-orange-500 flex items-center justify-center text-orange-400 group-hover:bg-orange-900 transition shadow-[0_0_15px_rgba(249,115,22,0.3)]">
+                        <i data-lucide="cpu" class="w-5 h-5"></i>
+                    </div>
+                    <div class="mt-3 text-center">
+                        <div class="font-bold text-orange-400">漏洞利用</div>
+                        <div class="text-xs text-slate-500">Web应用漏洞</div>
+                    </div>
+                </div>
+
+                <!-- 节点 3：横向 -->
+                <div class="flex flex-col items-center group cursor-pointer">
+                    <div class="w-10 h-10 rounded-full bg-slate-900 border-2 border-red-500 flex items-center justify-center text-red-500 group-hover:bg-red-900 transition">
+                        <i data-lucide="network" class="w-5 h-5"></i>
+                    </div>
+                    <div class="mt-3 text-center">
+                        <div class="font-bold text-red-400">横向与控制</div>
+                        <div class="text-xs text-slate-500">反弹Shell</div>
+                    </div>
+                </div>
+
+                <!-- 节点 4：结果 -->
+                <div class="flex flex-col items-center group cursor-pointer">
+                    <div class="w-10 h-10 rounded-full bg-slate-900 border-2 border-slate-600 flex items-center justify-center text-slate-500 transition">
+                        <i data-lucide="skull" class="w-5 h-5"></i>
+                    </div>
+                    <div class="mt-3 text-center opacity-50">
+                        <div class="font-bold text-slate-400">数据窃取</div>
+                        <div class="text-xs text-slate-600">未观测到</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模块 3：结构化关键证据 (Structured Evidence Cards) -->
+    <div class="space-y-4">
+        <h2 class="text-base font-semibold text-slate-200 mt-2 mb-4">行为阶段详细分析</h2>
+        
+        <!-- 卡片 1：侦察 -->
+        <div class="bg-slate-800/30 rounded border border-slate-700/50 p-4 border-l-4 border-l-blue-500">
+            <div class="flex items-start justify-between">
+                <div>
+                    <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                        <span class="bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded text-xs">侦察阶段</span>
+                        扫描与探测脆弱点
+                    </h3>
+                    <p class="mt-2 text-slate-400 leading-relaxed text-sm">
+                        攻击者首先对目标网络进行了初步侦察。2026-03-11 02:00:12，多个内部主机（10.24.194.28、10.138.40.234）触发了“疑似Web应用遭受漏洞攻击”严重告警，表明攻击者正在进行漏洞探测。
+                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <span onclick="copyText('incident-9259c9e7-cd95-4df2-9429-ad5fec1f3908')" class="text-xs bg-slate-900 border border-slate-700 px-2 py-1 rounded text-slate-300 font-mono flex items-center gap-1 hover:border-blue-500 hover:bg-slate-800 transition cursor-pointer group" title="点击复制完整告警ID">
+                            <i data-lucide="file-text" class="w-3 h-3 text-blue-500"></i> incident-9259c9e...
+                            <i data-lucide="copy" class="w-3 h-3 ml-1 opacity-0 group-hover:opacity-100 text-slate-400 transition-opacity"></i>
+                        </span>
+                        <span onclick="copyText('incident-9599e30c-69cc-4da1-ba9d-7f01c07436e0')" class="text-xs bg-slate-900 border border-slate-700 px-2 py-1 rounded text-slate-300 font-mono flex items-center gap-1 hover:border-blue-500 hover:bg-slate-800 transition cursor-pointer group" title="点击复制完整告警ID">
+                            <i data-lucide="file-text" class="w-3 h-3 text-blue-500"></i> incident-9599e30...
+                            <i data-lucide="copy" class="w-3 h-3 ml-1 opacity-0 group-hover:opacity-100 text-slate-400 transition-opacity"></i>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 卡片 2：利用 (高危) -->
+        <div class="bg-slate-800/30 rounded border border-slate-700/50 p-4 border-l-4 border-l-orange-500 bg-orange-900/5">
+            <div class="flex items-start justify-between">
+                <div>
+                    <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                        <span class="bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded text-xs">利用阶段</span>
+                        漏洞利用与执行
+                    </h3>
+                    <p class="mt-2 text-slate-400 leading-relaxed text-sm">
+                        在识别到脆弱点后，攻击者利用RCE或文件下载漏洞在 <span class="text-orange-300 font-mono bg-orange-900/30 px-1 rounded">172.19.97.133</span> 上执行恶意操作。该主机触发了严重告警，证实漏洞利用已发生，可能已植入WebShell。
+                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <span onclick="copyText('incident-f9d5c2cc-9771-4fad-b22b-570305420d4e')" class="text-xs bg-slate-900 border border-slate-700 px-2 py-1 rounded text-slate-300 font-mono flex items-center gap-1 hover:border-orange-500 hover:bg-slate-800 transition cursor-pointer group" title="点击复制完整告警ID">
+                            <i data-lucide="file-text" class="w-3 h-3 text-orange-500"></i> incident-f9d5c2cc...
+                            <i data-lucide="copy" class="w-3 h-3 ml-1 opacity-0 group-hover:opacity-100 text-slate-400 transition-opacity"></i>
+                        </span>
+                        <span class="text-xs bg-orange-900/40 text-orange-300 px-2 py-1 rounded border border-orange-800/50">标签: 漏洞利用行为</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 卡片 3：横向 (极危) -->
+        <div class="bg-slate-800/30 rounded border border-slate-700/50 p-4 border-l-4 border-l-red-500 bg-red-900/5">
+            <div class="flex items-start justify-between">
+                <div>
+                    <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                        <span class="bg-red-500/20 text-red-400 px-2 py-0.5 rounded text-xs">横向移动</span>
+                        建立反弹Shell与扩大控制
+                    </h3>
+                    <p class="mt-2 text-slate-400 leading-relaxed text-sm">
+                        攻击者入侵后尝试横向移动。主机同时触发了“执行反弹Shell命令”严重告警，关联到外部恶意 C2 IP <span class="text-red-300 font-mono bg-red-900/30 px-1 rounded">111.112.113.201</span>。网络中其他主机也出现 Certutil 下载可疑文件行为。
+                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <span onclick="copyText('incident-d8bbbe3b-291f-439b-85c2-744884deb918')" class="text-xs bg-slate-900 border border-slate-700 px-2 py-1 rounded text-slate-300 font-mono flex items-center gap-1 hover:border-red-500 hover:bg-slate-800 transition cursor-pointer group" title="点击复制完整告警ID">
+                            <i data-lucide="file-text" class="w-3 h-3 text-red-500"></i> incident-d8bbbe3...
+                            <i data-lucide="copy" class="w-3 h-3 ml-1 opacity-0 group-hover:opacity-100 text-slate-400 transition-opacity"></i>
+                        </span>
+                        <span class="text-xs bg-red-900/40 text-red-300 px-2 py-1 rounded border border-red-800/50">标签: 反弹Shell</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模块 4：告警降噪列表 (折叠面板) -->
+    <div class="bg-slate-800/40 rounded-lg border border-slate-700 mt-6">
+        <div onclick="toggleAlertList()" class="p-4 border-b border-slate-700 flex justify-between items-center cursor-pointer hover:bg-slate-800/60 transition select-none">
+            <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                <i data-lucide="list-filter" class="w-4 h-4"></i>
+                命中告警清单 (已聚合重复扫描，共 200 条核心证据)
+            </h2>
+            <i data-lucide="chevron-down" id="alert-list-chevron" class="w-4 h-4 text-slate-400 transition-transform duration-200"></i>
+        </div>
+        <div id="alert-list-content" class="p-0 overflow-x-auto transition-all duration-300">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-slate-900/50 text-slate-400 text-xs border-b border-slate-700">
+                        <th class="p-3 font-medium">阶段</th>
+                        <th class="p-3 font-medium">首次发生时间</th>
+                        <th class="p-3 font-medium">方向</th>
+                        <th class="p-3 font-medium">告警名称</th>
+                        <th class="p-3 font-medium">关联实体/凭证</th>
+                    </tr>
+                </thead>
+                <tbody class="text-sm divide-y divide-slate-800">
+                    <tr class="hover:bg-slate-800/50 transition">
+                        <td class="p-3"><span class="w-2 h-2 rounded-full bg-red-500 inline-block mr-2"></span>横向</td>
+                        <td class="p-3 text-slate-300">2026-03-11 02:00:12</td>
+                        <td class="p-3 text-slate-400 font-mono text-xs">内部 -> 外部</td>
+                        <td class="p-3 font-medium text-slate-200">主机存在执行反弹Shell命令</td>
+                        <td class="p-3 font-mono text-xs text-red-400">111.112.113.201</td>
+                    </tr>
+                    <tr class="hover:bg-slate-800/50 transition">
+                        <td class="p-3"><span class="w-2 h-2 rounded-full bg-orange-500 inline-block mr-2"></span>利用</td>
+                        <td class="p-3 text-slate-300">2026-03-11 02:00:12</td>
+                        <td class="p-3 text-slate-400 font-mono text-xs">外部 -> 内部</td>
+                        <td class="p-3 font-medium text-slate-200">疑似Web应用遭受漏洞攻击</td>
+                        <td class="p-3 font-mono text-xs text-slate-400">172.19.97.133</td>
+                    </tr>
+                    <tr class="hover:bg-slate-800/50 transition">
+                        <td class="p-3"><span class="w-2 h-2 rounded-full bg-blue-500 inline-block mr-2"></span>侦察</td>
+                        <td class="p-3 text-slate-300">2026-03-11 03:00:00</td>
+                        <td class="p-3 text-slate-400 font-mono text-xs">内部 -> 外部</td>
+                        <td class="p-3 font-medium text-slate-200">主机存在通过Certutil下载可疑文件</td>
+                        <td class="p-3 font-mono text-xs text-slate-400">10.20.21.233 等</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="p-3 text-center text-xs text-slate-500 bg-slate-900/20">
+                仅展示高置信度告警，<a href="#" class="text-blue-400 hover:underline">点击查看全部 20,000 条扫描日志</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模块 5：底部悬浮操作区 (Action Bar) -->
+    <div class="mt-8 pt-6 border-t border-slate-800 flex items-center justify-between">
+        <div class="text-sm text-slate-400 flex items-center gap-2">
+            <i data-lucide="info" class="w-4 h-4"></i>
+            结合内部主机恶意活动，确认攻击已造成实质性危害，需立即介入。
+        </div>
+        <div class="flex gap-4">
+            <button class="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-medium rounded shadow-lg shadow-red-900/20 transition flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-red-500">
+                <i data-lucide="shield-ban" class="w-4 h-4"></i>
+                执行 IP 172.19.97.133 封禁 (提交流程)
+            </button>
+        </div>
+    </div>
+
+</div>
+
+<!-- 吐司提示组件 (Toast) -->
+<div id="toast" class="fixed top-5 left-1/2 transform -translate-x-1/2 bg-slate-700 text-white px-4 py-2 rounded shadow-lg z-50 transition-opacity duration-300 opacity-0 pointer-events-none flex items-center gap-2">
+    <i data-lucide="check-circle" class="w-4 h-4 text-green-400"></i>
+    <span id="toast-message">已复制</span>
+</div>
+
+<script>
+    // 初始化 Lucide Icons
+    lucide.createIcons();
+
+    // 告警清单折叠面板逻辑
+    function toggleAlertList() {
+        const content = document.getElementById('alert-list-content');
+        const chevron = document.getElementById('alert-list-chevron');
+        if (content.style.display === 'none') {
+            content.style.display = 'block';
+            chevron.style.transform = 'rotate(0deg)';
+        } else {
+            content.style.display = 'none';
+            chevron.style.transform = 'rotate(-90deg)';
+        }
+    }
+
+    // 复制文本逻辑与安全执行 (兼容各浏览器)
+    function copyText(text) {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+            document.execCommand('copy');
+            showToast('告警 ID 已复制: ' + text.substring(0, 15) + '...');
+        } catch (err) {
+            console.error('复制失败', err);
+            showToast('复制失败，请重试');
+        }
+        document.body.removeChild(textArea);
+    }
+
+    // 显示 Toast 提示
+    function showToast(message) {
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toast-message');
+        toastMessage.textContent = message;
+        toast.style.opacity = '1';
+        
+        // 重新渲染图标以确保最新状态
+        lucide.createIcons();
+        
+        setTimeout(() => {
+            toast.style.opacity = '0';
+        }, 2000);
+    }
+</script>
+</body>
+</html>
