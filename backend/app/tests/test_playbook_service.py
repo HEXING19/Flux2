@@ -14,6 +14,7 @@ from app.playbook.service import playbook_service
 class PlaybookRequester:
     def __init__(self, *, proof_as_dict: bool = False) -> None:
         self.count_payloads: list[dict] = []
+        self.alert_payloads: list[dict] = []
         self.proof_as_dict = proof_as_dict
 
     def request(self, method, path, *, json_body=None, params=None, timeout=15, max_retries=3):
@@ -98,6 +99,117 @@ class PlaybookRequester:
                     ]
                 },
             }
+
+        if path == "/api/xdr/v1/alerts/list":
+            self.alert_payloads.append(dict(body))
+            src_ips = body.get("srcIps") or []
+            dst_ips = body.get("dstIps") or []
+            if "8.8.8.8" in src_ips:
+                return {
+                    "code": "Success",
+                    "data": {
+                        "total": 3,
+                        "item": [
+                            {
+                                "uuId": "alert-src-001",
+                                "name": "疑似外联告警",
+                                "severity": 60,
+                                "alertDealStatus": 1,
+                                "lastTime": 1739999900,
+                                "direction": 1,
+                                "attackState": 3,
+                                "srcIp": ["8.8.8.8"],
+                                "dstIp": ["10.10.0.2"],
+                                "dstPort": [445],
+                                "riskTag": ["webshell"],
+                                "threatSubTypeDesc": "远程命令执行",
+                                "traceBackId": "incident-hunt-001",
+                            }
+                        ],
+                    },
+                }
+            if "8.8.8.8" in dst_ips:
+                return {
+                    "code": "Success",
+                    "data": {
+                        "total": 2,
+                        "item": [
+                            {
+                                "uuId": "alert-dst-001",
+                                "name": "疑似入侵告警",
+                                "severity": 75,
+                                "alertDealStatus": 2,
+                                "lastTime": 1739999800,
+                                "direction": 2,
+                                "srcIp": ["1.1.1.1"],
+                                "dstIp": ["8.8.8.8"],
+                            }
+                        ],
+                    },
+                }
+            if "10.10.0.2" in src_ips:
+                return {
+                    "code": "Success",
+                    "data": {
+                        "total": 4,
+                        "item": [
+                            {
+                                "uuId": "alert-lateral-001",
+                                "name": "SMB横向探测",
+                                "severity": 68,
+                                "alertDealStatus": 1,
+                                "lastTime": 1739999700,
+                                "direction": 3,
+                                "srcIp": ["10.10.0.2"],
+                                "dstIp": ["10.10.0.9"],
+                                "dstPort": [445],
+                            },
+                            {
+                                "uuId": "alert-lateral-002",
+                                "name": "异常高频连接",
+                                "severity": 55,
+                                "alertDealStatus": 1,
+                                "lastTime": 1739999650,
+                                "direction": 3,
+                                "srcIp": ["10.10.0.2"],
+                                "dstIp": ["10.10.0.10"],
+                                "dstPort": [49152],
+                            },
+                            {
+                                "uuId": "alert-outbound-001",
+                                "name": "异常外联目标",
+                                "severity": 70,
+                                "alertDealStatus": 2,
+                                "lastTime": 1739999600,
+                                "direction": 1,
+                                "srcIp": ["10.10.0.2"],
+                                "dstIp": ["3.3.3.3"],
+                                "dstPort": [443],
+                            },
+                        ],
+                    },
+                }
+            if "10.10.0.9" in src_ips:
+                return {
+                    "code": "Success",
+                    "data": {
+                        "total": 1,
+                        "item": [
+                            {
+                                "uuId": "alert-outbound-002",
+                                "name": "疑似数据回传",
+                                "severity": 62,
+                                "alertDealStatus": 2,
+                                "lastTime": 1739999550,
+                                "direction": 1,
+                                "srcIp": ["10.10.0.9"],
+                                "dstIp": ["4.4.4.4"],
+                                "dstPort": [8443],
+                            }
+                        ],
+                    },
+                }
+            return {"code": "Success", "data": {"total": 0, "item": []}}
 
         if path.endswith("/proof"):
             uid = path.split("/")[-2]
@@ -253,6 +365,10 @@ class PlaybookServiceTest(unittest.TestCase):
     def test_threat_hunting_param_normalization_caps_max_scan(self):
         normalized = playbook_service._normalize_params("threat_hunting", {"ip": "9.9.9.9", "max_scan": 100000})
         self.assertEqual(normalized.get("max_scan"), 10000)
+        self.assertEqual(normalized.get("window_days"), 30)
+        self.assertTrue(normalized.get("src_only_first"))
+        self.assertEqual(normalized.get("adaptive_port_topn"), 5)
+        self.assertEqual(normalized.get("pivot_ports"), [445, 139, 3389, 22, 5985, 5986, 135])
 
     def test_alert_triage_block_mode_accepts_batch_ips(self):
         normalized = playbook_service._normalize_params(
@@ -345,9 +461,41 @@ class PlaybookServiceTest(unittest.TestCase):
                 self.assertIn("告警轨迹分析完成", hunting_result.get("summary", ""))
                 threat_view = hunting_result.get("threat_view", {})
                 self.assertEqual(threat_view.get("target_ip"), "8.8.8.8")
+                self.assertEqual(threat_view.get("window_days"), 30)
                 self.assertTrue(threat_view.get("kill_chain_stages"))
                 self.assertTrue(threat_view.get("stage_evidence_cards"))
                 self.assertTrue(threat_view.get("alert_table_rows"))
+                self.assertIn("phase_1_surface", threat_view)
+                self.assertIn("phase_2_breakthrough", threat_view)
+                self.assertIn("phase_3_lateral", threat_view)
+                self.assertIn("phase_4_outbound", threat_view)
+                self.assertIn("pivot_nodes", threat_view)
+                self.assertIn("timeline_points", threat_view)
+                first_alert = threat_view.get("alert_table_rows")[0]
+                self.assertIn("alert_id", first_alert)
+                self.assertEqual(first_alert.get("direction"), "内对外")
+                self.assertTrue(threat_view.get("phase_3_lateral", {}).get("observed"))
+                self.assertTrue(threat_view.get("phase_4_outbound", {}).get("observed"))
+
+    def test_threat_hunting_prefers_src_scan_before_dst_fallback(self):
+        fake_requester = PlaybookRequester()
+        with (
+            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
+            patch("app.playbook.service.LLMRouter.complete", return_value="summary"),
+        ):
+            with Session(engine) as session:
+                run = playbook_service.start_run(
+                    session,
+                    template_id="threat_hunting",
+                    params={"ip": "8.8.8.8"},
+                    session_id="s-hunting-src-first",
+                )
+                final_run = self._wait_run_finished(session, run.id)
+                self.assertEqual(final_run.status, "Finished")
+        src_queries = [p for p in fake_requester.alert_payloads if p.get("srcIps") == ["8.8.8.8"]]
+        dst_queries = [p for p in fake_requester.alert_payloads if p.get("dstIps") == ["8.8.8.8"]]
+        self.assertTrue(src_queries)
+        self.assertFalse(dst_queries)
 
     def test_parallel_nodes_tolerate_dict_proof_payload(self):
         fake_requester = PlaybookRequester(proof_as_dict=True)

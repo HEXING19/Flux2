@@ -1,0 +1,1275 @@
+/api/xdr/v1/alerts/list
+查询安全告警列表
+更新时间：2025-03-17 19:25:39
+OpenAPI：
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+uuIds
+[array]
+-	告警ID列表	["alert-123456"]	收缩	
+参数示例：
+["alert-123456"]
+最小长度：
+0
+最大长度：
+200
+最小值：
+最大值：
+page
+[int]
+-	页码	1	收缩	
+数据字典：
+1	| [int]	| 默认值
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+pageSize
+[int]
+-	每页大小	10	收缩	
+备注：
+根据pageSize,最多只能查询100000条数据
+数据字典：
+5	| [int]	| 默认值
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+5
+最大值：
+200
+startTimestamp
+[long]
+-	开始时间	1681142400	收缩	
+备注：
+秒级时间戳，对告警最近发生时间做筛选
+数据字典：
+1678710600	| [long]
+|
+默认为最近7天，例如系统时间为2023-03-20 20:30:00，则起始时间为2023-03-13 20:30:00，时间戳为1678710600
+| 默认值
+参数示例：
+1681142400
+最小长度：
+最大长度：
+最小值：
+最大值：
+endTimestamp
+[long]
+-	结束时间	1681142401	收缩	
+备注：
+秒级时间戳，对告警最近发生时间做筛选
+数据字典：
+1679327999	| [long]
+|
+默认为当天结束时间，例如系统时间为2023-03-20 20:30:00，则结束时间为2023-03-20 23:59:59，时间戳为1679327999
+| 默认值
+参数示例：
+1681142401
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeField
+[string]
+-	时间字段	lastTime	收缩	
+数据字典：
+firstTime	| [string]
+|
+首次发现时间
+| 默认值
+lastTime	| [string]
+|
+最近发现时间
+updateTime	| [string]
+|
+更新时间
+dealTime	| [string]
+|
+处置时间
+occurTime	| [string]
+|
+发生时间
+uploadTime	| [string]
+|
+上传时间
+_insertTime	| [string]
+|
+入库时间
+参数示例：
+lastTime
+sortField
+[string]
+-	排序参数	lastTime	收缩	
+数据字典：
+lastTime	| [string]
+|
+最近发现时间
+| 默认值
+firstTime	| [string]
+|
+首次发现时间
+updateTime	| [string]
+|
+更新时间
+createTime	| [string]
+|
+创建时间
+参数示例：
+lastTime
+alertDealStatus
+[array]
+-	告警处置状态	[1,2]	收缩	
+数据字典：
+1	| [int]
+|
+待处置
+| 默认值
+2	| [int]
+|
+处置中
+3	| [int]
+|
+处置完成
+参数示例：
+[1,2]
+最小长度：
+最大长度：
+最小值：
+最大值：
+sortOrder
+[string]
+-	排序类型	desc	收缩	
+数据字典：
+desc	| [string]
+|
+降序
+| 默认值
+asc	| [string]
+|
+升序
+参数示例：
+desc
+productType
+[array]
+-	告警上报设备产品，不传查全部	["STA"]	收缩	
+数据字典：
+STA	| [string]	| 默认值
+EDR	| [string]
+AC	| [string]
+CWPP	| [string]
+SSL VPN	| [string]
+NTA	| [string]
+SIP SecLog	| [string]
+Logger	| [string]
+参数示例：
+["STA"]
+severities
+[array]
+-	告警等级	[0,1]	收缩	
+数据字典：
+[ ]	| [array]
+|
+表示全选
+| 默认值
+[0]	| [array]
+|
+信息
+[1]	| [array]
+|
+低危
+[2]	| [array]
+|
+中危
+[3]	| [array]
+|
+高危
+[4]	| [array]
+|
+严重
+参数示例：
+[0,1]
+accessDirections
+[array]
+-	访问方向	[0,1]	收缩	
+数据字典：
+[ ]	| [array]
+|
+表示全部
+| 默认值
+[0]	| [array]
+|
+无
+[1]	| [array]
+|
+内对外
+[2]	| [array]
+|
+外对内
+[3]	| [string]
+|
+内对内
+参数示例：
+[0,1]
+hostBranchId
+[array]
+-	资产组	[0,1]	收缩	
+参数示例：
+[0,1]
+最小长度：
+最大长度：
+platformHostBranchIds
+[array]
+-	平台资产组	["6709f2a28a6780001e2ead0c_1" ]	收缩	
+参数限制：
+建议使用 platformHostBranchIds 参数作为 hostBranchId 的升级字段。虽然 hostBranchId 仍可使用，但在平台级联场景中，不同平台的资产组 ID 可能重复。当两个参数都有值时，将优先使用 platformHostBranchIds。
+参数示例：
+["6709f2a28a6780001e2ead0c_1" ]
+最小长度：
+最大长度：
+threatDefines
+[array]
+-	告警定性	[0,200]	收缩	
+数据字典：
+[0]	| [array]
+|
+未知威胁
+| 默认值
+[200]	| [array]
+|
+业务行为
+[300]	| [array]
+|
+脆弱性风险
+[400]	| [array]
+|
+扫描器攻击
+[450]	| [array]
+|
+疑似定向攻击
+[500]	| [array]
+|
+病毒
+[900]	| [array]
+|
+定向攻击
+参数示例：
+[0,200]
+read
+[boolean]
+-	告警是否已读	true	收缩	
+参数示例：
+true
+hostAssetIds
+[array]
+-	资产id	[0,1]	收缩	
+参数示例：
+[0,1]
+platformHostAssetIds
+[array]
+-	平台资产id	["6709f2a28a6780001e2ead0c_1" ]	收缩	
+参数限制：
+建议使用 platformHostAssetIds参数作为 hostAssetIds的升级字段。虽然 hostAssetIds仍可使用，但在平台级联场景中，不同平台的资产组 ID 可能重复。当两个参数都有值时，将优先使用 platformHostAssetIds。
+参数示例：
+["6709f2a28a6780001e2ead0c_1" ]
+最小长度：
+最大长度：
+srcIps
+[array]
+-	源Ip	["1.1.1.1"]	收缩	
+参数示例：
+["1.1.1.1"]
+dstIps
+[array]
+-	目的Ip	["2.2.2.2"]	收缩	
+参数示例：
+["2.2.2.2"]
+whiteStatus
+[array]
+-	加白状态	["未加白","部分加白"]	收缩	
+数据字典：
+["未加白","部分加白"]	| [array]
+|
+加白状态不为"已加白"的告警
+| 默认值
+["已加白"]	| [array]
+|
+加白状态为"已加白"的告警
+["部分加白"]	| [array]
+|
+加白状态为"部分加白"的告警
+["未加白"]	| [array]
+|
+加白状态为"未加白"的告警
+[ ]	| [array]
+|
+表示全部
+参数示例：
+["未加白","部分加白"]
+manages
+[array]
+-	上报设备ID	["SIEM2", "SIEM3"]	收缩	
+数据字典：
+["SIEM2", "SIEM3"]	| [string]
+|
+筛选上报设备ID为SIEM2和SIEM3的数据
+| 默认值
+参数示例：
+["SIEM2", "SIEM3"]
+devUIds
+[array]
+-	数据源-原始	[208]	收缩	
+参数示例：
+[208]
+platformIds
+[array]
+-	平台id	["6709f2a28a6780001e2ead0c" ]	收缩	
+参数示例：
+["6709f2a28a6780001e2ead0c" ]
+alarmClassifications
+[array]
+-	告警分类，支持一二三分类组合或单个查询	["1,2,3","1",",2,",",,3"]	收缩	
+参数示例：
+["1,2,3","1",",2,",",,3"]
+hostGroupIds
+[array]
+-	业务组过滤	[1000001,1000002]	收缩	
+参数示例：
+[1000001,1000002]
+operationLabels
+[array]
+-	研判标签	["重要告警"]	收缩	
+参数示例：
+["重要告警"]
+gptResult
+[array]
+-	gpt研判结果	[“等待GPT研判”，“真实攻击成功”]	收缩	
+参数限制：
+开通GPT授权的用户
+数据字典：
+等待GPT研判	| [string]	| 默认值
+真实攻击成功	| [string]
+主机失陷活动	| [string]
+病毒木马活动	| [string]
+真实攻击未成功	| [string]
+脆弱性访问	| [string]
+疑似攻击行为	| [string]
+误报	| [string]
+数据不足	| [string]
+自定义类型	| [string]
+参数示例：
+[“等待GPT研判”，“真实攻击成功”]
+最小长度：
+最大长度：
+excludeManages
+[array]
+-	上报设备ID	["SIEM4", "SIEM5"]	收缩	
+数据字典：
+["SIEM4", "SIEM5"]	| [string]
+|
+排除上报设备ID为SIEM4和SIEM5的数据
+| 默认值
+参数示例：
+["SIEM4", "SIEM5"]
+ΘfilterParam
+[object]
+-	其他字段过滤			
+srcHostCountryName
+[array]
+-	攻击源国家	["美国","法国"]	收缩	
+参数示例：
+["美国","法国"]
+srcHostProvinceName
+[array]
+-	攻击源省份	["四川","浙江"]	收缩	
+参数示例：
+["四川","浙江"]
+dstHostCountryName
+[array]
+-	目的国家名称	["美国","法国"]	收缩	
+参数示例：
+["美国","法国"]
+dstHostProvinceName
+[array]
+-	目的城市名称	["四川","浙江"]	收缩	
+参数示例：
+["四川","浙江"]
+ΘexcludeParam
+[object]
+-	排除条件			
+srcHostCountryName
+[array]
+-	攻击源国家	["美国","法国"]	收缩	
+参数示例：
+["美国","法国"]
+srcHostProvinceName
+[array]
+-	攻击源省份	["四川","浙江"]	收缩	
+参数示例：
+["四川","浙江"]
+dstHostCountryName
+[array]
+-	目的国家名称	["美国","法国"]	收缩	
+参数示例：
+["美国","法国"]
+dstHostProvinceName
+[array]
+-	目的城市名称	["四川","浙江"]	收缩	
+参数示例：
+["四川","浙江"]
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	响应码	Success	收缩	
+参数示例：
+Success
+最小长度：
+最大长度：
+最小值：
+最大值：
+message
+[string]
+是	响应消息	请求成功	收缩	
+参数示例：
+请求成功
+Θdata
+[object]
+是	返回数据			
+total
+[int]
+是	告警总数	100	收缩	
+备注：
+当前条件下的命中总数
+参数示例：
+100
+page
+[int]
+是	当前页码	1	收缩	
+参数示例：
+1
+pageSize
+[int]
+是	页面大小	100	收缩	
+参数示例：
+100
+Θitem
+[array]
+-	数据			
+uuId
+[string]
+-	告警ID	alert-123456	收缩	
+参数示例：
+alert-123456
+最小长度：
+最大长度：
+最小值：
+最大值：
+name
+[string]
+-	告警名称	永恒之蓝	收缩	
+参数示例：
+永恒之蓝
+firstTime
+[long]
+-	最早发生时间	1681142400	收缩	
+参数示例：
+1681142400
+最小长度：
+最大长度：
+最小值：
+最大值：
+lastTime
+[long]
+-	最近发生时间	1681142400	收缩	
+参数示例：
+1681142400
+最小长度：
+最大长度：
+最小值：
+最大值：
+severity
+[int]
+-	严重性	50	收缩	
+数据字典：
+(0,10]	| [int]
+|
+信息
+| 默认值
+(10,30]	| [int]
+|
+低危
+(30,50]	| [int]
+|
+中危
+(50,70]	| [int]
+|
+高危
+(70,100]	| [int]
+|
+严重
+参数示例：
+50
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatDefine
+[array]
+-	威胁定性	[100]	收缩	
+备注：
+对告警的定性，例如定向攻击、病毒
+数据字典：
+0	| [int]
+|
+未知威胁
+| 默认值
+100	| [int]
+|
+误报
+200	| [int]
+|
+业务不规范
+300	| [int]
+|
+脆弱性风险
+400	| [int]
+|
+扫描器攻击
+500	| [int]
+|
+病毒
+600	| [int]
+|
+内部测试
+700	| [int]
+|
+监管通报
+800	| [int]
+|
+攻防演练
+900	| [int]
+|
+定向攻击
+参数示例：
+[100]
+最小长度：
+最大长度：
+最小值：
+最大值：
+stage
+[int]
+-	告警阶段	80	收缩	
+数据字典：
+0	| [int]
+|
+默认值
+| 默认值
+10	| [int]
+|
+存在风险
+20	| [int]
+|
+扫描探测
+30	| [int]
+|
+遭受攻击
+40	| [int]
+|
+主机异常
+50	| [int]
+|
+内网扩散
+60	| [int]
+|
+C&C通信
+70	| [int]
+|
+黑产牟利
+80	| [int]
+|
+窃取数据
+参数示例：
+80
+最小长度：
+最大长度：
+最小值：
+最大值：
+alertRuleId
+[string]
+-	告警规则id	2123223445000213	收缩	
+备注：
+产生告警的规则ID
+参数示例：
+2123223445000213
+最小长度：
+最大长度：
+最小值：
+最大值：
+logCount
+[int]
+-	命中的日志次数	告警次数	收缩	
+参数示例：
+告警次数
+confidence
+[int]
+-	确定性等级	50	收缩	
+数据字典：
+0	| [int]
+|
+未知
+| 默认值
+(0, 40]	| [int]
+|
+低可信
+(40, 70]	| [int]
+|
+中可信
+(70, 100]	| [int]
+|
+高可信
+参数示例：
+50
+最小长度：
+最大长度：
+最小值：
+最大值：
+riskTag
+[array]
+-	风险标签	["HTTP隧道"]	收缩	
+备注：
+stringArray, 告警的风险打标
+参数示例：
+["HTTP隧道"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+attackState
+[int]
+-	攻击结果	0	收缩	
+数据字典：
+0	| [int]
+|
+尝试
+1	| [int]
+|
+失败
+2	| [int]
+|
+成功
+3	| [int]
+|
+失陷
+参数示例：
+0
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatClassDesc
+[string]
+-	告警一级分类	脆弱性风险	收缩	
+参数示例：
+脆弱性风险
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatTypeDesc
+[string]
+-	告警二级分类	漏洞风险	收缩	
+参数示例：
+漏洞风险
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatSubTypeDesc
+[string]
+-	告警三级分类	sql注入漏洞	收缩	
+参数示例：
+sql注入漏洞
+最小长度：
+最大长度：
+最小值：
+最大值：
+devUidDesc
+[array]
+-	数据源	["EDR"]	收缩	
+参数示例：
+["EDR"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+engineName
+[array]
+-	检测引擎名称	["IPS引擎"]	收缩	
+参数示例：
+["IPS引擎"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+attckTechnique
+[array]
+-	attck技术	["TA0043.T1569.001","TA0043.T1568.002"]	收缩	
+备注：
+stringArray，第一级是战术，第二级是技术，第三级是子技术；返回值不一定有第三级
+参数示例：
+["TA0043.T1569.001","TA0043.T1568.002"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcIp
+[array]
+-	源IP	["1.1.1.1"]	收缩	
+备注：
+stringArray
+参数示例：
+["1.1.1.1"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcPort
+[array]
+-	源端口	[80]	收缩	
+备注：
+intArray
+参数示例：
+[80]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstIp
+[array]
+-	目的IP	["1.2.1.1"]	收缩	
+备注：
+stringArray
+参数示例：
+["1.2.1.1"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstPort
+[array]
+-	目的端口	[8080]	收缩	
+备注：
+intArray
+参数示例：
+[8080]
+最小长度：
+最大长度：
+最小值：
+最大值：
+xForwardedFor
+[array]
+-	xForwardedFor	["196.168.1.2"]	收缩	
+备注：
+stringArray
+参数示例：
+["196.168.1.2"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+hostIp
+[string]
+-	主机IP	186.12.1.5	收缩	
+参数示例：
+186.12.1.5
+最小长度：
+最大长度：
+最小值：
+最大值：
+branchName
+[string]
+-	所属资产组名	上海办事处	收缩	
+参数示例：
+上海办事处
+最小长度：
+最大长度：
+最小值：
+最大值：
+hostGroups
+[array]
+-	所属业务组描述	["研发中心"]	收缩	
+备注：
+stringArray
+参数示例：
+["研发中心"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+direction
+[int]
+-	访问方向	2	收缩	
+数据字典：
+0	| [int]
+|
+无
+| 默认值
+1	| [int]
+|
+内对外
+2	| [int]
+|
+外对内
+3	| [int]
+|
+内对内
+参数示例：
+2
+最小长度：
+最大长度：
+最小值：
+最大值：
+url
+[array]
+-	URL	["http://www.baidu.com/123"]	收缩	
+备注：
+stringArray
+参数示例：
+["http://www.baidu.com/123"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+domain
+[array]
+-	域名	["www.baidu.com"]	收缩	
+备注：
+stringArray
+参数示例：
+["www.baidu.com"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileMd5
+[array]
+-	文件md5	["e90afc86c7b1ab55e9dffa631cef0821"]	收缩	
+参数示例：
+["e90afc86c7b1ab55e9dffa631cef0821"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+pName
+[array]
+-	进程名	["a.exe"]	收缩	
+备注：
+stringArray
+参数示例：
+["a.exe"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+respStatus
+[int]
+-	响应状态码	200	收缩	
+参数示例：
+200
+最小长度：
+最大长度：
+最小值：
+最大值：
+exploitCveId
+[string]
+-	漏洞CVE编号	a001	收缩	
+参数示例：
+a001
+最小长度：
+最大长度：
+最小值：
+最大值：
+alertDealStatus
+[int]
+-	处置状态	1	收缩	
+备注：
+告警处置状态
+数据字典：
+1	| [int]
+|
+待处置
+| 默认值
+2	| [int]
+|
+处置中
+3	| [int]
+|
+处置完成
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+alertDealAction
+[string]
+-	处置动作	手动标记	收缩	
+备注：
+告警处置动作
+参数示例：
+手动标记
+最小长度：
+最大长度：
+最小值：
+最大值：
+whiteStatus
+[string]
+-	加白状态	未加白	收缩	
+参数示例：
+未加白
+最小长度：
+最大长度：
+最小值：
+最大值：
+devSourceName
+[string]
+-	来源设备名称列表	["sta (86a45542)"]	收缩	
+参数示例：
+["sta (86a45542)"]
+ΘsrcIpInfos
+[array]
+-	源IP信息			
+ip
+[string]
+-	IP地址	1.1.1.1	收缩	
+参数示例：
+1.1.1.1
+branchId
+[int]
+-	IP所属资产组ID	123	收缩	
+参数示例：
+123
+branchName
+[string]
+-	IP所属资产组名称	公安部	收缩	
+参数示例：
+公安部
+groupIds
+[array]
+-	IP所属业务组ID	[1,2,3,4]	收缩	
+参数示例：
+[1,2,3,4]
+groupNames
+[array]
+-	IP所属业务组名称	["业务组1"， "业务组2", "业务组3", "业务组4"]	收缩	
+参数示例：
+["业务组1"， "业务组2", "业务组3", "业务组4"]
+classify1Id
+[int]
+是	资产大类			
+classifyId
+[int]
+是	资产小类			
+countryName
+[string]
+-	国家	挪威	收缩	
+参数示例：
+挪威
+provinceName
+[string]
+-	省份	挪威	收缩	
+参数示例：
+挪威
+ΘdstIpInfos
+[array]
+-	目的IP信息			
+ip
+[string]
+-	IP地址	2.2.2.2	收缩	
+参数示例：
+2.2.2.2
+branchId
+[string]
+-	IP所属资产组ID	233	收缩	
+参数示例：
+233
+branchName
+[string]
+-	IP所属资产组名称	新疆	收缩	
+参数示例：
+新疆
+groupIds
+[array]
+-	IP所属业务组ID	[5,6,7]	收缩	
+参数示例：
+[5,6,7]
+groupNames
+[array]
+-	IP所属业务组名称	["业务组5"， "业务组6", "业务组7"]	收缩	
+参数示例：
+["业务组5"， "业务组6", "业务组7"]
+classify1Id
+[int]
+是	资产大类			
+classifyId
+[int]
+是	资产小类			
+countryName
+[string]
+-	国家	挪威	收缩	
+参数示例：
+挪威
+provinceName
+[string]
+-	省份	挪威	收缩	
+参数示例：
+挪威
+description
+[string]
+-	告警描述	CobaltStrike是一款基于JAVA语言编写的渗透测试工具，常被业界称为CS。CobaltStrike分为客户端和服务器端，客户端可以有多个，而服务器端只有一个，适合于团队协同作战，多个攻击者可以同时连接到一个团队服务器上，方便目标系统的信息交换。CobaltStrike集成了端口转发、服务扫描、win exe/dll木马生成和office宏病毒等功能，广受黑客喜爱。	收缩	
+参数示例：
+CobaltStrike是一款基于JAVA语言编写的渗透测试工具，常被业界称为CS。CobaltStrike分为客户端和服务器端，客户端可以有多个，而服务器端只有一个，适合于团队协同作战，多个攻击者可以同时连接到一个团队服务器上，方便目标系统的信息交换。CobaltStrike集成了端口转发、服务扫描、win exe/dll木马生成和office宏病毒等功能，广受黑客喜爱。
+gptResult
+[int]
+是	GPT研判结论	115	收缩	
+数据字典：
+0	| [int]
+|
+等待GPT研判
+| 默认值
+110	| [int]
+|
+真实攻击成功
+115	| [int]
+|
+主机失陷活动
+120	| [int]
+|
+病毒木马活动
+130	| [int]
+|
+真实攻击未成功
+140	| [int]
+|
+脆弱性访问
+150	| [int]
+|
+疑似攻击行为
+160	| [int]
+|
+误报
+170	| [int]
+|
+数据不足
+180	| [int]
+|
+自定义类型
+参数示例：
+115
+最小长度：
+最大长度：
+最小值：
+最大值：
+gptResultDescription
+[string]
+是	GPT研判结论中文描述	主机失陷活动	收缩	
+数据字典：
+等待GPT研判	| [string]	| 默认值
+真实攻击成功	| [string]
+主机失陷活动	| [string]
+病毒木马活动	| [string]
+真实攻击未成功	| [string]
+脆弱性访问	| [string]
+疑似攻击行为	| [string]
+误报	| [string]
+数据不足	| [string]
+自定义类型	| [string]
+参数示例：
+主机失陷活动
+最小长度：
+最大长度：
+traceBackId
+[string]
+是	日志回溯ID			
+hostClassifyId
+[int]
+是	主机资产具体类型			
+hostClassify1Id
+[int]
+是	主机资产父类型			
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/alerts/list
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"成功",
+    "data":Θ{
+        "item":Θ[
+            Θ{
+                "uuId":"alert-a41f364a-a6ec-4e53-bf4e-220dd59fb990",
+                "name":"旧告警入库",
+                "firstTime":1680783142,
+                "lastTime":1680783142,
+                "severity":70,
+                "threatDefine":Θ[
+                    100
+                ],
+                "stage":60,
+                "alertRuleId":"217891008",
+                "logCount":1,
+                "confidence":80,
+                "riskTag":Θ[
+                    "系统命令注入漏洞"
+                ],
+                "attackState":3,
+                "threatClassDesc":"后门通信",
+                "threatTypeDesc":"Web后门",
+                "threatSubTypeDesc":"WebShell管理工具",
+                "devUidDesc":Θ[
+                    "NDR",
+                    "微步在线"
+                ],
+                "engineName":Θ[
+                    "NDR引擎"
+                ],
+                "attckTechnique":Θ[
+                    "TA0010.T1567"
+                ],
+                "srcIp":Θ[
+                    "1.1.1.0",
+                    "1.1.1.1",
+                    "1.1.1.2",
+                    "1.1.1.3",
+                    "1.1.1.4",
+                    "1.1.1.5",
+                    "1.1.1.6",
+                    "1.1.1.7",
+                    "1.1.1.8",
+                    "1.1.1.9",
+                    "1.1.1.10",
+                    "1.1.1.11",
+                    "1.1.1.12",
+                    "1.1.1.13",
+                    "1.1.1.14",
+                    "1.1.1.15",
+                    "1.1.1.16",
+                    "1.1.1.17",
+                    "1.1.1.18",
+                    "1.1.1.19",
+                    "1.1.1.20",
+                    "1.1.1.21",
+                    "1.1.1.22",
+                    "1.1.1.23",
+                    "1.1.1.24",
+                    "1.1.1.25",
+                    "1.1.1.26",
+                    "1.1.1.27",
+                    "1.1.1.28",
+                    "1.1.1.29",
+                    "1.1.1.30",
+                    "1.1.1.31",
+                    "1.1.1.32",
+                    "1.1.1.33",
+                    "1.1.1.34",
+                    "1.1.1.35",
+                    "1.1.1.36",
+                    "1.1.1.37",
+                    "1.1.1.38",
+                    "1.1.1.39"
+                ],
+                "srcPort":Θ[
+                    56576
+                ],
+                "dstIp":Θ[
+                    "10.223.3.71",
+                    "10.223.4.71"
+                ],
+                "dstPort":Θ[
+                    445,
+                    445
+                ],
+                "hostIp":"10.223.2.71",
+                "branchName":"管理IP范围",
+                "hostGroups":Θ[
+
+                ],
+                "direction":3,
+                "url":Θ[
+
+                ],
+                "domain":Θ[
+                    "polling.burpcollaborator.net"
+                ],
+                "fileMd5":Θ[
+
+                ],
+                "respStatus":200,
+                "exploitCveId":"t123a",
+                "alertDealStatus":1,
+                "alertDealAction":"待处置",
+                "whiteStatus":"未加白",
+                "pname":Θ[
+                    "a.exe"
+                ],
+                "xforwardedFor":Θ[
+                    "1.1.1.1"
+                ],
+                "devSourceName":Θ[
+                    "sta (86a45542)"
+                ],
+                "srcIpInfos":Θ[
+                    Θ{
+                        "ip":"1.1.1.1",
+                        "branchId":123,
+                        "branchName":"公安部",
+                        "groupIds":Θ[
+                            1,
+                            2,
+                            3,
+                            4
+                        ],
+                        "groupNames":Θ[
+                            "业务组1",
+                            "业务组2",
+                            "业务组3",
+                            "业务组4"
+                        ]
+                    }
+                ],
+                "dstIpInfos":Θ[
+                    Θ{
+                        "ip":"2.2.2.2",
+                        "branchId":"233",
+                        "branchName":"新疆",
+                        "groupIds":Θ[
+                            5,
+                            6,
+                            7
+                        ],
+                        "groupNames":Θ[
+                            "业务组5",
+                            "业务组6",
+                            "业务组7"
+                        ]
+                    }
+                ],
+                "description":"CobaltStrike是一款基于JAVA语言编写的渗透测试工具，常被业界称为CS。CobaltStrike分为客户端和服务器端，客户端可以有多个，而服务器端只有一个，适合于团队协同作战，多个攻击者可以同时连接到一个团队服务器上，方便目标系统的信息交换。CobaltStrike集成了端口转发、服务扫描、win exe/dll木马生成和office宏病毒等功能，广受黑客喜爱。",
+                "gptResult":115,
+                "gptResultDescription":"主机失陷活动"
+            }
+        ]
+    }
+}

@@ -28,6 +28,8 @@ from .registry import PlaybookRegistry
 
 SEVERITY_LABEL = {0: "信息", 1: "低危", 2: "中危", 3: "高危", 4: "严重"}
 DEAL_STATUS_LABEL = {0: "待处置", 10: "处置中", 40: "已处置", 50: "已挂起", 60: "接受风险", 70: "已遏制"}
+ALERT_DEAL_STATUS_LABEL = {1: "待处置", 2: "处置中", 3: "处置完成"}
+ALERT_ACCESS_DIRECTION_LABEL = {0: "无", 1: "内对外", 2: "外对内", 3: "内对内"}
 IPV4_PATTERN = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 INTEL_SEVERITY_CN = {
     "low": "低",
@@ -631,9 +633,25 @@ class PlaybookService:
                 )
 
         if template_id == "threat_hunting":
-            normalized["window_days"] = max(1, min(180, _to_int(normalized.get("window_days"), 90)))
+            normalized["window_days"] = 30
             normalized["max_scan"] = max(200, min(10000, _to_int(normalized.get("max_scan"), 10000)))
             normalized["evidence_limit"] = max(1, min(20, _to_int(normalized.get("evidence_limit"), 20)))
+            normalized["adaptive_port_topn"] = max(1, min(20, _to_int(normalized.get("adaptive_port_topn"), 5)))
+            raw_ports = normalized.get("pivot_ports")
+            if isinstance(raw_ports, str):
+                raw_ports = [token.strip() for token in re.split(r"[,\s，]+", raw_ports) if token.strip()]
+            if isinstance(raw_ports, list):
+                parsed_ports = [port for port in (_to_int(item, -1) for item in raw_ports) if 1 <= port <= 65535]
+                normalized["pivot_ports"] = _dedup_keep_order(parsed_ports) or [445, 139, 3389, 22, 5985, 5986, 135]
+            else:
+                normalized["pivot_ports"] = [445, 139, 3389, 22, 5985, 5986, 135]
+            src_only_first_raw = normalized.get("src_only_first")
+            if isinstance(src_only_first_raw, bool):
+                normalized["src_only_first"] = src_only_first_raw
+            elif isinstance(src_only_first_raw, str):
+                normalized["src_only_first"] = src_only_first_raw.strip().lower() not in {"0", "false", "no", "off"}
+            else:
+                normalized["src_only_first"] = True
             mode = str(normalized.get("mode") or "analyze").strip().lower()
             normalized["mode"] = mode if mode in {"analyze", "export_summary"} else "analyze"
         if template_id == "asset_guard":
@@ -741,19 +759,19 @@ class PlaybookService:
             }
 
         return {
-            "node_1_external_profile": {"status": "Pending", "depends_on": []},
-            "node_2_event_scan_paginated": {"status": "Pending", "depends_on": ["node_1_external_profile"]},
-            "node_3_evidence_enrichment_parallel": {
+            "node_1_attack_surface_recon": {"status": "Pending", "depends_on": []},
+            "node_2_breakthrough_identify": {"status": "Pending", "depends_on": ["node_1_attack_surface_recon"]},
+            "node_3_victim_lateral_movement": {
                 "status": "Pending",
-                "depends_on": ["node_2_event_scan_paginated"],
+                "depends_on": ["node_2_breakthrough_identify"],
             },
-            "node_4_internal_activity_count": {
+            "node_4_outbound_behavior_analysis": {
                 "status": "Pending",
-                "depends_on": ["node_3_evidence_enrichment_parallel"],
+                "depends_on": ["node_3_victim_lateral_movement"],
             },
-            "node_5_llm_timeline_story": {
+            "node_5_kill_chain_finalize": {
                 "status": "Pending",
-                "depends_on": ["node_4_internal_activity_count"],
+                "depends_on": ["node_4_outbound_behavior_analysis"],
             },
         }
 
@@ -1088,6 +1106,89 @@ class PlaybookService:
             "dstIpDesc": dst_ip_desc if isinstance(dst_ip_desc, list) else [],
             "description": _pick(item, "description", "desc", "detail", default=""),
             "endTime": _format_ts(_pick(item, "endTime", "latestTime", "occurTime", default=0)),
+        }
+
+    @staticmethod
+    def _normalize_alert_severity(value: Any) -> str:
+        text = str(value or "").strip()
+        if "严重" in text:
+            return "严重"
+        if "高危" in text or text == "高":
+            return "高危"
+        if "中危" in text or text == "中":
+            return "中危"
+        if "低危" in text or text == "低":
+            return "低危"
+        score = _to_int(value, -1)
+        if score in SEVERITY_LABEL:
+            return SEVERITY_LABEL.get(score, "信息")
+        if score < 0:
+            return "信息"
+        if score <= 10:
+            return "信息"
+        if score <= 30:
+            return "低危"
+        if score <= 50:
+            return "中危"
+        if score <= 70:
+            return "高危"
+        return "严重"
+
+    @staticmethod
+    def _normalize_alert_deal_status(value: Any) -> str:
+        code = _to_int(value, -1)
+        if code in ALERT_DEAL_STATUS_LABEL:
+            return ALERT_DEAL_STATUS_LABEL[code]
+        if code in DEAL_STATUS_LABEL:
+            return DEAL_STATUS_LABEL[code]
+        text = str(value or "").strip()
+        return text or "-"
+
+    @staticmethod
+    def _normalize_access_direction(value: Any) -> str:
+        code = _to_int(value, -1)
+        if code in ALERT_ACCESS_DIRECTION_LABEL:
+            return ALERT_ACCESS_DIRECTION_LABEL[code]
+        text = str(value or "").strip()
+        aliases = {
+            "internal_to_external": "内对外",
+            "external_to_internal": "外对内",
+            "internal_to_internal": "内对内",
+            "none": "无",
+        }
+        return aliases.get(text.lower(), text or "-")
+
+    def _normalize_alert_row(self, item: dict[str, Any], index: int = 0) -> dict[str, Any]:
+        uu_id = _pick(item, "uuId", "alertId", "id", default="")
+        last_time = _pick(item, "lastTime", "latestTime", "occurTime", "endTime", default=0)
+        src_port = _pick(item, "srcPort", default=[])
+        dst_port = _pick(item, "dstPort", default=[])
+        risk_tag = _pick(item, "riskTag", default=[])
+        url = _pick(item, "url", default=[])
+        domain = _pick(item, "domain", default=[])
+        file_md5 = _pick(item, "fileMd5", default=[])
+        return {
+            "index": index,
+            "uuId": uu_id,
+            "name": _pick(item, "name", "alertName", default="未知告警"),
+            "incidentSeverity": self._normalize_alert_severity(_pick(item, "severity", "incidentSeverity")),
+            "dealStatus": self._normalize_alert_deal_status(_pick(item, "alertDealStatus", "dealStatus", "status")),
+            "direction": self._normalize_access_direction(_pick(item, "direction", "accessDirection")),
+            "srcIp": _pick(item, "srcIp", "sourceIp", default=[]),
+            "dstIp": _pick(item, "dstIp", "destIp", "destinationIp", default=[]),
+            "srcPort": src_port if isinstance(src_port, list) else [src_port] if src_port not in (None, "") else [],
+            "dstPort": dst_port if isinstance(dst_port, list) else [dst_port] if dst_port not in (None, "") else [],
+            "url": url if isinstance(url, list) else [url] if url not in (None, "") else [],
+            "domain": domain if isinstance(domain, list) else [domain] if domain not in (None, "") else [],
+            "fileMd5": file_md5 if isinstance(file_md5, list) else [file_md5] if file_md5 not in (None, "") else [],
+            "stage": _pick(item, "stage", default=0),
+            "attackState": _pick(item, "attackState", default=-1),
+            "riskTag": risk_tag if isinstance(risk_tag, list) else [risk_tag] if risk_tag not in (None, "") else [],
+            "threatSubTypeDesc": _pick(item, "threatSubTypeDesc", default=""),
+            "traceBackId": _pick(item, "traceBackId", default=""),
+            "hostIp": _pick(item, "hostIp", "assetIp", default="-"),
+            "endTime": _format_ts(last_time),
+            "lastTimeTs": _to_int(last_time, 0),
         }
 
     def _safe_llm_complete(
@@ -1903,6 +2004,73 @@ class PlaybookService:
 
         return nodes, finalizer
 
+    def _scan_alerts_for_ip(
+        self,
+        requester: APIRequester,
+        *,
+        start_ts: int,
+        end_ts: int,
+        max_scan: int = 10000,
+        page_size: int = 200,
+        max_store_matches: int = 500,
+        extra_filters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        matched: list[dict[str, Any]] = []
+        matched_total = 0
+        scanned = 0
+        page = 1
+        pages = 0
+        truncated = False
+        total_hint: int | None = None
+
+        while scanned < max_scan:
+            req = {
+                "page": page,
+                "pageSize": page_size,
+                "sortField": "lastTime",
+                "sortOrder": "desc",
+                "timeField": "lastTime",
+                "startTimestamp": start_ts,
+                "endTimestamp": end_ts,
+            }
+            req.update(extra_filters or {})
+            resp = requester.request("POST", "/api/xdr/v1/alerts/list", json_body=req)
+            if resp.get("code") != "Success":
+                break
+            data = resp.get("data", {}) if isinstance(resp.get("data"), dict) else {}
+            if total_hint is None:
+                total_hint = _to_int(_pick(data, "total", "count", "totalCount"), -1)
+            items = data.get("item", []) or []
+            if not items:
+                break
+
+            pages += 1
+            for item in items:
+                if scanned >= max_scan:
+                    truncated = True
+                    break
+                scanned += 1
+                matched_total += 1
+                if len(matched) < max_store_matches:
+                    matched.append(self._normalize_alert_row(item, len(matched) + 1))
+            if len(items) < page_size:
+                break
+            if scanned >= max_scan:
+                truncated = True
+                break
+            page += 1
+
+        if total_hint is not None and total_hint >= 0:
+            matched_total = total_hint
+
+        return {
+            "matched_events": matched,
+            "matched_total": matched_total,
+            "scanned": scanned,
+            "pages": pages,
+            "truncated": truncated,
+        }
+
     def _scan_incidents_for_ip(
         self,
         requester: APIRequester,
@@ -2040,6 +2208,133 @@ class PlaybookService:
                 if parsed:
                     result.append(parsed)
         return _dedup_keep_order(result)
+
+    @staticmethod
+    def _normalize_port_values(value: Any) -> list[int]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        ports: list[int] = []
+        for item in values:
+            port = _to_int(item, -1)
+            if 1 <= port <= 65535:
+                ports.append(port)
+        return _dedup_keep_order(ports)
+
+    @staticmethod
+    def _severity_rank(value: Any) -> int:
+        text = str(value or "").strip()
+        mapping = {"信息": 0, "低危": 1, "中危": 2, "高危": 3, "严重": 4}
+        if text in mapping:
+            return mapping[text]
+        score = _to_int(value, -1)
+        if score < 0:
+            return 0
+        if score <= 10:
+            return 0
+        if score <= 30:
+            return 1
+        if score <= 50:
+            return 2
+        if score <= 70:
+            return 3
+        return 4
+
+    @staticmethod
+    def _normalize_attack_state(value: Any) -> int:
+        code = _to_int(value, -1)
+        if code in {0, 1, 2, 3}:
+            return code
+        text = str(value or "").strip()
+        aliases = {"尝试": 0, "失败": 1, "成功": 2, "失陷": 3}
+        return aliases.get(text, -1)
+
+    def _load_internal_network_filters(self) -> tuple[set[str], list[ipaddress.IPv4Network]]:
+        custom_ips: set[str] = set()
+        custom_cidrs: list[ipaddress.IPv4Network] = []
+        with session_scope() as session:
+            rows = session.exec(select(SafetyGateRule)).all()
+        for row in rows:
+            rule_type = str(row.rule_type or "").strip().lower()
+            target = str(row.target or "").strip()
+            if not target:
+                continue
+            if rule_type == "ip":
+                ip = _parse_ipv4(target)
+                if ip:
+                    custom_ips.add(ip)
+                continue
+            if rule_type == "cidr":
+                try:
+                    net = ipaddress.ip_network(target, strict=False)
+                except ValueError:
+                    continue
+                if isinstance(net, ipaddress.IPv4Network):
+                    custom_cidrs.append(net)
+        return custom_ips, custom_cidrs
+
+    @staticmethod
+    def _is_internal_ip_with_safety_gate(
+        ip: str,
+        custom_ips: set[str],
+        custom_cidrs: list[ipaddress.IPv4Network],
+    ) -> bool:
+        parsed_text = _parse_ipv4(ip)
+        if not parsed_text:
+            return False
+        if parsed_text in custom_ips:
+            return True
+        try:
+            parsed = ipaddress.ip_address(parsed_text)
+        except ValueError:
+            return False
+        if not isinstance(parsed, ipaddress.IPv4Address):
+            return False
+        rfc1918_ranges = (
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+        )
+        if any(parsed in net for net in rfc1918_ranges):
+            return True
+        return any(parsed in net for net in custom_cidrs)
+
+    def _pick_breakthrough_alert(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        target_ip: str,
+        custom_internal_ips: set[str],
+        custom_internal_cidrs: list[ipaddress.IPv4Network],
+    ) -> dict[str, Any]:
+        ordered = sorted(
+            [row for row in rows if isinstance(row, dict)],
+            key=lambda item: _to_int(item.get("lastTimeTs"), 0),
+            reverse=True,
+        )
+        preferred: list[dict[str, Any]] = []
+        fallback: list[dict[str, Any]] = []
+        for row in ordered:
+            src_ips = self._extract_ipv4_values(row.get("srcIp"))
+            if src_ips and target_ip not in src_ips:
+                continue
+            dst_ips = self._extract_ipv4_values(row.get("dstIp"))
+            has_internal_victim = any(
+                self._is_internal_ip_with_safety_gate(ip, custom_internal_ips, custom_internal_cidrs) and ip != target_ip
+                for ip in dst_ips
+            )
+            attack_state = self._normalize_attack_state(row.get("attackState"))
+            severity_rank = self._severity_rank(row.get("incidentSeverity"))
+            if has_internal_victim and attack_state in {2, 3} and severity_rank >= 3:
+                preferred.append(row)
+                continue
+            if has_internal_victim and severity_rank >= 3:
+                fallback.append(row)
+        if preferred:
+            return preferred[0]
+        if fallback:
+            return fallback[0]
+        return ordered[0] if ordered else {}
 
     @staticmethod
     def _infer_flow_direction(src_ips: list[str], dst_ips: list[str]) -> str:
@@ -2474,313 +2769,558 @@ class PlaybookService:
         requester: APIRequester = runtime_context["requester"]
         params = runtime_context["params"]
         target_ip = str(params.get("ip"))
+        custom_internal_ips, custom_internal_cidrs = self._load_internal_network_filters()
+        max_scan = _to_int(params.get("max_scan"), 10000)
+        evidence_limit = _to_int(params.get("evidence_limit"), 20)
+        focus_ports = {port for port in params.get("pivot_ports", []) if isinstance(port, int)}
+        if not focus_ports:
+            focus_ports = {445, 139, 3389, 22, 5985, 5986, 135}
+        adaptive_topn = _to_int(params.get("adaptive_port_topn"), 5)
+        src_only_first = bool(params.get("src_only_first", True))
+        high_risk_ports = {80, 443, 22, 3389, 445, 139, 5985, 5986, 135}
 
-        def node_1_external_profile(ctx: dict[str, Any]) -> dict[str, Any]:
-            _ = ctx
-            return {"profile": self._query_intel(target_ip)}
-
-        def node_2_event_scan_paginated(ctx: dict[str, Any]) -> dict[str, Any]:
-            _ = ctx
+        def _window() -> tuple[int, int]:
             now_ts = to_ts(utc_now())
             end_ts = _to_int(params.get("endTimestamp"), now_ts)
-            start_ts = _to_int(params.get("startTimestamp"), end_ts - params.get("window_days", 90) * 86400)
-            src_scan = self._scan_incidents_for_ip(
+            start_ts = end_ts - _to_int(params.get("window_days"), 30) * 86400
+            return start_ts, end_ts
+
+        def _merge_alert_rows(rows_by_side: list[tuple[str, list[dict[str, Any]]]]) -> list[dict[str, Any]]:
+            merged: dict[str, dict[str, Any]] = {}
+            for side, rows in rows_by_side:
+                for row in rows:
+                    uid = str(row.get("uuId") or "").strip()
+                    key = uid or f"{side}-{len(merged) + 1}"
+                    current = merged.get(key)
+                    candidate = {**row, "scan_side": side}
+                    if not current:
+                        merged[key] = candidate
+                        continue
+                    existing_ts = _to_int(current.get("lastTimeTs"), 0)
+                    incoming_ts = _to_int(candidate.get("lastTimeTs"), 0)
+                    if incoming_ts >= existing_ts:
+                        merged[key] = {**current, **candidate}
+                    sides = _dedup_keep_order(
+                        [str(item) for item in current.get("scan_sides", []) if str(item).strip()]
+                        + [str(item) for item in candidate.get("scan_sides", []) if str(item).strip()]
+                        + [str(current.get("scan_side") or ""), str(candidate.get("scan_side") or "")]
+                    )
+                    merged[key]["scan_sides"] = [item for item in sides if item]
+            rows = list(merged.values())
+            rows.sort(key=lambda item: _to_int(item.get("lastTimeTs"), 0), reverse=True)
+            for idx, row in enumerate(rows, start=1):
+                row["index"] = idx
+            return rows
+
+        def _extract_victim_ips_from_alert(row: dict[str, Any]) -> list[str]:
+            src_ips = self._extract_ipv4_values(row.get("srcIp"))
+            dst_ips = self._extract_ipv4_values(row.get("dstIp"))
+            host_ip = _parse_ipv4(row.get("hostIp"))
+            candidates: list[str] = []
+            if target_ip in src_ips:
+                candidates.extend(dst_ips)
+            elif target_ip in dst_ips:
+                if host_ip and host_ip != target_ip:
+                    candidates.append(host_ip)
+                candidates.extend([ip for ip in dst_ips if ip != target_ip])
+            else:
+                candidates.extend(dst_ips)
+            valid: list[str] = []
+            for ip in candidates:
+                parsed = _parse_ipv4(ip)
+                if not parsed or parsed == target_ip:
+                    continue
+                if not self._is_internal_ip_with_safety_gate(parsed, custom_internal_ips, custom_internal_cidrs):
+                    continue
+                valid.append(parsed)
+            return _dedup_keep_order(valid)
+
+        def node_1_attack_surface_recon(ctx: dict[str, Any]) -> dict[str, Any]:
+            _ = ctx
+            start_ts, end_ts = _window()
+            profile = self._query_intel(target_ip)
+            src_alert_scan = self._scan_alerts_for_ip(
                 requester,
-                ip=target_ip,
                 start_ts=start_ts,
                 end_ts=end_ts,
-                max_scan=params.get("max_scan", 10000),
+                max_scan=max_scan,
                 page_size=200,
                 extra_filters={"srcIps": [target_ip]},
-                require_ip_match=False,
             )
-            dst_scan = self._scan_incidents_for_ip(
-                requester,
-                ip=target_ip,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                max_scan=params.get("max_scan", 10000),
-                page_size=200,
-                extra_filters={"dstIps": [target_ip]},
-                require_ip_match=False,
-            )
-            merged: dict[str, dict[str, Any]] = {}
-
-            def merge_rows(rows: list[dict[str, Any]], direction: str) -> None:
-                for row in rows:
-                    uid = str(row.get("uuId") or "")
-                    key = uid or f"{direction}-{row.get('index', 0)}"
-                    existing = merged.get(key)
-                    if existing:
-                        hits = existing.get("scan_hits")
-                        if not isinstance(hits, list):
-                            hits = [str(existing.get("direction") or "")]
-                        if direction not in hits:
-                            hits.append(direction)
-                        merged_hits = _dedup_keep_order([item for item in hits if item])
-                        existing["scan_hits"] = merged_hits
-                        if len(merged_hits) > 1:
-                            existing["direction"] = ""
-                        continue
-                    merged[key] = {**row, "direction": direction, "scan_hits": [direction]}
-
-            merge_rows(src_scan.get("matched_events", []), "源")
-            merge_rows(dst_scan.get("matched_events", []), "目的")
-            merged_rows = list(merged.values())
-            merged_rows.sort(key=lambda item: str(item.get("endTime") or ""), reverse=True)
-            for idx, row in enumerate(merged_rows, start=1):
-                row["index"] = idx
-
-            uuids = [row["uuId"] for row in merged_rows if row.get("uuId")]
-            if uuids:
-                context_manager.store_index_mapping(runtime_context["session_id"], "events", uuids)
-                context_manager.update_params(
-                    runtime_context["session_id"],
-                    {"last_event_uuid": uuids[0], "last_event_uuids": uuids, "last_entity_ip": target_ip},
+            src_rows = src_alert_scan.get("matched_events", [])
+            src_total = _to_int(src_alert_scan.get("matched_total"), len(src_rows))
+            dst_alert_scan = {"matched_events": [], "matched_total": 0, "scanned": 0, "pages": 0, "truncated": False}
+            fallback_used = False
+            if (not src_only_first) or src_total < 3:
+                dst_alert_scan = self._scan_alerts_for_ip(
+                    requester,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    max_scan=max_scan,
+                    page_size=200,
+                    extra_filters={"dstIps": [target_ip]},
                 )
+                fallback_used = _to_int(dst_alert_scan.get("matched_total"), 0) > 0
+            alert_rows = _merge_alert_rows(
+                [
+                    ("源", src_rows),
+                    ("目的", dst_alert_scan.get("matched_events", [])),
+                ]
+            )
+            first_active_ts = min([_to_int(row.get("lastTimeTs"), 0) for row in alert_rows], default=0)
+            last_active_ts = max([_to_int(row.get("lastTimeTs"), 0) for row in alert_rows], default=0)
+
+            surface_counter: dict[tuple[str, int], dict[str, Any]] = {}
+            victim_counter: dict[str, int] = {}
+            severity_distribution = {"信息": 0, "低危": 0, "中危": 0, "高危": 0, "严重": 0}
+            for row in alert_rows:
+                severity_text = str(row.get("incidentSeverity") or "信息")
+                if severity_text not in severity_distribution:
+                    severity_distribution["信息"] += 1
+                else:
+                    severity_distribution[severity_text] += 1
+                victim_ips = _extract_victim_ips_from_alert(row)
+                ports = self._normalize_port_values(row.get("dstPort")) or [0]
+                for victim_ip in victim_ips:
+                    victim_counter[victim_ip] = victim_counter.get(victim_ip, 0) + 1
+                    for port in ports:
+                        key = (victim_ip, port)
+                        current = surface_counter.get(
+                            key,
+                            {
+                                "dest_ip": victim_ip,
+                                "dest_port": port,
+                                "hits": 0,
+                                "last_time_ts": 0,
+                                "last_time": "-",
+                                "severity_peak": "信息",
+                                "sample_alert_ids": [],
+                            },
+                        )
+                        current["hits"] += 1
+                        row_ts = _to_int(row.get("lastTimeTs"), 0)
+                        if row_ts >= _to_int(current.get("last_time_ts"), 0):
+                            current["last_time_ts"] = row_ts
+                            current["last_time"] = str(row.get("endTime") or "-")
+                        if self._severity_rank(row.get("incidentSeverity")) > self._severity_rank(current.get("severity_peak")):
+                            current["severity_peak"] = row.get("incidentSeverity")
+                        alert_id = str(row.get("uuId") or "").strip()
+                        if alert_id:
+                            current["sample_alert_ids"] = _dedup_keep_order(current.get("sample_alert_ids", []) + [alert_id])[:5]
+                        surface_counter[key] = current
+            surface_rows = sorted(surface_counter.values(), key=lambda item: item.get("hits", 0), reverse=True)
+            candidate_victims = sorted(
+                [{"ip": ip, "hits": hits} for ip, hits in victim_counter.items()],
+                key=lambda item: item.get("hits", 0),
+                reverse=True,
+            )[:8]
+
+            distinct_ports = {int(item.get("dest_port", 0)) for item in surface_rows if _to_int(item.get("dest_port"), 0) > 0}
+            distinct_victims = {str(item.get("dest_ip") or "").strip() for item in surface_rows if str(item.get("dest_ip") or "").strip()}
+            if len(distinct_victims) >= 5 and len(distinct_ports) >= 4:
+                attack_intent = "自动化扫描/盲打"
+            elif 0 < len(distinct_victims) <= 2 and any(port in high_risk_ports for port in distinct_ports):
+                attack_intent = "精准定向攻击"
+            else:
+                attack_intent = "待进一步研判"
+
             return {
-                "matched_events": merged_rows,
-                "matched_total": _to_int(src_scan.get("matched_total"), 0) + _to_int(dst_scan.get("matched_total"), 0),
-                "src_alert_total": _to_int(src_scan.get("matched_total"), 0),
-                "dst_alert_total": _to_int(dst_scan.get("matched_total"), 0),
-                "scanned": _to_int(src_scan.get("scanned"), 0) + _to_int(dst_scan.get("scanned"), 0),
-                "pages": _to_int(src_scan.get("pages"), 0) + _to_int(dst_scan.get("pages"), 0),
-                "truncated": bool(src_scan.get("truncated") or dst_scan.get("truncated")),
+                "profile": profile,
                 "startTimestamp": start_ts,
                 "endTimestamp": end_ts,
+                "alert_rows": alert_rows,
+                "src_alert_total": src_total,
+                "dst_alert_total": _to_int(dst_alert_scan.get("matched_total"), 0),
+                "matched_total": src_total + _to_int(dst_alert_scan.get("matched_total"), 0),
+                "scanned": _to_int(src_alert_scan.get("scanned"), 0) + _to_int(dst_alert_scan.get("scanned"), 0),
+                "pages": _to_int(src_alert_scan.get("pages"), 0) + _to_int(dst_alert_scan.get("pages"), 0),
+                "truncated": bool(src_alert_scan.get("truncated") or dst_alert_scan.get("truncated")),
+                "fallback_used": fallback_used,
+                "attack_intent": attack_intent,
+                "candidate_victims": candidate_victims,
+                "surface_rows": surface_rows[:20],
+                "phase1_surface_metrics": {
+                    "first_active": _format_ts(first_active_ts) if first_active_ts else "-",
+                    "last_active": _format_ts(last_active_ts) if last_active_ts else "-",
+                    "first_active_ts": first_active_ts,
+                    "last_active_ts": last_active_ts,
+                    "distinct_victim_count": len(distinct_victims),
+                    "distinct_port_count": len(distinct_ports),
+                    "severity_distribution": severity_distribution,
+                    "attack_intent": attack_intent,
+                },
+                "top_alert_ids": [str(row.get("uuId") or "") for row in alert_rows[:10] if str(row.get("uuId") or "").strip()],
             }
 
-        def node_3_evidence_enrichment_parallel(ctx: dict[str, Any]) -> dict[str, Any]:
-            rows = ctx["nodes"]["node_2_event_scan_paginated"].get("matched_events", [])
-            limit = params.get("evidence_limit", 20)
-            targets = rows[:limit]
-
-            def enrich(row: dict[str, Any]) -> dict[str, Any]:
-                uid = row.get("uuId")
-                if not uid:
-                    return {}
-                proof_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/proof")
-                proof_data = _pick_first_dict(proof_resp.get("data")) if proof_resp.get("code") == "Success" else {}
-                entity_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
-                entities, _ = extract_entity_items_from_response(entity_resp)
-                entity_ips = [item.get("ip") for item in entities if item.get("ip")]
-                timeline_items = (
-                    proof_data.get("alertTimeLine", [])
-                    or proof_data.get("incidentTimeLines", [])
-                    or []
-                )
-                timeline_events: list[dict[str, Any]] = []
-                incident_direction = "-"
-                for timeline in timeline_items[:30]:
-                    if not isinstance(timeline, dict):
-                        continue
-                    alert_name = str(_pick(timeline, "name", "threatSubTypeDesc", default="未知告警"))
-                    stage_name = self._normalize_timeline_stage(timeline.get("stage"), alert_name=alert_name)
-                    proof_row = timeline.get("proof") if isinstance(timeline.get("proof"), dict) else {}
-                    direction_from_timeline = self._resolve_hunting_direction(
-                        target_ip=target_ip,
-                        scan_side=str(row.get("direction") or ""),
-                        src_values=[
-                            timeline.get("srcIp"),
-                            timeline.get("srcIps"),
-                            timeline.get("srcIpDesc"),
-                            proof_row.get("srcIp"),
-                            proof_row.get("srcIps"),
-                            proof_row.get("srcIpDesc"),
-                        ],
-                        dst_values=[
-                            timeline.get("dstIp"),
-                            timeline.get("dstIps"),
-                            timeline.get("dstIpDesc"),
-                            proof_row.get("dstIp"),
-                            proof_row.get("dstIps"),
-                            proof_row.get("dstIpDesc"),
-                        ],
-                    )
-                    if incident_direction == "-" and direction_from_timeline != "-":
-                        incident_direction = direction_from_timeline
-                    timeline_events.append(
-                        {
-                            "uuId": uid,
-                            "alert_id": str(_pick(timeline, "alertId", default=uid) or uid),
-                            "name": alert_name,
-                            "stage_name": stage_name,
-                            "attack_phase": self._timeline_attack_phase(stage_name),
-                            "last_time": _format_ts(_pick(timeline, "lastTime", default=0)),
-                            "last_time_ts": _to_int(_pick(timeline, "lastTime", default=0), 0),
-                            "severity": self._normalize_timeline_severity(timeline.get("severity")),
-                            "stage_raw": timeline.get("stage"),
-                        }
-                    )
+        def node_2_breakthrough_identify(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_attack_surface_recon"]
+            alert_rows = node1.get("alert_rows", [])
+            candidate_victims = [str(item.get("ip") or "") for item in node1.get("candidate_victims", []) if str(item.get("ip") or "")]
+            breakthrough_alert = self._pick_breakthrough_alert(
+                alert_rows,
+                target_ip=target_ip,
+                custom_internal_ips=custom_internal_ips,
+                custom_internal_cidrs=custom_internal_cidrs,
+            )
+            if not breakthrough_alert:
                 return {
-                    "uuId": uid,
-                    "timeline_count": len(proof_data.get("alertTimeLine", []) or []),
-                    "risk_tags": proof_data.get("riskTag", []),
-                    "entity_ips": _dedup_keep_order(entity_ips),
-                    "ai_result": proof_data.get("gptResultDescription", "暂无"),
-                    "timeline_events": timeline_events,
-                    "incident_direction": incident_direction,
+                    "victim_a_ip": "",
+                    "breakthrough_time": "-",
+                    "breakthrough_time_ts": 0,
+                    "breakthrough_alert_id": "",
+                    "breakthrough_evidence": {},
+                    "errors": ["未找到可用突破告警。"],
+                    "phase_2_breakthrough": {
+                        "observed": False,
+                        "victim_a_ip": "",
+                        "breakthrough_time": "-",
+                        "alert_id": "",
+                        "payload_summary": "未识别到高置信突破告警。",
+                    },
                 }
 
-            evidence: list[dict[str, Any]] = []
+            dst_candidates = _extract_victim_ips_from_alert(breakthrough_alert)
+            victim_a_ip = ""
+            if candidate_victims:
+                candidate_set = set(candidate_victims)
+                for ip in dst_candidates:
+                    if ip in candidate_set:
+                        victim_a_ip = ip
+                        break
+            if not victim_a_ip and dst_candidates:
+                victim_a_ip = dst_candidates[0]
+            if not victim_a_ip and candidate_victims:
+                victim_a_ip = candidate_victims[0]
+            if not victim_a_ip:
+                host_ip = _parse_ipv4(breakthrough_alert.get("hostIp"))
+                if host_ip and self._is_internal_ip_with_safety_gate(host_ip, custom_internal_ips, custom_internal_cidrs):
+                    victim_a_ip = host_ip
+
+            incident_uuid = ""
+            trace_back_id = str(breakthrough_alert.get("traceBackId") or "").strip()
+            if trace_back_id.startswith("incident-"):
+                incident_uuid = trace_back_id
+            alert_id = str(breakthrough_alert.get("uuId") or "").strip()
+            if not incident_uuid and alert_id.startswith("incident-"):
+                incident_uuid = alert_id
+
+            proof_data: dict[str, Any] = {}
+            entity_ips: list[str] = []
             errors: list[str] = []
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                fut_map = {executor.submit(enrich, row): row for row in targets}
-                for fut in as_completed(fut_map):
-                    try:
-                        item = fut.result()
-                    except Exception as exc:
-                        errors.append(str(exc) or exc.__class__.__name__)
-                        continue
-                    if item:
-                        evidence.append(item)
-            evidence.sort(key=lambda item: next((idx for idx, row in enumerate(targets) if row.get("uuId") == item["uuId"]), 999))
-            return {"evidence_items": evidence, "errors": errors}
+            if incident_uuid:
+                proof_resp = requester.request("GET", f"/api/xdr/v1/incidents/{incident_uuid}/proof")
+                if proof_resp.get("code") == "Success":
+                    proof_data = _pick_first_dict(proof_resp.get("data"))
+                else:
+                    errors.append(str(proof_resp.get("message") or "突破告警举证拉取失败"))
+                entity_resp = requester.request("GET", f"/api/xdr/v1/incidents/{incident_uuid}/entities/ip")
+                entities, entity_error = extract_entity_items_from_response(entity_resp)
+                if entity_error:
+                    errors.append(entity_error)
+                entity_ips = [item.get("ip") for item in entities if _parse_ipv4(item.get("ip"))]
+                entity_ips = _dedup_keep_order(entity_ips)
+            else:
+                errors.append("突破告警未关联 incident uuid，跳过举证拉取。")
 
-        def node_4_internal_activity_count(ctx: dict[str, Any]) -> dict[str, Any]:
-            _ = ctx
-            now_ts = to_ts(utc_now())
-            windows = [7, 30, 90]
-            rows = []
-            for days in windows:
-                start_ts = now_ts - days * 86400
-                src_total = self._count_logs(
-                    requester,
-                    start_ts=start_ts,
-                    end_ts=now_ts,
-                    extra_filters={"srcIps": [target_ip]},
-                )["total"]
-                dst_total = self._count_logs(
-                    requester,
-                    start_ts=start_ts,
-                    end_ts=now_ts,
-                    extra_filters={"dstIps": [target_ip]},
-                )["total"]
-                rows.append({"window": f"{days}d", "src_total": src_total, "dst_total": dst_total})
-            return {"activity_rows": rows}
-
-        def node_5_llm_timeline_story(ctx: dict[str, Any]) -> dict[str, Any]:
-            profile = ctx["nodes"]["node_1_external_profile"].get("profile", {})
-            matched = ctx["nodes"]["node_2_event_scan_paginated"].get("matched_events", [])
-            evidence = ctx["nodes"]["node_3_evidence_enrichment_parallel"].get("evidence_items", [])
-            activity = ctx["nodes"]["node_4_internal_activity_count"].get("activity_rows", [])
-
-            severity = str(profile.get("severity") or "unknown").lower()
-            risk_level = "中"
-            if severity in {"high", "critical"} or len(matched) >= 10:
-                risk_level = "高"
-            elif severity in {"low"} and len(matched) <= 2:
-                risk_level = "低"
-
-            src_alert_total = _to_int(ctx["nodes"]["node_2_event_scan_paginated"].get("src_alert_total"), 0)
-            dst_alert_total = _to_int(ctx["nodes"]["node_2_event_scan_paginated"].get("dst_alert_total"), 0)
-            alert_total = src_alert_total + dst_alert_total
-            action_decision = "建议继续观察"
-            if src_alert_total > 0 or (severity in {"high", "critical"} and alert_total > 0) or alert_total >= 20:
-                action_decision = "建议立即封禁"
-
-            fallback = (
-                f"风险等级：{risk_level}\n"
-                "攻击故事线：\n"
-                "1) 侦察：目标IP出现对内通信痕迹。\n"
-                "2) 利用：命中可疑告警并关联外部情报标签。\n"
-                "3) 横向：在告警时间线上出现多阶段活动痕迹。\n"
-                "4) 结果：基于告警与情报综合判断给出处置结论。\n"
-                f"处置结论：{action_decision}。"
+            payload_urls = _dedup_keep_order(
+                [str(item) for item in breakthrough_alert.get("url", []) if str(item).strip()]
+                + [str(item) for item in breakthrough_alert.get("domain", []) if str(item).strip()]
             )
-            prompt = (
-                "请按“侦察->利用->横向->结果”输出攻击故事线，每段附关键证据。"
-                "最后必须给出一行“处置结论：建议立即封禁”或“处置结论：建议继续观察”。"
-                f"\n目标IP: {target_ip}"
-                f"\n画像: {json.dumps(profile, ensure_ascii=False)}"
-                f"\n命中告警: {json.dumps(matched[:10], ensure_ascii=False)}"
-                f"\n举证: {json.dumps(evidence[:10], ensure_ascii=False)}"
-                f"\n内部活动: {json.dumps(activity, ensure_ascii=False)}"
-                f"\n源IP命中告警数: {src_alert_total}"
-                f"\n目的IP命中告警数: {dst_alert_total}"
-                f"\n规则建议: {action_decision}"
+            payload_files = _dedup_keep_order([str(item) for item in breakthrough_alert.get("fileMd5", []) if str(item).strip()])
+            payload_paths: list[str] = []
+            payload_cmds: list[str] = []
+            proof_items = (
+                (proof_data.get("alertTimeLine", []) if isinstance(proof_data.get("alertTimeLine"), list) else [])
+                + (proof_data.get("incidentTimeLines", []) if isinstance(proof_data.get("incidentTimeLines"), list) else [])
             )
-            story = self._safe_llm_complete(
-                prompt,
-                system="你是溯源分析专家，输出结构化叙事。",
-                fallback=fallback,
-            )
-            return {"story": story, "risk_level": risk_level, "action_decision": action_decision}
-
-        nodes = [
-            PipelineNode("node_1_external_profile", node_1_external_profile),
-            PipelineNode("node_2_event_scan_paginated", node_2_event_scan_paginated, depends_on=["node_1_external_profile"]),
-            PipelineNode(
-                "node_3_evidence_enrichment_parallel",
-                node_3_evidence_enrichment_parallel,
-                depends_on=["node_2_event_scan_paginated"],
-            ),
-            PipelineNode(
-                "node_4_internal_activity_count",
-                node_4_internal_activity_count,
-                depends_on=["node_3_evidence_enrichment_parallel"],
-            ),
-            PipelineNode(
-                "node_5_llm_timeline_story",
-                node_5_llm_timeline_story,
-                depends_on=["node_4_internal_activity_count"],
-            ),
-        ]
-
-        def finalizer(results: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-            _ = ctx
-            profile = results.get("node_1_external_profile", {}).get("profile", {})
-            scan_result = results.get("node_2_event_scan_paginated", {})
-            matched_rows = scan_result.get("matched_events", [])
-            matched_total = _to_int(scan_result.get("matched_total"), len(matched_rows))
-            src_alert_total = _to_int(scan_result.get("src_alert_total"), 0)
-            dst_alert_total = _to_int(scan_result.get("dst_alert_total"), 0)
-            story_result = results.get("node_5_llm_timeline_story", {})
-            evidence_items = results.get("node_3_evidence_enrichment_parallel", {}).get("evidence_items", [])
-            evidence_errors = results.get("node_3_evidence_enrichment_parallel", {}).get("errors", [])
-            summary = (
-                f"目标IP {target_ip} 告警轨迹分析完成：命中 {matched_total} 条告警"
-                f"（源IP告警 {src_alert_total} / 目的IP告警 {dst_alert_total}），"
-                f"扫描 {scan_result.get('scanned', 0)} 条（单向上限 {params.get('max_scan', 10000)}），"
-                f"风险等级 {story_result.get('risk_level', '中')}。"
-            )
-            decision_text = str(story_result.get("action_decision") or "建议继续观察")
-            decision_md = self._emphasize_key_points(f"处置结论：{decision_text}。")
-            display_limit = 10
-            display_rows_raw = matched_rows[:display_limit]
-            direction_by_uuid: dict[str, str] = {}
-            for evidence in evidence_items:
-                if not isinstance(evidence, dict):
+            for item in proof_items[:20]:
+                if not isinstance(item, dict):
                     continue
-                uid = str(evidence.get("uuId") or "").strip()
-                resolved = str(evidence.get("incident_direction") or "").strip()
-                if uid and resolved and resolved != "-":
-                    direction_by_uuid[uid] = resolved
+                proof_row = item.get("proof") if isinstance(item.get("proof"), dict) else {}
+                for key in ("path",):
+                    value = proof_row.get(key) or item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        payload_paths.append(value.strip())
+                for key in ("cmdLine",):
+                    value = proof_row.get(key) or item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        payload_cmds.append(value.strip())
+                for key in ("url", "domain"):
+                    values = proof_row.get(key) if isinstance(proof_row.get(key), list) else [proof_row.get(key)]
+                    for value in values:
+                        text = str(value or "").strip()
+                        if text:
+                            payload_urls.append(text)
+                for key in ("fileMd5",):
+                    values = proof_row.get(key) if isinstance(proof_row.get(key), list) else [proof_row.get(key)]
+                    for value in values:
+                        text = str(value or "").strip()
+                        if text:
+                            payload_files.append(text)
 
-            display_rows: list[dict[str, Any]] = []
-            alert_table_rows: list[dict[str, Any]] = []
-            for row in display_rows_raw:
-                uid = str(row.get("uuId") or "-")
-                resolved_direction = direction_by_uuid.get(uid) or self._resolve_hunting_direction(
-                    target_ip=target_ip,
-                    scan_side=str(row.get("direction") or ""),
-                    src_values=[row.get("srcIp"), row.get("srcIps"), row.get("srcIpDesc")],
-                    dst_values=[row.get("dstIp"), row.get("dstIps"), row.get("dstIpDesc")],
+            payload_paths = _dedup_keep_order(payload_paths)[:3]
+            payload_cmds = _dedup_keep_order(payload_cmds)[:3]
+            payload_urls = _dedup_keep_order(payload_urls)[:5]
+            payload_files = _dedup_keep_order(payload_files)[:5]
+            threat_subtype = str(breakthrough_alert.get("threatSubTypeDesc") or "").strip()
+            risk_tags = [str(item).strip() for item in breakthrough_alert.get("riskTag", []) if str(item).strip()]
+            breakthrough_time_ts = _to_int(breakthrough_alert.get("lastTimeTs"), 0)
+            breakthrough_time = str(breakthrough_alert.get("endTime") or "-")
+            payload_summary = (
+                f"突破告警 `{alert_id or '-'}` 命中，疑似利用类型：{threat_subtype or '未知'}。"
+                f" 关键载荷：URL {len(payload_urls)} 项、文件指纹 {len(payload_files)} 项、命令行 {len(payload_cmds)} 项。"
+            )
+            return {
+                "victim_a_ip": victim_a_ip,
+                "breakthrough_time": breakthrough_time,
+                "breakthrough_time_ts": breakthrough_time_ts,
+                "breakthrough_alert_id": alert_id,
+                "breakthrough_incident_uuid": incident_uuid,
+                "breakthrough_evidence": {
+                    "threat_subtype": threat_subtype,
+                    "risk_tags": risk_tags[:5],
+                    "urls": payload_urls,
+                    "file_md5": payload_files,
+                    "paths": payload_paths,
+                    "cmd_lines": payload_cmds,
+                    "entity_ips": entity_ips[:8],
+                },
+                "errors": errors,
+                "phase_2_breakthrough": {
+                    "observed": True,
+                    "victim_a_ip": victim_a_ip,
+                    "breakthrough_time": breakthrough_time,
+                    "breakthrough_time_ts": breakthrough_time_ts,
+                    "alert_id": alert_id,
+                    "incident_uuid": incident_uuid,
+                    "payload_summary": payload_summary,
+                    "risk_tags": risk_tags[:5],
+                    "entity_ips": entity_ips[:8],
+                },
+            }
+
+        def node_3_victim_lateral_movement(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_attack_surface_recon"]
+            node2 = ctx["nodes"]["node_2_breakthrough_identify"]
+            victim_a_ip = str(node2.get("victim_a_ip") or "").strip()
+            if not victim_a_ip:
+                return {
+                    "lateral_confirmed": False,
+                    "victim_b_candidates": [],
+                    "lateral_evidence": [],
+                    "phase_3_lateral": {
+                        "observed": False,
+                        "victim_a_ip": "",
+                        "focus_port_hits": [],
+                        "adaptive_port_hits": [],
+                        "target_count": 0,
+                        "latest_time": "-",
+                    },
+                }
+
+            start_ts = max(_to_int(node2.get("breakthrough_time_ts"), 0), _to_int(node1.get("startTimestamp"), 0))
+            end_ts = _to_int(node1.get("endTimestamp"), to_ts(utc_now()))
+            lateral_scan = self._scan_alerts_for_ip(
+                requester,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                max_scan=max_scan,
+                page_size=200,
+                extra_filters={"srcIps": [victim_a_ip]},
+            )
+            rows = lateral_scan.get("matched_events", [])
+            target_hits: dict[str, int] = {}
+            port_hits: dict[int, int] = {}
+            flow_hits: dict[tuple[str, int], dict[str, Any]] = {}
+            latest_time_ts = 0
+            alert_ids: list[str] = []
+            for row in rows:
+                row_ts = _to_int(row.get("lastTimeTs"), 0)
+                latest_time_ts = max(latest_time_ts, row_ts)
+                alert_id = str(row.get("uuId") or "").strip()
+                if alert_id:
+                    alert_ids.append(alert_id)
+                dst_ips = self._extract_ipv4_values(row.get("dstIp"))
+                dst_ports = self._normalize_port_values(row.get("dstPort")) or [0]
+                for dst_ip in dst_ips:
+                    if dst_ip == victim_a_ip:
+                        continue
+                    if not self._is_internal_ip_with_safety_gate(dst_ip, custom_internal_ips, custom_internal_cidrs):
+                        continue
+                    target_hits[dst_ip] = target_hits.get(dst_ip, 0) + 1
+                    for port in dst_ports:
+                        port_hits[port] = port_hits.get(port, 0) + 1
+                        key = (dst_ip, port)
+                        current = flow_hits.get(
+                            key,
+                            {
+                                "dst_ip": dst_ip,
+                                "dst_port": port,
+                                "hits": 0,
+                                "latest_time_ts": 0,
+                                "latest_time": "-",
+                                "alert_ids": [],
+                            },
+                        )
+                        current["hits"] += 1
+                        if row_ts >= _to_int(current.get("latest_time_ts"), 0):
+                            current["latest_time_ts"] = row_ts
+                            current["latest_time"] = str(row.get("endTime") or "-")
+                        if alert_id:
+                            current["alert_ids"] = _dedup_keep_order(current.get("alert_ids", []) + [alert_id])[:6]
+                        flow_hits[key] = current
+
+            focus_port_hits = sorted(
+                [{"port": port, "hits": hits} for port, hits in port_hits.items() if port in focus_ports],
+                key=lambda item: item["hits"],
+                reverse=True,
+            )
+            adaptive_port_hits = sorted(
+                [{"port": port, "hits": hits} for port, hits in port_hits.items() if port not in focus_ports and port > 0],
+                key=lambda item: item["hits"],
+                reverse=True,
+            )[:adaptive_topn]
+            lateral_confirmed = bool(focus_port_hits) or (len(target_hits) >= 2 and bool(adaptive_port_hits))
+            victim_b_candidates = sorted(
+                [{"ip": ip, "hits": hits} for ip, hits in target_hits.items()],
+                key=lambda item: item["hits"],
+                reverse=True,
+            )[:5]
+            lateral_evidence = sorted(flow_hits.values(), key=lambda item: item["hits"], reverse=True)[:12]
+            return {
+                "lateral_confirmed": lateral_confirmed,
+                "victim_b_candidates": victim_b_candidates,
+                "lateral_evidence": lateral_evidence,
+                "phase_3_lateral": {
+                    "observed": bool(target_hits),
+                    "victim_a_ip": victim_a_ip,
+                    "target_count": len(target_hits),
+                    "focus_port_hits": focus_port_hits,
+                    "adaptive_port_hits": adaptive_port_hits,
+                    "latest_time": _format_ts(latest_time_ts) if latest_time_ts else "-",
+                    "latest_time_ts": latest_time_ts,
+                    "alert_ids": _dedup_keep_order(alert_ids)[:10],
+                },
+            }
+
+        def node_4_outbound_behavior_analysis(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_attack_surface_recon"]
+            node2 = ctx["nodes"]["node_2_breakthrough_identify"]
+            node3 = ctx["nodes"]["node_3_victim_lateral_movement"]
+            victim_a_ip = str(node2.get("victim_a_ip") or "").strip()
+            victim_b = [str(item.get("ip") or "").strip() for item in node3.get("victim_b_candidates", []) if str(item.get("ip") or "").strip()]
+            compromised_hosts = _dedup_keep_order([host for host in [victim_a_ip, *victim_b] if host])[:5]
+            if not compromised_hosts:
+                return {
+                    "outbound_targets": [],
+                    "outbound_behavior_evidence": [],
+                    "phase_4_outbound": {
+                        "observed": False,
+                        "host_count": 0,
+                        "outbound_target_count": 0,
+                        "outbound_hits": 0,
+                        "latest_time": "-",
+                    },
+                }
+
+            start_ts = max(_to_int(node2.get("breakthrough_time_ts"), 0), _to_int(node1.get("startTimestamp"), 0))
+            end_ts = _to_int(node1.get("endTimestamp"), to_ts(utc_now()))
+            target_counter: dict[str, dict[str, Any]] = {}
+            outbound_flow_counter: dict[tuple[str, str, int], dict[str, Any]] = {}
+            latest_time_ts = 0
+            alert_ids: list[str] = []
+            for host_ip in compromised_hosts:
+                scan = self._scan_alerts_for_ip(
+                    requester,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    max_scan=max_scan,
+                    page_size=200,
+                    extra_filters={"srcIps": [host_ip]},
                 )
-                display_row = {**row, "direction": resolved_direction, "threatId": uid}
-                display_rows.append(display_row)
-                alert_table_rows.append(
-                    {
-                        "index": row.get("index"),
-                        "recent_time": row.get("endTime", "-"),
-                        "direction": resolved_direction,
-                        "alert_name": row.get("name", "-"),
-                        "threat_id": uid,
-                        "alert_id": uid,
-                        "severity": row.get("incidentSeverity", "-"),
-                        "status": row.get("dealStatus", "-"),
-                    }
-                )
+                rows = scan.get("matched_events", [])
+                for row in rows:
+                    row_ts = _to_int(row.get("lastTimeTs"), 0)
+                    latest_time_ts = max(latest_time_ts, row_ts)
+                    alert_id = str(row.get("uuId") or "").strip()
+                    if alert_id:
+                        alert_ids.append(alert_id)
+                    dst_ips = self._extract_ipv4_values(row.get("dstIp"))
+                    dst_ports = self._normalize_port_values(row.get("dstPort")) or [0]
+                    for dst_ip in dst_ips:
+                        if self._is_internal_ip_with_safety_gate(dst_ip, custom_internal_ips, custom_internal_cidrs):
+                            continue
+                        target_item = target_counter.get(
+                            dst_ip,
+                            {
+                                "dst_ip": dst_ip,
+                                "hits": 0,
+                                "latest_time_ts": 0,
+                                "latest_time": "-",
+                                "ports": [],
+                                "hosts": [],
+                                "alert_ids": [],
+                            },
+                        )
+                        target_item["hits"] += 1
+                        if row_ts >= _to_int(target_item.get("latest_time_ts"), 0):
+                            target_item["latest_time_ts"] = row_ts
+                            target_item["latest_time"] = str(row.get("endTime") or "-")
+                        target_item["ports"] = _dedup_keep_order(target_item.get("ports", []) + dst_ports)[:8]
+                        target_item["hosts"] = _dedup_keep_order(target_item.get("hosts", []) + [host_ip])[:5]
+                        if alert_id:
+                            target_item["alert_ids"] = _dedup_keep_order(target_item.get("alert_ids", []) + [alert_id])[:6]
+                        target_counter[dst_ip] = target_item
+
+                        for port in dst_ports:
+                            flow_key = (host_ip, dst_ip, port)
+                            flow_item = outbound_flow_counter.get(
+                                flow_key,
+                                {
+                                    "src_ip": host_ip,
+                                    "dst_ip": dst_ip,
+                                    "dst_port": port,
+                                    "hits": 0,
+                                    "latest_time_ts": 0,
+                                    "latest_time": "-",
+                                    "alert_ids": [],
+                                },
+                            )
+                            flow_item["hits"] += 1
+                            if row_ts >= _to_int(flow_item.get("latest_time_ts"), 0):
+                                flow_item["latest_time_ts"] = row_ts
+                                flow_item["latest_time"] = str(row.get("endTime") or "-")
+                            if alert_id:
+                                flow_item["alert_ids"] = _dedup_keep_order(flow_item.get("alert_ids", []) + [alert_id])[:5]
+                            outbound_flow_counter[flow_key] = flow_item
+
+            outbound_targets = sorted(target_counter.values(), key=lambda item: item["hits"], reverse=True)[:10]
+            outbound_behavior_evidence = sorted(outbound_flow_counter.values(), key=lambda item: item["hits"], reverse=True)[:15]
+            return {
+                "outbound_targets": outbound_targets,
+                "outbound_behavior_evidence": outbound_behavior_evidence,
+                "phase_4_outbound": {
+                    "observed": bool(outbound_targets),
+                    "host_count": len(compromised_hosts),
+                    "outbound_target_count": len(target_counter),
+                    "outbound_hits": sum(item["hits"] for item in outbound_targets),
+                    "latest_time": _format_ts(latest_time_ts) if latest_time_ts else "-",
+                    "latest_time_ts": latest_time_ts,
+                    "alert_ids": _dedup_keep_order(alert_ids)[:10],
+                },
+            }
+
+        def node_5_kill_chain_finalize(ctx: dict[str, Any]) -> dict[str, Any]:
+            _ = ctx
+            phase1 = ctx["nodes"]["node_1_attack_surface_recon"]
+            phase2 = ctx["nodes"]["node_2_breakthrough_identify"]
+            phase3 = ctx["nodes"]["node_3_victim_lateral_movement"]
+            phase4 = ctx["nodes"]["node_4_outbound_behavior_analysis"]
+
+            phase1_metrics = phase1.get("phase1_surface_metrics", {})
+            phase2_data = phase2.get("phase_2_breakthrough", {})
+            phase3_data = phase3.get("phase_3_lateral", {})
+            phase4_data = phase4.get("phase_4_outbound", {})
 
             stage_order = [
                 {"name": "侦察", "title": "初步侦察", "card_title": "扫描与探测脆弱点"},
@@ -2788,114 +3328,212 @@ class PlaybookService:
                 {"name": "横向", "title": "横向与控制", "card_title": "建立控制与横向移动"},
                 {"name": "结果", "title": "结果", "card_title": "影响与结果评估"},
             ]
-            events_by_stage: dict[str, list[dict[str, Any]]] = {item["name"]: [] for item in stage_order}
-            evidence_by_uuid: dict[str, dict[str, Any]] = {
-                str(item.get("uuId") or ""): item for item in evidence_items if isinstance(item, dict)
+            phase1_observed = _to_int(phase1.get("matched_total"), 0) > 0
+            phase2_observed = bool(phase2_data.get("observed"))
+            phase3_observed = bool(phase3.get("lateral_confirmed") or phase3_data.get("observed"))
+            phase4_observed = bool(phase4_data.get("observed"))
+            stage_observed = {
+                "侦察": phase1_observed,
+                "利用": phase2_observed,
+                "横向": phase3_observed,
+                "结果": phase4_observed,
             }
-            seen_timeline_keys: set[tuple[str, str, int]] = set()
-            for evidence in evidence_items:
-                if not isinstance(evidence, dict):
-                    continue
-                for timeline in evidence.get("timeline_events", []) or []:
-                    if not isinstance(timeline, dict):
-                        continue
-                    stage_name = str(timeline.get("stage_name") or "未知")
-                    if stage_name not in events_by_stage:
-                        continue
-                    timeline_key = (
-                        str(timeline.get("alert_id") or ""),
-                        str(timeline.get("uuId") or ""),
-                        _to_int(timeline.get("last_time_ts"), 0),
-                    )
-                    if timeline_key in seen_timeline_keys:
-                        continue
-                    seen_timeline_keys.add(timeline_key)
-                    events_by_stage[stage_name].append(timeline)
-            for stage_name in events_by_stage:
-                events_by_stage[stage_name].sort(
-                    key=lambda item: _to_int(item.get("last_time_ts"), 0),
-                    reverse=True,
-                )
+            stage_time = {
+                "侦察": str(phase1_metrics.get("first_active") or "-"),
+                "利用": str(phase2_data.get("breakthrough_time") or "-"),
+                "横向": str(phase3_data.get("latest_time") or "-"),
+                "结果": str(phase4_data.get("latest_time") or "-"),
+            }
+            stage_highlight = {
+                "侦察": str(phase1_metrics.get("attack_intent") or "未观测到"),
+                "利用": str(phase2.get("breakthrough_evidence", {}).get("threat_subtype") or "未观测到"),
+                "横向": f"命中重点端口 {len(phase3_data.get('focus_port_hits', []))} 项",
+                "结果": f"外联目标 {len(phase4.get('outbound_targets', []))} 个",
+            }
+            stage_event_count = {
+                "侦察": _to_int(phase1.get("matched_total"), 0),
+                "利用": 1 if phase2_observed else 0,
+                "横向": len(phase3.get("lateral_evidence", [])),
+                "结果": len(phase4.get("outbound_behavior_evidence", [])),
+            }
 
             kill_chain_stages: list[dict[str, Any]] = []
             stage_evidence_cards: list[dict[str, Any]] = []
+            stage_alert_id_map = {
+                "侦察": phase1.get("top_alert_ids", [])[:6],
+                "利用": [str(phase2.get("breakthrough_alert_id") or "")] if phase2_observed else [],
+                "横向": phase3_data.get("alert_ids", [])[:6],
+                "结果": phase4_data.get("alert_ids", [])[:6],
+            }
+            stage_entity_map = {
+                "侦察": [str(item.get("ip") or "") for item in phase1.get("candidate_victims", [])[:2] if str(item.get("ip") or "")],
+                "利用": [str(phase2.get("victim_a_ip") or "")] if str(phase2.get("victim_a_ip") or "").strip() else [],
+                "横向": [str(item.get("ip") or "") for item in phase3.get("victim_b_candidates", [])[:2] if str(item.get("ip") or "")],
+                "结果": [str(item.get("dst_ip") or "") for item in phase4.get("outbound_targets", [])[:2] if str(item.get("dst_ip") or "")],
+            }
+            stage_tag_map = {
+                "侦察": [],
+                "利用": [str(item) for item in phase2.get("breakthrough_evidence", {}).get("risk_tags", []) if str(item).strip()],
+                "横向": [f"重点端口:{item.get('port')}" for item in phase3_data.get("focus_port_hits", [])[:3]],
+                "结果": [f"外联端口:{item}" for item in phase4.get("outbound_targets", [{}])[0].get("ports", [])[:3]]
+                if phase4.get("outbound_targets")
+                else [],
+            }
+
             for stage in stage_order:
-                stage_name = stage["name"]
-                stage_events = events_by_stage.get(stage_name, [])
-                observed = bool(stage_events)
-                stage_time = stage_events[-1].get("last_time", "-") if observed else "未观测到"
-                highlight = stage_events[0].get("name", "-") if observed else "未观测到"
+                name = stage["name"]
+                observed = bool(stage_observed.get(name))
+                stage_summary = "当前窗口未观测到该阶段的高置信度告警证据。"
+                if name == "侦察" and observed:
+                    stage_summary = (
+                        f"发现攻击面命中 {_to_int(phase1.get('matched_total'), 0)} 条告警，"
+                        f"目的主机 {phase1_metrics.get('distinct_victim_count', 0)} 个，"
+                        f"判定倾向：{phase1_metrics.get('attack_intent', '待进一步研判')}。"
+                    )
+                if name == "利用" and observed:
+                    stage_summary = str(phase2_data.get("payload_summary") or "已定位高置信突破告警并提取载荷证据。")
+                if name == "横向" and observed:
+                    stage_summary = (
+                        f"Victim A `{phase2.get('victim_a_ip') or '-'}` 发起内网连接，命中重点端口 "
+                        f"{len(phase3_data.get('focus_port_hits', []))} 项，"
+                        f"异常端口 {len(phase3_data.get('adaptive_port_hits', []))} 项。"
+                    )
+                if name == "结果" and observed:
+                    stage_summary = (
+                        f"已观测失陷主机出站行为，外联目标 {len(phase4.get('outbound_targets', []))} 个，"
+                        f"最近活跃时间 {phase4_data.get('latest_time', '-')}"
+                    )
                 kill_chain_stages.append(
                     {
-                        "stage_name": stage_name,
+                        "stage_name": name,
                         "title": stage["title"],
-                        "attack_phase": self._timeline_attack_phase(stage_name),
+                        "attack_phase": self._timeline_attack_phase(name),
                         "observed": observed,
-                        "time": stage_time,
-                        "highlight": highlight,
-                        "event_count": len(stage_events),
+                        "time": stage_time.get(name, "-"),
+                        "highlight": stage_highlight.get(name, "未观测到"),
+                        "event_count": stage_event_count.get(name, 0),
                     }
                 )
-
-                stage_alert_ids = _dedup_keep_order(
-                    [str(item.get("alert_id") or "").strip() for item in stage_events if str(item.get("alert_id") or "").strip()]
-                )[:6]
-                stage_uuids = _dedup_keep_order(
-                    [str(item.get("uuId") or "").strip() for item in stage_events if str(item.get("uuId") or "").strip()]
-                )
-                stage_tags: list[str] = []
-                stage_entities: list[str] = []
-                for uid in stage_uuids:
-                    evidence_row = evidence_by_uuid.get(uid) or {}
-                    raw_tags = evidence_row.get("risk_tags")
-                    if isinstance(raw_tags, list):
-                        for tag in raw_tags:
-                            text = str(tag or "").strip()
-                            if text:
-                                stage_tags.append(text)
-                    elif raw_tags:
-                        text = str(raw_tags).strip()
-                        if text:
-                            stage_tags.append(text)
-                    for entity_ip in evidence_row.get("entity_ips", []) or []:
-                        ip_text = str(entity_ip or "").strip()
-                        if ip_text:
-                            stage_entities.append(ip_text)
-                stage_tags = _dedup_keep_order(stage_tags)[:3]
-                stage_entities = _dedup_keep_order(stage_entities)[:2]
-
-                if observed:
-                    latest_time = stage_events[0].get("last_time", "-")
-                    sample_names = _dedup_keep_order(
-                        [str(item.get("name") or "").strip() for item in stage_events if str(item.get("name") or "").strip()]
-                    )[:2]
-                    sample_text = "、".join(sample_names) if sample_names else "相关攻击行为"
-                    summary_text = (
-                        f"该阶段命中 {len(stage_events)} 条关联告警，最近发生于 {latest_time}。"
-                        f"主要行为：{sample_text}。"
-                    )
-                else:
-                    summary_text = "当前窗口未观测到该阶段的高置信度告警证据。"
-
                 stage_evidence_cards.append(
                     {
-                        "stage_name": stage_name,
-                        "stage_badge": f"{stage_name}阶段",
+                        "stage_name": name,
+                        "stage_badge": f"{name}阶段",
                         "title": stage["card_title"],
-                        "attack_phase": self._timeline_attack_phase(stage_name),
-                        "summary": summary_text,
+                        "attack_phase": self._timeline_attack_phase(name),
+                        "summary": stage_summary,
                         "observed": observed,
-                        "alert_ids": stage_alert_ids,
-                        "tags": stage_tags,
-                        "entities": stage_entities,
+                        "alert_ids": _dedup_keep_order([item for item in stage_alert_id_map.get(name, []) if str(item).strip()])[:6],
+                        "tags": _dedup_keep_order([item for item in stage_tag_map.get(name, []) if str(item).strip()])[:4],
+                        "entities": _dedup_keep_order([item for item in stage_entity_map.get(name, []) if str(item).strip()])[:3],
                     }
                 )
 
-            risk_level = str(story_result.get("risk_level") or "中")
+            risk_score = 0
+            if phase2_observed:
+                risk_score += 2
+            if phase3_observed:
+                risk_score += 2
+            outbound_hits = _to_int(phase4_data.get("outbound_hits"), 0)
+            if outbound_hits >= 3:
+                risk_score += 2
+            elif outbound_hits > 0:
+                risk_score += 1
+            if str(phase1_metrics.get("attack_intent") or "") == "精准定向攻击":
+                risk_score += 1
+            if risk_score >= 5:
+                risk_level = "高"
+            elif risk_score >= 3:
+                risk_level = "中"
+            else:
+                risk_level = "低"
+            action_decision = "建议立即封禁" if risk_score >= 4 else "建议继续观察"
+            story = (
+                "#### 侦察\n"
+                + stage_evidence_cards[0]["summary"]
+                + "\n\n#### 利用\n"
+                + stage_evidence_cards[1]["summary"]
+                + "\n\n#### 横向\n"
+                + stage_evidence_cards[2]["summary"]
+                + "\n\n#### 结果\n"
+                + stage_evidence_cards[3]["summary"]
+                + f"\n\n处置结论：{action_decision}。"
+            )
+            return {
+                "risk_level": risk_level,
+                "action_decision": action_decision,
+                "story": story,
+                "kill_chain_stages": kill_chain_stages,
+                "stage_evidence_cards": stage_evidence_cards,
+            }
+
+        nodes = [
+            PipelineNode("node_1_attack_surface_recon", node_1_attack_surface_recon),
+            PipelineNode(
+                "node_2_breakthrough_identify",
+                node_2_breakthrough_identify,
+                depends_on=["node_1_attack_surface_recon"],
+            ),
+            PipelineNode(
+                "node_3_victim_lateral_movement",
+                node_3_victim_lateral_movement,
+                depends_on=["node_2_breakthrough_identify"],
+            ),
+            PipelineNode(
+                "node_4_outbound_behavior_analysis",
+                node_4_outbound_behavior_analysis,
+                depends_on=["node_3_victim_lateral_movement"],
+            ),
+            PipelineNode(
+                "node_5_kill_chain_finalize",
+                node_5_kill_chain_finalize,
+                depends_on=["node_4_outbound_behavior_analysis"],
+            ),
+        ]
+
+        def finalizer(results: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+            _ = ctx
+            phase1 = results.get("node_1_attack_surface_recon", {})
+            phase2 = results.get("node_2_breakthrough_identify", {})
+            phase3 = results.get("node_3_victim_lateral_movement", {})
+            phase4 = results.get("node_4_outbound_behavior_analysis", {})
+            node5 = results.get("node_5_kill_chain_finalize", {})
+            alert_rows = phase1.get("alert_rows", [])
+            matched_total = _to_int(phase1.get("matched_total"), len(alert_rows))
+            src_alert_total = _to_int(phase1.get("src_alert_total"), 0)
+            dst_alert_total = _to_int(phase1.get("dst_alert_total"), 0)
+            summary = (
+                f"目标IP {target_ip} 告警轨迹分析完成：命中 {matched_total} 条告警"
+                f"（源IP告警 {src_alert_total} / 目的IP告警 {dst_alert_total}），"
+                f"扫描 {_to_int(phase1.get('scanned'), 0)} 条（单向上限 {max_scan}），"
+                f"风险等级 {node5.get('risk_level', '中')}。"
+            )
+            decision_text = str(node5.get("action_decision") or "建议继续观察")
+            decision_md = self._emphasize_key_points(f"处置结论：{decision_text}。")
+            display_limit = 10
+            display_rows_raw = alert_rows[:display_limit]
+            display_rows: list[dict[str, Any]] = []
+            alert_table_rows: list[dict[str, Any]] = []
+            for row in display_rows_raw:
+                uid = str(row.get("uuId") or "-")
+                access_direction = str(row.get("direction") or "-")
+                display_rows.append({**row, "direction": access_direction, "alertId": uid})
+                alert_table_rows.append(
+                    {
+                        "index": row.get("index"),
+                        "recent_time": row.get("endTime", "-"),
+                        "direction": access_direction,
+                        "alert_name": row.get("name", "-"),
+                        "alert_id": uid,
+                        "severity": row.get("incidentSeverity", "-"),
+                        "status": row.get("dealStatus", "-"),
+                    }
+                )
+
+            risk_level = str(node5.get("risk_level") or "中")
             risk_level_map = {
-                "低": {"label": "低风险 (Low)", "detail": "未观察到持续性高危攻击行为"},
-                "中": {"label": "中风险 (Medium)", "detail": "存在持续攻击迹象，需要持续关注"},
-                "高": {"label": "高风险 (High)", "detail": "已观察到实质性攻击行为，建议尽快处置"},
+                "低": {"label": "低风险 (Low)", "detail": "当前窗口未观测到持续性高危攻击行为"},
+                "中": {"label": "中风险 (Medium)", "detail": "存在持续攻击迹象，建议持续监测与人工复核"},
+                "高": {"label": "高风险 (High)", "detail": "已观测到突破与扩散行为，建议尽快处置"},
             }
             risk_profile = risk_level_map.get(risk_level, risk_level_map["中"])
             action_hint = "建议立即执行微隔离/封禁" if "立即封禁" in decision_text else "建议持续观察并保持监测"
@@ -2910,7 +3548,7 @@ class PlaybookService:
                         {"key": "index", "label": "序号"},
                         {"key": "direction", "label": "方向"},
                         {"key": "endTime", "label": "时间"},
-                        {"key": "threatId", "label": "威胁ID"},
+                        {"key": "alertId", "label": "告警ID"},
                         {"key": "name", "label": "告警名"},
                         {"key": "incidentSeverity", "label": "等级"},
                         {"key": "dealStatus", "label": "状态"},
@@ -2918,7 +3556,7 @@ class PlaybookService:
                     rows=display_rows,
                     namespace="hunting_events",
                 ),
-                text_payload(self._emphasize_key_points(story_result.get("story", "暂无时间线叙事。")), title="攻击故事线"),
+                text_payload(self._emphasize_key_points(str(node5.get("story") or "暂无时间线叙事。")), title="攻击故事线"),
             ]
             if matched_total > len(display_rows):
                 cards.append(
@@ -2927,6 +3565,7 @@ class PlaybookService:
                         title="展示说明",
                     )
                 )
+            evidence_errors = [str(item) for item in phase2.get("errors", []) if str(item).strip()]
             if evidence_errors:
                 cards.append(
                     text_payload(
@@ -2960,21 +3599,32 @@ class PlaybookService:
                 }
             )
 
+            victim_b_candidates = [str(item.get("ip") or "") for item in phase3.get("victim_b_candidates", []) if str(item.get("ip") or "")]
+            outbound_target_ips = [
+                str(item.get("dst_ip") or "") for item in phase4.get("outbound_targets", []) if str(item.get("dst_ip") or "")
+            ]
+            timeline_points = {
+                "T0": str(phase1.get("phase1_surface_metrics", {}).get("first_active") or "-"),
+                "T1": str(phase2.get("breakthrough_time") or "-"),
+                "T2": str(phase2.get("breakthrough_time") or "-"),
+                "T3": str(phase3.get("phase_3_lateral", {}).get("latest_time") or "-"),
+                "T4": str(phase4.get("phase_4_outbound", {}).get("latest_time") or "-"),
+            }
             return {
                 "summary": summary,
                 "cards": cards,
                 "next_actions": next_actions,
-                "profile": profile,
+                "profile": phase1.get("profile", {}),
                 "threat_view": {
                     "target_ip": target_ip,
                     "target_type": target_type,
-                    "window_days": _to_int(params.get("window_days"), 90),
+                    "window_days": _to_int(params.get("window_days"), 30),
                     "stats": {
                         "matched_total": matched_total,
                         "src_alert_total": src_alert_total,
                         "dst_alert_total": dst_alert_total,
-                        "scanned": _to_int(scan_result.get("scanned"), 0),
-                        "max_scan": _to_int(params.get("max_scan"), 10000),
+                        "scanned": _to_int(phase1.get("scanned"), 0),
+                        "max_scan": max_scan,
                     },
                     "risk": {
                         "level": risk_level,
@@ -2983,14 +3633,25 @@ class PlaybookService:
                         "action_decision": decision_text,
                         "action_hint": action_hint,
                     },
-                    "kill_chain_stages": kill_chain_stages,
-                    "stage_evidence_cards": stage_evidence_cards,
+                    "kill_chain_stages": node5.get("kill_chain_stages", []),
+                    "stage_evidence_cards": node5.get("stage_evidence_cards", []),
                     "alert_table_total": matched_total,
                     "alert_table_rows": alert_table_rows,
-                    "story": story_result.get("story", ""),
+                    "story": node5.get("story", ""),
+                    "phase_1_surface": phase1.get("phase1_surface_metrics", {}),
+                    "phase_2_breakthrough": phase2.get("phase_2_breakthrough", {}),
+                    "phase_3_lateral": phase3.get("phase_3_lateral", {}),
+                    "phase_4_outbound": phase4.get("phase_4_outbound", {}),
+                    "pivot_nodes": {
+                        "attacker_ip": target_ip,
+                        "victim_a": str(phase2.get("victim_a_ip") or ""),
+                        "victim_b": victim_b_candidates[:5],
+                        "outbound_targets": outbound_target_ips[:10],
+                    },
+                    "timeline_points": timeline_points,
                 },
                 "evidence_sources": [
-                    "POST /api/xdr/v1/incidents/list (源/目的IP双向过滤)",
+                    "POST /api/xdr/v1/alerts/list (阶段一源IP优先，命中不足时补目的IP)",
                     "GET /api/xdr/v1/incidents/{uuid}/proof",
                     "GET /api/xdr/v1/incidents/{uuid}/entities/ip",
                     "POST /api/xdr/v1/analysislog/networksecurity/count",

@@ -96,11 +96,11 @@ const PLAYBOOK_STAGE_META = {
     },
   },
   threat_hunting: {
-    node_1_external_profile: { title: '查询外部画像', desc: '获取目标IP外部威胁画像' },
-    node_2_event_scan_paginated: { title: '双向扫描告警', desc: '回溯窗口内按源/目的IP检索相关告警' },
-    node_3_evidence_enrichment_parallel: { title: '并行补充证据', desc: '拉取时间线和关联实体信息' },
-    node_4_internal_activity_count: { title: '统计内部活动', desc: '按窗口统计源/目的活动量' },
-    node_5_llm_timeline_story: { title: '生成活动轨迹故事线', desc: '输出侦察到影响的结构化叙事' },
+    node_1_attack_surface_recon: { title: '线索锁定与攻击面探明', desc: '先按源IP检索，必要时补目的IP并完成攻击面聚合' },
+    node_2_breakthrough_identify: { title: '突破口确认', desc: '从告警中定位高置信突破记录与 Victim A' },
+    node_3_victim_lateral_movement: { title: '横向移动追踪', desc: '基于 Victim A 检测重点端口与异常端口扩散行为' },
+    node_4_outbound_behavior_analysis: { title: '出站行为分析', desc: '聚合失陷主机外联目标与最近活跃证据' },
+    node_5_kill_chain_finalize: { title: '生成杀伤链闭环', desc: '拼接侦察、利用、横向、结果四阶段证据' },
   },
   asset_guard: {
     node_1_events_dst_asset: { title: '统计入向告警', desc: '分析以资产为目的的事件' },
@@ -2141,6 +2141,10 @@ function buildThreatHuntingViewModel(runData) {
   const fallbackTableRows = Array.isArray(fallbackTableCard?.data?.rows) ? fallbackTableCard.data.rows : [];
   const normalizeDirection = (rawDirection) => {
     const raw = String(rawDirection || '').trim();
+    if (raw === '0') return '无';
+    if (raw === '1') return '内对外';
+    if (raw === '2') return '外对内';
+    if (raw === '3') return '内对内';
     if (raw === '源') {
       return isPrivateIpv4(targetIp) ? '内部 -> 外部' : '外部 -> 内部';
     }
@@ -2158,7 +2162,7 @@ function buildThreatHuntingViewModel(runData) {
       recent_time: row?.endTime || '-',
       direction: normalizeDirection(row?.direction),
       alert_name: row?.name || '-',
-      threat_id: row?.threatId || row?.uuId || '-',
+      alert_id: row?.alertId || row?.threatId || row?.uuId || '-',
       severity: row?.incidentSeverity || '-',
       status: row?.dealStatus || '-',
     }));
@@ -2167,7 +2171,7 @@ function buildThreatHuntingViewModel(runData) {
     recentTime: String(row?.recent_time || '-'),
     direction: normalizeDirection(row?.direction),
     alertName: String(row?.alert_name || '-'),
-    threatId: String(row?.threat_id || row?.alert_id || row?.uuId || '-'),
+    alertId: String(row?.alert_id || row?.alertId || row?.threat_id || row?.uuId || '-'),
     severity: String(row?.severity || '-'),
     status: String(row?.status || '-'),
   }));
@@ -2452,7 +2456,7 @@ function renderThreatHuntingCard(runData) {
   tableWrap.className = 'table-wrap';
   const table = document.createElement('table');
   table.className = 'threat-alert-table';
-  table.innerHTML = '<thead><tr><th>最近发生时间</th><th>方向</th><th>告警名称</th><th>威胁ID</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>最近发生时间</th><th>方向</th><th>告警名称</th><th>告警ID</th></tr></thead>';
   const tbody = document.createElement('tbody');
   vm.alertRows.forEach((row) => {
     const tr = document.createElement('tr');
@@ -2466,12 +2470,12 @@ function renderThreatHuntingCard(runData) {
     const idBtn = document.createElement('button');
     idBtn.type = 'button';
     idBtn.className = 'threat-alert-copy-btn mono';
-    idBtn.textContent = row.threatId;
-    idBtn.title = `点击复制威胁ID: ${row.threatId}`;
+    idBtn.textContent = row.alertId;
+    idBtn.title = `点击复制告警ID: ${row.alertId}`;
     idBtn.onclick = async () => {
-      const ok = await copyTextCompat(row.threatId);
+      const ok = await copyTextCompat(row.alertId);
       if (ok) {
-        showThreatCardToast(card, `威胁 ID 已复制: ${row.threatId.slice(0, 18)}...`);
+        showThreatCardToast(card, `告警 ID 已复制: ${row.alertId.slice(0, 18)}...`);
       } else {
         setHint(el.playbookHint, '复制失败，请手动复制。', 'error');
       }
