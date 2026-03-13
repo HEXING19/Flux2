@@ -9,7 +9,14 @@
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
 
-<body>
+<body class="booting">
+  <div id="appBootScreen" class="app-boot-screen" aria-live="polite">
+    <div class="app-boot-card">
+      <div class="app-boot-spinner"></div>
+      <p>正在恢复会话状态...</p>
+    </div>
+  </div>
+
   <!-- System Status Visibility: Persistent Navbar -->
   <nav class="navbar hidden" id="mainNav">
     <div class="nav-brand">
@@ -31,31 +38,31 @@
       <div class="landing-hero">
         <h1 class="hero-title">
           <span style="color:var(--brand-blue-l10);">FLUX</span> XDR<br />
-          新一代智能安全运营平台
+          AI 驱动的安全运营中枢
         </h1>
-        <p class="hero-desc">融合大语言模型与自动化编排技术，为复杂边界防御提供全方位视角的「智能控制面」，构建自适应的闭环防御体系。不再受限于繁琐的排查，交给Flux智能决策。</p>
+        <p class="hero-desc">以自然语言交互为入口，统一串联“事件研判、批量编排、处置审批、情报增强、核心资产视角”全流程，帮助安全团队把告警处理从手工排查升级为可复用、可审计的闭环运营。</p>
 
         <div class="feature-list">
           <div class="feature-item">
             <div class="feature-icon">🔍</div>
             <div class="feature-text">
-              <h3>智能研判引擎</h3>
-              <p>对接私有化大模型，自然语言交互处理高危告警，降本增效。</p>
+              <h3>AI 研判与场景编排</h3>
+              <p>围绕“今日安全早报、单点告警深度研判、攻击者活动轨迹、核心资产防线透视”四大 Playbook 场景，快速生成可执行分析结论。</p>
             </div>
           </div>
 
           <div class="feature-item">
             <div class="feature-icon">🛡️</div>
             <div class="feature-text">
-              <h3>高危二次防线</h3>
-              <p>设置管控红线，特权指令熔断与人工复核 (Human-in-the-loop) 机制，保护核心资产永不中断。</p>
+              <h3>高危防线与人工确认</h3>
+              <p>内置 Safety Gate 红线拦截与高危动作二次确认机制，支持一键处置前人工复核，降低误封与误操作风险。</p>
             </div>
           </div>
           <div class="feature-item">
             <div class="feature-icon">🌌</div>
             <div class="feature-text">
-              <h3>深信服安全视角</h3>
-              <p>全面兼容并赋能各类异构资产，上帝视角的XDR态势感知。</p>
+              <h3>统一配置与情报联动</h3>
+              <p>支持多模型路由、ThreatBook 情报联动、核心资产台账与平台凭证持久化，构建稳定、持续在线的 XDR 运营控制面。</p>
             </div>
           </div>
         </div>

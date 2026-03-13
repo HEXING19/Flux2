@@ -727,14 +727,19 @@ class PlaybookService:
             return {
                 "node_1_resolve_target": {"status": "Pending", "depends_on": []},
                 "node_2_entity_profile": {"status": "Pending", "depends_on": ["node_1_resolve_target"]},
-                "node_3_external_intel": {"status": "Pending", "depends_on": ["node_2_entity_profile"]},
-                "node_4_internal_impact_count_parallel": {
+                "node_3_proof_enrich": {"status": "Pending", "depends_on": ["node_2_entity_profile"]},
+                "node_4_external_intel": {"status": "Pending", "depends_on": ["node_3_proof_enrich"]},
+                "node_5_internal_impact_count_parallel": {
                     "status": "Pending",
-                    "depends_on": ["node_3_external_intel"],
+                    "depends_on": ["node_4_external_intel"],
                 },
-                "node_5_llm_triage_summary": {
+                "node_6_asset_profile": {
                     "status": "Pending",
-                    "depends_on": ["node_4_internal_impact_count_parallel"],
+                    "depends_on": ["node_5_internal_impact_count_parallel"],
+                },
+                "node_7_llm_triage_summary": {
+                    "status": "Pending",
+                    "depends_on": ["node_6_asset_profile"],
                 },
             }
 
@@ -1191,6 +1196,271 @@ class PlaybookService:
             "lastTimeTs": _to_int(last_time, 0),
         }
 
+    @staticmethod
+    def _extract_response_items(response: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(response, dict):
+            return []
+        data = response.get("data")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ("item", "items", "rows", "list"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+            if any(key in data for key in ("uuId", "ip", "assetId", "assetName")):
+                return [data]
+        return []
+
+    @staticmethod
+    def _extract_proof_timeline_items(proof_data: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(proof_data, dict):
+            return []
+        items: list[dict[str, Any]] = []
+        for key in ("alertTimeLine", "alertTimeline", "incidentTimeLines", "incidentTimeline"):
+            value = proof_data.get(key)
+            if isinstance(value, list):
+                items.extend([item for item in value if isinstance(item, dict)])
+        return items
+
+    @staticmethod
+    def _normalize_asset_row(item: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(item, dict):
+            return {}
+        tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+        users = item.get("user") if isinstance(item.get("user"), list) else []
+        source_device = item.get("sourceDevice") if isinstance(item.get("sourceDevice"), list) else []
+        return {
+            "asset_id": _pick(item, "assetId", default=""),
+            "ip": _pick(item, "ip", default=""),
+            "host_name": _pick(item, "hostName", default=""),
+            "asset_name": _pick(item, "assetName", "name", default=""),
+            "magnitude": str(_pick(item, "magnitude", default="")).strip().lower(),
+            "classify_name": _pick(item, "classifyName", default=""),
+            "system": _pick(item, "system", default=""),
+            "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
+            "users": [str(user).strip() for user in users if str(user).strip()],
+            "source_device": [str(device).strip() for device in source_device if str(device).strip()],
+        }
+
+    def _query_asset_by_ip(self, requester: APIRequester, ip: str) -> tuple[dict[str, Any], str | None]:
+        target_ip = _parse_ipv4(ip)
+        if not target_ip:
+            return {}, "资产IP格式异常"
+        resp = requester.request(
+            "POST",
+            "/api/xdr/v1/assets/list",
+            json_body={
+                "page": 1,
+                "pageSize": 20,
+                "searchType": "current",
+                "ip": f"={target_ip}",
+            },
+        )
+        if resp.get("code") != "Success":
+            return {}, str(resp.get("message") or "资产查询失败")
+        rows = [self._normalize_asset_row(item) for item in self._extract_response_items(resp)]
+        rows = [row for row in rows if row]
+        if not rows:
+            return {}, "资产平台未返回匹配资产"
+        exact = next((row for row in rows if row.get("ip") == target_ip), rows[0])
+        return exact, None
+
+    @staticmethod
+    def _load_core_asset_profile(ip: str) -> dict[str, Any]:
+        target_ip = _parse_ipv4(ip)
+        if not target_ip:
+            return {}
+        with session_scope() as session:
+            row = session.exec(select(CoreAsset).where(CoreAsset.asset_ip == target_ip)).first()
+            if not row:
+                return {}
+            metadata = {}
+            if row.metadata_json:
+                try:
+                    metadata = json.loads(row.metadata_json)
+                except Exception:
+                    metadata = {"raw": row.metadata_json}
+            return {
+                "asset_name": row.asset_name,
+                "asset_ip": row.asset_ip,
+                "biz_owner": row.biz_owner,
+                "metadata": metadata,
+            }
+
+    @staticmethod
+    def _infer_asset_role(asset_row: dict[str, Any], core_asset_row: dict[str, Any]) -> str:
+        metadata = core_asset_row.get("metadata", {}) if isinstance(core_asset_row, dict) else {}
+        if isinstance(metadata, dict):
+            role = str(metadata.get("role") or metadata.get("asset_role") or "").strip()
+            if role:
+                return role
+        asset_name = str(asset_row.get("asset_name") or core_asset_row.get("asset_name") or "").strip()
+        if asset_name:
+            return asset_name
+        tags = asset_row.get("tags") if isinstance(asset_row.get("tags"), list) else []
+        if tags:
+            return " / ".join(tags[:2])
+        classify_name = str(asset_row.get("classify_name") or "").strip()
+        system = str(asset_row.get("system") or "").strip()
+        magnitude = str(asset_row.get("magnitude") or "").strip().lower()
+        if classify_name and magnitude == "core":
+            return f"核心{classify_name}"
+        if classify_name:
+            return classify_name
+        if system and magnitude == "core":
+            return "核心服务器"
+        if system:
+            return "服务器"
+        return "普通资产"
+
+    @staticmethod
+    def _format_asset_value(asset_row: dict[str, Any], core_asset_row: dict[str, Any]) -> str:
+        magnitude = str(asset_row.get("magnitude") or "").strip().lower()
+        if magnitude == "core":
+            return "极高 (Crown Jewel)" if core_asset_row else "极高 (核心资产)"
+        if magnitude == "normal":
+            return "普通"
+        return "未知"
+
+    @staticmethod
+    def _extract_ipv4_list(value: Any) -> list[str]:
+        values = value if isinstance(value, list) else [value]
+        ips: list[str] = []
+        for item in values:
+            ip = _parse_ipv4(item)
+            if ip:
+                ips.append(ip)
+        return _dedup_keep_order(ips)
+
+    @staticmethod
+    def _clean_triage_line(value: str, *, max_len: int = 180) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if not text:
+            return ""
+        if len(text) <= max_len:
+            return text
+        return f"{text[: max_len - 3]}..."
+
+    @staticmethod
+    def _count_actionable_ai_findings(ai_results: list[str]) -> int:
+        benign_markers = ("无异常", "未见异常", "未发现异常", "无明显异常", "未发现明显异常", "正常")
+        count = 0
+        for item in ai_results if isinstance(ai_results, list) else []:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            if any(marker in text for marker in benign_markers):
+                continue
+            count += 1
+        return count
+
+    @classmethod
+    def _build_triage_assessment(
+        cls,
+        *,
+        confidence_num: int,
+        impact_high: int,
+        impact_success: int,
+        attack_success_count: int,
+        boundary_breached: bool,
+        lateral_observed: bool,
+        risk_tags: list[str],
+        mitre_ids: list[str],
+        payload_lines: list[str],
+        ai_results: list[str],
+    ) -> dict[str, Any]:
+        risk_tags = [str(item).strip() for item in risk_tags if str(item).strip()]
+        mitre_ids = [str(item).strip() for item in mitre_ids if str(item).strip()]
+        payload_lines = [str(item).strip() for item in payload_lines if str(item).strip()]
+        ai_results = [str(item).strip() for item in ai_results if str(item).strip()]
+        ai_signal_count = cls._count_actionable_ai_findings(ai_results)
+
+        evidence_score = 0
+        evidence_parts: list[str] = []
+
+        if attack_success_count > 0:
+            evidence_score += 5
+            evidence_parts.append(f"举证命中 {attack_success_count} 次成功攻击迹象")
+        if impact_success > 0:
+            evidence_score += 4
+            evidence_parts.append(f"内部成功/失陷访问 {impact_success} 次")
+        if lateral_observed:
+            evidence_score += 4
+            evidence_parts.append("监测到内部横向扩散")
+        if impact_high >= 20:
+            evidence_score += 2
+            evidence_parts.append(f"近7天高危攻击量 {impact_high}")
+        elif impact_high >= 5:
+            evidence_score += 1
+            evidence_parts.append(f"近7天高危攻击量 {impact_high}")
+        if confidence_num >= 85:
+            evidence_score += 2
+            evidence_parts.append(f"外部情报置信度 {confidence_num}%")
+        elif confidence_num >= 60:
+            evidence_score += 1
+            evidence_parts.append(f"外部情报置信度 {confidence_num}%")
+        if risk_tags:
+            evidence_score += 1
+            evidence_parts.append(f"命中风险标签 {len(risk_tags)} 项")
+        if mitre_ids:
+            evidence_score += 1
+            evidence_parts.append(f"命中 MITRE 技术 {len(mitre_ids)} 项")
+        if payload_lines:
+            evidence_score += 1
+            evidence_parts.append("提取到恶意载荷片段")
+        if ai_signal_count > 0:
+            evidence_score += 1
+            evidence_parts.append("AI举证提示存在异常行为")
+
+        strong_compromise = boundary_breached or attack_success_count > 0 or impact_success > 0 or lateral_observed
+        if strong_compromise:
+            authenticity = "极高"
+            tone = "critical"
+            recommendation = "建议立即封禁"
+            conclusion_text = "高危真实攻击，已观测到成功攻击或横向扩散等强佐证，应立即联动处置。"
+        elif evidence_score >= 5:
+            authenticity = "较高"
+            tone = "high"
+            recommendation = "建议人工复核并持续观察"
+            conclusion_text = "攻击真实性较高，外部情报、举证结果与内部高危访问共同支撑进一步复核。"
+        elif evidence_score >= 2:
+            authenticity = "中等"
+            tone = "medium"
+            recommendation = "建议继续观察"
+            conclusion_text = "当前存在一定可疑信号，但尚未发现成功入侵或横向扩散的高置信证据。"
+        else:
+            authenticity = "较低"
+            tone = "low"
+            recommendation = "归档告警，无需进一步处置"
+            conclusion_text = "当前更偏向低真实性告警，尚缺少风险标签、攻击技术、恶意载荷等关键佐证。"
+
+        if not evidence_parts:
+            evidence_parts = ["暂无高置信攻击佐证"]
+
+        weak_evidence_parts: list[str] = []
+        if not risk_tags:
+            weak_evidence_parts.append("无风险标签")
+        if not mitre_ids:
+            weak_evidence_parts.append("无MITRE攻击技术匹配")
+        if not payload_lines:
+            weak_evidence_parts.append("无恶意载荷")
+        if not lateral_observed:
+            weak_evidence_parts.append("无横向扩散迹象")
+        if ai_signal_count == 0:
+            weak_evidence_parts.append("AI分析无异常")
+
+        key_evidence = "、".join((weak_evidence_parts[:5] if authenticity == "较低" else evidence_parts[:5]))
+        return {
+            "authenticity": authenticity,
+            "tone": tone,
+            "recommendation": recommendation,
+            "conclusion_title": f"系统研判结论：攻击真实性{authenticity}",
+            "conclusion_text": conclusion_text,
+            "key_evidence": key_evidence,
+            "evidence_score": evidence_score,
+        }
+
     def _safe_llm_complete(
         self,
         prompt: str,
@@ -1575,13 +1845,53 @@ class PlaybookService:
             uuids = self._resolve_incident_uuids(params, runtime_context["session_id"])
             if not uuids:
                 raise ValueError("无法定位目标事件，请提供 incident_uuid 或 event_index。")
-            return {"incident_uuids": uuids}
+            incident_resp = requester.request(
+                "POST",
+                "/api/xdr/v1/incidents/list",
+                json_body={
+                    "uuIds": uuids,
+                    "page": 1,
+                    "pageSize": max(10, len(uuids)),
+                    "sort": "endTime:desc,severity:desc",
+                    "timeField": "endTime",
+                },
+            )
+            incident_items = self._extract_response_items(incident_resp) if incident_resp.get("code") == "Success" else []
+            incident_by_uuid = {
+                str(_pick(item, "uuId", "uuid", "incidentId", default="")).strip(): item
+                for item in incident_items
+                if str(_pick(item, "uuId", "uuid", "incidentId", default="")).strip()
+            }
+            incident_rows = [
+                self._normalize_event_row(incident_by_uuid.get(uid, {"uuId": uid}), idx)
+                for idx, uid in enumerate(uuids, start=1)
+            ]
+            if incident_rows:
+                context_manager.update_params(
+                    runtime_context["session_id"],
+                    {
+                        "last_event_uuid": incident_rows[0].get("uuId"),
+                        "last_event_uuids": [row.get("uuId") for row in incident_rows if row.get("uuId")],
+                    },
+                )
+            return {
+                "incident_uuids": uuids,
+                "incident_rows": incident_rows,
+                "error": None if incident_resp.get("code") == "Success" else str(incident_resp.get("message") or "事件查询失败"),
+            }
 
         def node_2_entity_profile(ctx: dict[str, Any]) -> dict[str, Any]:
-            uuids = ctx["nodes"]["node_1_resolve_target"]["incident_uuids"]
+            node1 = ctx["nodes"]["node_1_resolve_target"]
+            uuids = node1.get("incident_uuids", [])
+            incident_rows = node1.get("incident_rows", [])
             rows: list[dict[str, Any]] = []
             target_ips: list[str] = []
+            victim_ip_candidates: list[str] = []
             errors: list[str] = []
+            for incident in incident_rows:
+                host_ip = _parse_ipv4(incident.get("hostIp"))
+                if host_ip:
+                    victim_ip_candidates.append(host_ip)
             for uid in uuids[:5]:
                 resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
                 entities, error = extract_entity_items_from_response(resp)
@@ -1599,7 +1909,13 @@ class PlaybookService:
                             "ip": ip,
                             "country": _pick(item, "country", "countryName", default="-"),
                             "region": _pick(item, "province", "region", default="-"),
+                            "location": _pick(item, "location", default="-"),
                             "tags": item.get("tags", []),
+                            "intelligence_tags": item.get("intelligenceTag", []),
+                            "mapping_tag": _pick(item, "mappingTag", default=""),
+                            "alert_role": _pick(item, "alertRole", default=""),
+                            "threat_level": _pick(item, "threatLevel", default=""),
+                            "direction": self._classify_entity_ip_direction(item),
                             "suggestion": _pick(item, "dealSuggestion", "suggestion", default="-"),
                         }
                     )
@@ -1609,15 +1925,144 @@ class PlaybookService:
             return {
                 "entity_rows": rows,
                 "target_ips": target_ips,
+                "victim_ip_candidates": _dedup_keep_order(victim_ip_candidates),
                 "errors": errors,
             }
 
-        def node_3_external_intel(ctx: dict[str, Any]) -> dict[str, Any]:
+        def node_3_proof_enrich(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_resolve_target"]
+            node2 = ctx["nodes"]["node_2_entity_profile"]
+            uuids = node1.get("incident_uuids", [])
+            incident_rows = node1.get("incident_rows", [])
+            attacker_ip = str((node2.get("target_ips") or [""])[0] or "").strip()
+            ai_results: list[str] = []
+            risk_tags: list[str] = []
+            mitre_ids: list[str] = []
+            cves: list[str] = []
+            vul_infos: list[str] = []
+            vul_types: list[str] = []
+            payload_lines: list[str] = []
+            victim_ip_candidates: list[str] = [str(item) for item in node2.get("victim_ip_candidates", [])]
+            errors: list[str] = []
+            attack_success_count = 0
+            lateral_hits = 0
+            for row in incident_rows:
+                host_ip = _parse_ipv4(row.get("hostIp"))
+                if host_ip:
+                    victim_ip_candidates.append(host_ip)
+            for uid in uuids[:5]:
+                proof_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/proof")
+                if proof_resp.get("code") != "Success":
+                    errors.append(f"{uid}: {proof_resp.get('message') or '举证信息查询失败'}")
+                    continue
+                proof_data = _pick_first_dict(proof_resp.get("data"))
+                ai_result = self._clean_triage_line(proof_data.get("gptResultDescription") or "")
+                if ai_result:
+                    ai_results.append(ai_result)
+                for tag in proof_data.get("riskTag", []) if isinstance(proof_data.get("riskTag"), list) else []:
+                    tag_text = str(tag or "").strip()
+                    if tag_text:
+                        risk_tags.append(tag_text)
+                for mitre in proof_data.get("mitreIds", []) if isinstance(proof_data.get("mitreIds"), list) else []:
+                    mitre_text = str(mitre or "").strip()
+                    if mitre_text:
+                        mitre_ids.append(mitre_text)
+                for raw_value, bucket in (
+                    (proof_data.get("cve"), cves),
+                    (proof_data.get("vulInfo"), vul_infos),
+                    (proof_data.get("vulType"), vul_types),
+                ):
+                    text = str(raw_value or "").strip()
+                    if text:
+                        bucket.append(text)
+                for timeline in self._extract_proof_timeline_items(proof_data)[:30]:
+                    proof_row = timeline.get("proof") if isinstance(timeline.get("proof"), dict) else {}
+                    stage_text = str(timeline.get("stage") or "").strip()
+                    stage_code = _to_int(timeline.get("stage"), 0)
+                    if stage_code >= 50 or any(token in stage_text for token in ("内网扩散", "横向", "lateral")):
+                        lateral_hits += 1
+                    attack_result = _to_int(_pick(proof_row, "attackResult", default=timeline.get("attackResult")), -1)
+                    if attack_result > 0:
+                        attack_success_count += 1
+                    for field in ("srcIps", "dstIps"):
+                        values = proof_row.get(field) if isinstance(proof_row.get(field), list) else timeline.get(field)
+                        for ip in self._extract_ipv4_list(values):
+                            if _is_private_ipv4(ip):
+                                victim_ip_candidates.append(ip)
+                    for field in ("cmdLine", "path", "url", "domain", "fileMd5"):
+                        raw_value = proof_row.get(field) if proof_row.get(field) not in (None, "") else timeline.get(field)
+                        values = raw_value if isinstance(raw_value, list) else [raw_value]
+                        for value in values:
+                            cleaned = self._clean_triage_line(value)
+                            if cleaned:
+                                payload_lines.append(cleaned)
+                    for raw_value, bucket in (
+                        (_pick(proof_row, "cve", default=timeline.get("cve")), cves),
+                        (_pick(proof_row, "vulInfo", default=timeline.get("vulInfo")), vul_infos),
+                        (_pick(proof_row, "vulType", default=timeline.get("vulType")), vul_types),
+                    ):
+                        text = str(raw_value or "").strip()
+                        if text:
+                            bucket.append(text)
+                    timeline_mitre = proof_row.get("mitreIds") if isinstance(proof_row.get("mitreIds"), list) else timeline.get("mitreIds")
+                    for mitre in timeline_mitre if isinstance(timeline_mitre, list) else []:
+                        text = str(mitre or "").strip()
+                        if text:
+                            mitre_ids.append(text)
+
+            history_summary = "近7天未检索到同源高危攻击记录"
+            history_count = 0
+            if attacker_ip:
+                end_ts = to_ts(utc_now())
+                start_ts = end_ts - 7 * 86400
+                history_count = self._count_logs(
+                    requester,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    extra_filters={"srcIps": [attacker_ip], "severities": [3, 4]},
+                )["total"]
+                history_summary = f"近7天命中 {history_count} 次相关攻击/扫描记录"
+
+            payload_lines = _dedup_keep_order(payload_lines)[:6]
+            risk_tags = _dedup_keep_order(risk_tags)[:6]
+            mitre_ids = _dedup_keep_order(mitre_ids)[:6]
+            cves = _dedup_keep_order(cves)[:4]
+            vul_infos = _dedup_keep_order(vul_infos)[:4]
+            vul_types = _dedup_keep_order(vul_types)[:4]
+            victim_ip_candidates = [
+                ip for ip in _dedup_keep_order(victim_ip_candidates) if _parse_ipv4(ip) and _is_private_ipv4(str(ip))
+            ]
+            vulnerability_parts = [item for item in [*cves, *vul_infos, *vul_types] if str(item).strip()]
+            vulnerability_summary = " / ".join(vulnerability_parts[:3]) if vulnerability_parts else "暂未提取到明确漏洞信息"
+            payload_raw_text = "\n".join(payload_lines[:3]) if payload_lines else "未提取到高置信度原始 Payload 片段。"
+            return {
+                "ai_results": ai_results[:3],
+                "risk_tags": risk_tags,
+                "mitre_ids": mitre_ids,
+                "cves": cves,
+                "vul_infos": vul_infos,
+                "vul_types": vul_types,
+                "payload_lines": payload_lines,
+                "payload_raw_text": payload_raw_text,
+                "vulnerability_summary": vulnerability_summary,
+                "victim_ip_candidates": victim_ip_candidates,
+                "attack_success_count": attack_success_count,
+                "history_count": history_count,
+                "history_summary": history_summary,
+                "lateral_signal": {
+                    "observed": lateral_hits > 0,
+                    "summary": "监测到内部横向扩散" if lateral_hits > 0 else "当前未观测到高置信横向扩散证据",
+                    "hit_count": lateral_hits,
+                },
+                "errors": errors,
+            }
+
+        def node_4_external_intel(ctx: dict[str, Any]) -> dict[str, Any]:
             ips = ctx["nodes"]["node_2_entity_profile"].get("target_ips", [])
             intel_rows = [self._query_intel(ip) for ip in ips[:5]]
             return {"intel_rows": intel_rows}
 
-        def node_4_internal_impact_count_parallel(ctx: dict[str, Any]) -> dict[str, Any]:
+        def node_5_internal_impact_count_parallel(ctx: dict[str, Any]) -> dict[str, Any]:
             ips = ctx["nodes"]["node_2_entity_profile"].get("target_ips", [])
             if not ips and params.get("ip"):
                 ips = [params["ip"]]
@@ -1692,24 +2137,77 @@ class PlaybookService:
                 "blast_radius_score": sum(row["blast_radius_score"] for row in rows),
             }
 
-        def node_5_llm_triage_summary(ctx: dict[str, Any]) -> dict[str, Any]:
+        def node_6_asset_profile(ctx: dict[str, Any]) -> dict[str, Any]:
+            node1 = ctx["nodes"]["node_1_resolve_target"]
+            node3 = ctx["nodes"]["node_3_proof_enrich"]
+            candidate_ips: list[str] = []
+            for row in node1.get("incident_rows", []):
+                host_ip = _parse_ipv4(row.get("hostIp"))
+                if host_ip and _is_private_ipv4(host_ip):
+                    candidate_ips.append(host_ip)
+            for item in node3.get("victim_ip_candidates", []):
+                ip = _parse_ipv4(item)
+                if ip and _is_private_ipv4(ip):
+                    candidate_ips.append(ip)
+            victim_ip = str((_dedup_keep_order(candidate_ips) or ["-"])[0])
+            asset_row: dict[str, Any] = {}
+            asset_error: str | None = None
+            if victim_ip != "-":
+                asset_row, asset_error = self._query_asset_by_ip(requester, victim_ip)
+            core_asset_row = self._load_core_asset_profile(victim_ip) if victim_ip != "-" else {}
+            asset_role = self._infer_asset_role(asset_row, core_asset_row)
+            asset_value = self._format_asset_value(asset_row, core_asset_row)
+            return {
+                "victim_ip": victim_ip,
+                "asset_row": asset_row,
+                "core_asset_row": core_asset_row,
+                "asset_profile": {
+                    "victim_ip": victim_ip,
+                    "host_name": asset_row.get("host_name") or victim_ip or "-",
+                    "asset_name": asset_row.get("asset_name") or core_asset_row.get("asset_name") or victim_ip or "-",
+                    "asset_role": asset_role,
+                    "asset_value": asset_value,
+                    "system": asset_row.get("system") or "-",
+                    "tags": asset_row.get("tags") or [],
+                    "users": asset_row.get("users") or [],
+                    "source_device": asset_row.get("source_device") or [],
+                    "magnitude": asset_row.get("magnitude") or "",
+                },
+                "error": asset_error,
+            }
+
+        def node_7_llm_triage_summary(ctx: dict[str, Any]) -> dict[str, Any]:
             entity_rows = ctx["nodes"]["node_2_entity_profile"].get("entity_rows", [])
-            intel_rows = ctx["nodes"]["node_3_external_intel"].get("intel_rows", [])
-            impact_rows = ctx["nodes"]["node_4_internal_impact_count_parallel"].get("impact_rows", [])
+            proof_node = ctx["nodes"]["node_3_proof_enrich"]
+            intel_rows = ctx["nodes"]["node_4_external_intel"].get("intel_rows", [])
+            impact_rows = ctx["nodes"]["node_5_internal_impact_count_parallel"].get("impact_rows", [])
+            asset_profile = ctx["nodes"]["node_6_asset_profile"].get("asset_profile", {})
 
             max_high = max([row.get("high_risk", 0) for row in impact_rows], default=0)
             max_compromised = max([row.get("compromised", 0) for row in impact_rows], default=0)
-
-            recommendation = "建议人工复核"
-            if max_compromised >= 5 or max_high >= 20:
-                recommendation = "建议立即封禁"
-            elif max_high <= 2 and max_compromised == 0:
-                recommendation = "建议继续观察"
+            attack_success_count = _to_int(proof_node.get("attack_success_count"), 0)
+            lateral_observed = bool(proof_node.get("lateral_signal", {}).get("observed"))
+            top_confidence = max(
+                [_to_int(str(row.get("confidence") or "0").rstrip("%"), 0) for row in intel_rows],
+                default=0,
+            )
+            assessment = self._build_triage_assessment(
+                confidence_num=top_confidence,
+                impact_high=max_high,
+                impact_success=max_compromised,
+                attack_success_count=attack_success_count,
+                boundary_breached=attack_success_count > 0 or max_compromised > 0,
+                lateral_observed=lateral_observed,
+                risk_tags=proof_node.get("risk_tags", []) if isinstance(proof_node.get("risk_tags"), list) else [],
+                mitre_ids=proof_node.get("mitre_ids", []) if isinstance(proof_node.get("mitre_ids"), list) else [],
+                payload_lines=proof_node.get("payload_lines", []) if isinstance(proof_node.get("payload_lines"), list) else [],
+                ai_results=proof_node.get("ai_results", []) if isinstance(proof_node.get("ai_results"), list) else [],
+            )
 
             fallback = (
-                f"攻击真实性概率：中高（基于实体画像、外部情报与内部计数综合判断）。\n"
-                f"关键证据：目标IP内部高危访问峰值 {max_high}，成功/失陷量峰值 {max_compromised}。\n"
-                f"优先建议动作：{recommendation}。"
+                f"攻击真实性概率：{assessment['authenticity']}。\n"
+                f"关键证据：{assessment['key_evidence']}。\n"
+                f"优先建议动作：{assessment['recommendation']}。"
             )
 
             prompt = (
@@ -1717,41 +2215,60 @@ class PlaybookService:
                 f"\n实体画像: {json.dumps(entity_rows[:5], ensure_ascii=False)}"
                 f"\n外部情报: {json.dumps(intel_rows[:5], ensure_ascii=False)}"
                 f"\n内部影响计数: {json.dumps(impact_rows[:5], ensure_ascii=False)}"
+                f"\n举证摘要: {json.dumps({'risk_tags': proof_node.get('risk_tags', []), 'mitre_ids': proof_node.get('mitre_ids', []), 'payload_lines': proof_node.get('payload_lines', [])[:3], 'lateral': proof_node.get('lateral_signal', {}), 'ai_results': proof_node.get('ai_results', [])}, ensure_ascii=False)}"
+                f"\n资产画像: {json.dumps(asset_profile, ensure_ascii=False)}"
             )
             summary = self._safe_llm_complete(
                 prompt,
                 system="你是SOC分析师，给结论而不是解释过程。",
                 fallback=fallback,
             )
-            return {"summary": summary, "recommendation": recommendation}
+            return {"summary": summary, "recommendation": assessment["recommendation"], "assessment": assessment}
 
         nodes = [
             PipelineNode("node_1_resolve_target", node_1_resolve_target),
             PipelineNode("node_2_entity_profile", node_2_entity_profile, depends_on=["node_1_resolve_target"]),
-            PipelineNode("node_3_external_intel", node_3_external_intel, depends_on=["node_2_entity_profile"]),
             PipelineNode(
-                "node_4_internal_impact_count_parallel",
-                node_4_internal_impact_count_parallel,
-                depends_on=["node_3_external_intel"],
+                "node_3_proof_enrich",
+                node_3_proof_enrich,
+                depends_on=["node_2_entity_profile"],
             ),
+            PipelineNode("node_4_external_intel", node_4_external_intel, depends_on=["node_3_proof_enrich"]),
             PipelineNode(
-                "node_5_llm_triage_summary",
-                node_5_llm_triage_summary,
-                depends_on=["node_4_internal_impact_count_parallel"],
+                "node_5_internal_impact_count_parallel",
+                node_5_internal_impact_count_parallel,
+                depends_on=["node_4_external_intel"],
+            ),
+            PipelineNode("node_6_asset_profile", node_6_asset_profile, depends_on=["node_5_internal_impact_count_parallel"]),
+            PipelineNode(
+                "node_7_llm_triage_summary",
+                node_7_llm_triage_summary,
+                depends_on=["node_6_asset_profile"],
             ),
         ]
 
         def finalizer(results: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             _ = ctx
             summary = self._emphasize_key_points(
-                results.get("node_5_llm_triage_summary", {}).get("summary", "研判已完成。")
+                results.get("node_7_llm_triage_summary", {}).get("summary", "研判已完成。")
             )
-            intel_rows = results.get("node_3_external_intel", {}).get("intel_rows", [])
+            node1 = results.get("node_1_resolve_target", {})
+            node2 = results.get("node_2_entity_profile", {})
+            node3 = results.get("node_3_proof_enrich", {})
+            node4 = results.get("node_4_external_intel", {})
+            node5 = results.get("node_5_internal_impact_count_parallel", {})
+            node6 = results.get("node_6_asset_profile", {})
+            node7 = results.get("node_7_llm_triage_summary", {})
+            intel_rows = node4.get("intel_rows", [])
             localized_intel_rows = [self._localize_intel_row(row) for row in intel_rows]
-            impact_rows = results.get("node_4_internal_impact_count_parallel", {}).get("impact_rows", [])
-            entity_rows = results.get("node_2_entity_profile", {}).get("entity_rows", [])
-            entity_errors = results.get("node_2_entity_profile", {}).get("errors", [])
-            target_uuids = results.get("node_1_resolve_target", {}).get("incident_uuids", [])
+            impact_rows = node5.get("impact_rows", [])
+            entity_rows = node2.get("entity_rows", [])
+            entity_errors = node2.get("errors", [])
+            proof_errors = node3.get("errors", [])
+            target_uuids = node1.get("incident_uuids", [])
+            incident_rows = node1.get("incident_rows", [])
+            asset_profile = node6.get("asset_profile", {})
+            asset_error = node6.get("error")
             target_rows = [{"index": idx, "incident_uuid": uid} for idx, uid in enumerate(target_uuids, start=1)]
 
             cards = [
@@ -1816,12 +2333,28 @@ class PlaybookService:
                         title="任务执行提示",
                     )
                 )
+            if proof_errors:
+                cards.append(
+                    text_payload(
+                        "举证接口返回部分异常，已按可用数据继续完成研判：\n" + "\n".join(proof_errors[:5]),
+                        title="任务执行提示",
+                    )
+                )
+            if asset_error:
+                cards.append(
+                    text_payload(
+                        f"资产画像查询存在降级：{asset_error}。已按现有事件与举证信息继续渲染受害目标画像。",
+                        title="任务执行提示",
+                    )
+                )
 
             target_ip = None
             if impact_rows:
                 target_ip = impact_rows[0].get("ip")
             if not target_ip and localized_intel_rows:
                 target_ip = localized_intel_rows[0].get("ip")
+            if not target_ip and entity_rows:
+                target_ip = entity_rows[0].get("ip")
 
             next_actions: list[dict[str, Any]] = []
             candidate_ips = _dedup_keep_order(
@@ -1867,12 +2400,177 @@ class PlaybookService:
                     }
                 )
 
+            danger_action = next((action for action in next_actions if action.get("style") == "danger"), None)
+            incident_severity = max(
+                [
+                    next((code for code, label in SEVERITY_LABEL.items() if label == str(row.get("incidentSeverity"))), 0)
+                    for row in incident_rows
+                ],
+                default=0,
+            )
+            severity_label = SEVERITY_LABEL.get(incident_severity, "中危")
+            header_badge = "紧急研判" if incident_severity >= 3 else "深度研判"
+
+            intel_by_ip = {
+                str(row.get("ip") or "").strip(): row
+                for row in localized_intel_rows
+                if str(row.get("ip") or "").strip()
+            }
+            entity_by_ip = {
+                str(row.get("ip") or "").strip(): row
+                for row in entity_rows
+                if str(row.get("ip") or "").strip()
+            }
+            attacker_ip = str((target_ip or (candidate_ips[0] if candidate_ips else ""))).strip()
+            attacker_intel = intel_by_ip.get(attacker_ip, localized_intel_rows[0] if localized_intel_rows else {})
+            attacker_entity = entity_by_ip.get(attacker_ip, entity_rows[0] if entity_rows else {})
+
+            confidence_text = str(attacker_intel.get("confidence") or "0%").strip()
+            confidence_num = _to_int(confidence_text.rstrip("%"), 0)
+            primary_tags = []
+            for source in (
+                attacker_intel.get("tags") if isinstance(attacker_intel.get("tags"), list) else [],
+                attacker_entity.get("intelligence_tags") if isinstance(attacker_entity.get("intelligence_tags"), list) else [],
+                attacker_entity.get("tags") if isinstance(attacker_entity.get("tags"), list) else [],
+                [attacker_entity.get("mapping_tag")] if attacker_entity.get("mapping_tag") else [],
+                [attacker_entity.get("alert_role")] if attacker_entity.get("alert_role") else [],
+            ):
+                for item in source:
+                    text = self._clean_triage_line(item, max_len=40)
+                    if text:
+                        primary_tags.append(text)
+            attacker_tags = _dedup_keep_order(primary_tags)[:6]
+            country = str(attacker_entity.get("country") or "-").strip()
+            region = str(attacker_entity.get("region") or "").strip()
+            location = str(attacker_entity.get("location") or "").strip()
+            location_text = location or " ".join([part for part in [country, region] if part and part != "-"]).strip() or "未知"
+
+            impact_total = sum(_to_int(row.get("total"), 0) for row in impact_rows)
+            impact_high = sum(_to_int(row.get("high_risk"), 0) for row in impact_rows)
+            impact_success = sum(_to_int(row.get("compromised"), 0) for row in impact_rows)
+            blast_radius_score = sum(_to_int(row.get("blast_radius_score"), 0) for row in impact_rows)
+            attack_success_count = _to_int(node3.get("attack_success_count"), 0)
+            lateral_signal = node3.get("lateral_signal", {})
+            lateral_observed = bool(lateral_signal.get("observed"))
+            boundary_breached = attack_success_count > 0 or impact_success > 0
+            vulnerability_summary = str(node3.get("vulnerability_summary") or "暂未提取到明确漏洞信息").strip()
+            payload_lines = node3.get("payload_lines") if isinstance(node3.get("payload_lines"), list) else []
+            payload_raw_text = str(node3.get("payload_raw_text") or "未提取到高置信度原始 Payload 片段。").strip()
+            ai_results = [str(item).strip() for item in node3.get("ai_results", []) if str(item).strip()]
+            ai_result = "；".join(ai_results) or "暂无AI举证摘要"
+            victim_role = str(asset_profile.get("asset_role") or "-").strip()
+            victim_value = str(asset_profile.get("asset_value") or "未知").strip()
+            proof_risk_tags = node3.get("risk_tags") if isinstance(node3.get("risk_tags"), list) else []
+            mitre_ids = node3.get("mitre_ids") if isinstance(node3.get("mitre_ids"), list) else []
+            assessment = node7.get("assessment") if isinstance(node7.get("assessment"), dict) else {}
+            if not assessment:
+                assessment = self._build_triage_assessment(
+                    confidence_num=confidence_num,
+                    impact_high=impact_high,
+                    impact_success=impact_success,
+                    attack_success_count=attack_success_count,
+                    boundary_breached=boundary_breached,
+                    lateral_observed=lateral_observed,
+                    risk_tags=proof_risk_tags,
+                    mitre_ids=mitre_ids,
+                    payload_lines=payload_lines,
+                    ai_results=ai_results,
+                )
+            authenticity_label = str(assessment.get("authenticity") or "中等")
+            authenticity_score_map = {"较低": 22, "中等": 56, "较高": 78, "极高": 95}
+            authenticity_score = authenticity_score_map.get(authenticity_label, 56)
+            summary = self._emphasize_key_points(
+                "\n".join(
+                    [
+                        f"攻击真实性概率：{authenticity_label}",
+                        f"关键证据：{assessment.get('key_evidence') or '待补充'}",
+                        f"优先建议动作：{assessment.get('recommendation') or '建议人工复核'}。",
+                    ]
+                )
+            )
+
+            triage_view = {
+                "header": {
+                    "title": "Playbook 报告 · 单点告警深度研判",
+                    "incident_name": str((incident_rows[0] or {}).get("name") or "未知事件") if incident_rows else "未知事件",
+                    "incident_uuid": target_uuids[0] if target_uuids else "-",
+                    "severity": severity_label,
+                    "severity_label": header_badge,
+                },
+                "risk": {
+                    "conclusion_title": str(assessment.get("conclusion_title") or "系统研判结论"),
+                    "conclusion_text": str(assessment.get("conclusion_text") or summary.replace("**", "")),
+                    "authenticity": authenticity_label,
+                    "authenticity_score": authenticity_score,
+                    "tone": str(assessment.get("tone") or "medium"),
+                    "boundary_breached": boundary_breached,
+                    "lateral_movement": lateral_observed,
+                    "recommendation": str(assessment.get("recommendation") or node7.get("recommendation") or "建议人工复核"),
+                    "key_evidence": str(assessment.get("key_evidence") or ""),
+                    "recommendation_label": "攻击已穿透边界" if boundary_breached else "尚未确认边界突破",
+                    "lateral_label": str(lateral_signal.get("summary") or "当前未观测到高置信横向扩散证据"),
+                },
+                "attacker": {
+                    "ip": attacker_ip or "-",
+                    "location": location_text,
+                    "confidence": confidence_num,
+                    "severity": str(attacker_intel.get("severity") or "未知"),
+                    "tags": attacker_tags,
+                    "history_count": _to_int(node3.get("history_count"), 0),
+                    "history_summary": str(node3.get("history_summary") or "近7天未检索到同源高危攻击记录"),
+                    "deal_suggestion": str(attacker_entity.get("suggestion") or "建议观察"),
+                },
+                "victim": {
+                    "ip": str(asset_profile.get("victim_ip") or "-"),
+                    "host_name": str(asset_profile.get("host_name") or "-"),
+                    "asset_name": str(asset_profile.get("asset_name") or "-"),
+                    "asset_role": victim_role,
+                    "asset_value": victim_value,
+                    "system": str(asset_profile.get("system") or "-"),
+                    "tags": asset_profile.get("tags") if isinstance(asset_profile.get("tags"), list) else [],
+                    "users": asset_profile.get("users") if isinstance(asset_profile.get("users"), list) else [],
+                    "source_device": asset_profile.get("source_device") if isinstance(asset_profile.get("source_device"), list) else [],
+                    "vulnerability": vulnerability_summary,
+                },
+                "impact": {
+                    "window_days": _to_int(params.get("window_days"), 7),
+                    "total_visits": impact_total,
+                    "high_risk_visits": impact_high,
+                    "success_count": impact_success,
+                    "blast_radius_score": blast_radius_score,
+                    "lateral_movement": lateral_observed,
+                },
+                "tactics": {
+                    "mitre": mitre_ids,
+                    "risk_tags": proof_risk_tags,
+                    "ai_result": ai_result,
+                },
+                "payload": {
+                    "title": "提取的关键恶意 Payload 片段（仅支持WAF类型告警）",
+                    "lines": payload_lines,
+                    "raw_text": payload_raw_text,
+                },
+                "actions": {
+                    "danger_action": danger_action,
+                    "next_actions": next_actions,
+                },
+                "meta": {
+                    "proof_errors": proof_errors,
+                    "entity_errors": entity_errors,
+                    "asset_errors": [asset_error] if asset_error else [],
+                },
+            }
+
             return {
                 "summary": summary,
                 "cards": cards,
                 "next_actions": next_actions,
+                "triage_view": triage_view,
                 "evidence_sources": [
+                    "POST /api/xdr/v1/incidents/list",
                     "GET /api/xdr/v1/incidents/{uuid}/entities/ip",
+                    "GET /api/xdr/v1/incidents/{uuid}/proof",
+                    "POST /api/xdr/v1/assets/list",
                     "POST /api/xdr/v1/analysislog/networksecurity/count",
                     "ThreatBook / local fallback",
                 ],
@@ -2633,6 +3331,8 @@ class PlaybookService:
             intel_rows = [self._localize_intel_row(row) for row in node6.get("intel_rows", [])]
             weekday_labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
             weekly_labels: list[str] = []
+            weekly_inbound_values: list[int] = []
+            weekly_outbound_values: list[int] = []
             weekly_values: list[int] = []
             now_dt = utc_now()
             for offset in range(6, -1, -1):
@@ -2651,6 +3351,8 @@ class PlaybookService:
                     extra_filters={"dstIps": [asset_ip], "severities": [3, 4]},
                 )["total"]
                 weekly_labels.append(weekday_labels[day_start.weekday()])
+                weekly_inbound_values.append(dst_high)
+                weekly_outbound_values.append(src_high)
                 weekly_values.append(src_high + dst_high)
 
             baseline = max(5, int(sum(weekly_values) / max(1, len(weekly_values)) * 1.35))
@@ -2659,10 +3361,51 @@ class PlaybookService:
                 for idx, value in enumerate(weekly_values)
                 if value >= baseline
             ]
-            chart_insight = (
-                f"AI 透视结论：{'、'.join(peak_days) if peak_days else '近7天'}出现异常流量峰值，"
-                f"建议优先审查核心资产 {asset_ip} 的横向扫描与暴露面策略。"
-            )
+            inbound_total_7d = sum(weekly_inbound_values)
+            outbound_total_7d = sum(weekly_outbound_values)
+            peak_value = max(weekly_values, default=0)
+            peak_idx = weekly_values.index(peak_value) if weekly_values else 0
+            peak_day = weekly_labels[peak_idx] if weekly_labels else "近7天"
+            dominant_direction = "双向"
+            if inbound_total_7d > outbound_total_7d * 1.2:
+                dominant_direction = "入向"
+            elif outbound_total_7d > inbound_total_7d * 1.2:
+                dominant_direction = "出向"
+            high_risk_ips = [
+                str(row.get("ip") or "").strip()
+                for row in intel_rows
+                if str(row.get("severity") or "").strip() in {"高", "高危", "严重"}
+                and str(row.get("ip") or "").strip()
+            ]
+            high_risk_text = f"高风险外部实体集中在 {high_risk_ips[0]} 等目标。" if high_risk_ips else "当前 Top 外部实体以中低风险画像为主。"
+            if peak_value <= 0 and node1.get("count", 0) == 0 and node2.get("count", 0) == 0:
+                chart_insight = (
+                    f"近7天未观测到核心资产 {asset_ip} 的明显高危双向流量，"
+                    f"当前入向高危流量累计 {inbound_total_7d}，出向高危流量累计 {outbound_total_7d}，"
+                    "整体态势相对平稳，建议维持常规监控。"
+                )
+            else:
+                current_inbound_events = _to_int(node1.get("count"), 0)
+                current_outbound_events = _to_int(node2.get("count"), 0)
+                current_inbound_logs = _to_int(node3.get("log_total"), 0)
+                current_outbound_logs = _to_int(node4.get("log_total"), 0)
+                direction_text = {
+                    "入向": f"近7天高危趋势以入向为主，累计 {inbound_total_7d}",
+                    "出向": f"近7天高危趋势以出向为主，累计 {outbound_total_7d}",
+                    "双向": f"近7天高危趋势呈双向波动，入向累计 {inbound_total_7d}、出向累计 {outbound_total_7d}",
+                }[dominant_direction]
+                peak_text = (
+                    f"{peak_day}达到高危峰值 {peak_value}"
+                    if peak_value > 0
+                    else "近7天未出现明显高危峰值"
+                )
+                chart_insight = (
+                    f"{direction_text}；{peak_text}。"
+                    f"最近24小时入向告警 {current_inbound_events} 条、出向告警 {current_outbound_events} 条，"
+                    f"入向访问 {current_inbound_logs} 次、出向访问 {current_outbound_logs} 次。"
+                    f"{high_risk_text}"
+                    "建议优先结合峰值日期回溯关联告警与外部实体处置情况。"
+                )
             chart_option = {
                 "tooltip": {"trigger": "axis"},
                 "xAxis": {"type": "category", "data": weekly_labels},
@@ -2753,6 +3496,15 @@ class PlaybookService:
                 "cards": cards,
                 "next_actions": next_actions,
                 "asset": {"asset_name": asset_name, "asset_ip": asset_ip, "window_hours": window_hours},
+                "asset_guard_view": {
+                    "trend": {
+                        "labels": weekly_labels,
+                        "inbound": weekly_inbound_values,
+                        "outbound": weekly_outbound_values,
+                        "baseline": baseline,
+                        "insight": chart_insight,
+                    }
+                },
                 "evidence_sources": [
                     "POST /api/xdr/v1/incidents/list",
                     "POST /api/xdr/v1/analysislog/networksecurity/count",

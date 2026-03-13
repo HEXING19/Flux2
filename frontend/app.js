@@ -86,9 +86,11 @@ const PLAYBOOK_STAGE_META = {
     analyze: {
       node_1_resolve_target: { title: '定位目标事件', desc: '解析事件ID/序号并锁定目标' },
       node_2_entity_profile: { title: '生成实体画像', desc: '抽取事件关联IP与画像信息' },
-      node_3_external_intel: { title: '外部情报查询', desc: '补充ThreatBook或本地情报结果' },
-      node_4_internal_impact_count_parallel: { title: '统计内部影响', desc: '计算影响面与风险得分' },
-      node_5_llm_triage_summary: { title: '输出研判结论', desc: '给出处置建议和优先动作' },
+      node_3_proof_enrich: { title: '提取举证特征', desc: '聚合MITRE、漏洞与Payload证据' },
+      node_4_external_intel: { title: '外部情报查询', desc: '补充ThreatBook或本地情报结果' },
+      node_5_internal_impact_count_parallel: { title: '统计内部影响', desc: '计算影响面与风险得分' },
+      node_6_asset_profile: { title: '补全受害画像', desc: '从资产接口提取主机名、角色与价值' },
+      node_7_llm_triage_summary: { title: '输出研判结论', desc: '给出处置建议和优先动作' },
     },
     block_ip: {
       node_1_resolve_target_ip: { title: '解析待封禁IP', desc: '从参数或事件实体定位目标IP' },
@@ -235,6 +237,15 @@ function setHint(target, message, type = '') {
   if (type) target.classList.add(type);
 }
 
+function finishBootTransition() {
+  document.body.classList.remove('booting');
+  const bootScreen = document.getElementById('appBootScreen');
+  if (!bootScreen) return;
+  window.setTimeout(() => {
+    bootScreen.remove();
+  }, 260);
+}
+
 function setAuthState(authenticated, statusText = '', isConnected = true) {
   state.isAuthenticated = authenticated;
   el.landingView.classList.toggle('hidden', authenticated);
@@ -358,8 +369,16 @@ function setPlaybookWorkspaceOpen(open) {
   el.workspaceView.classList.toggle('panel-open', open);
 }
 
+function setPlaybookWorkspaceMode(mode = 'default') {
+  if (!el.playbookWorkspacePanel || !el.playbookWorkspaceBody) return;
+  const triage = mode === 'triage';
+  el.playbookWorkspacePanel.classList.toggle('triage-mode', triage);
+  el.playbookWorkspaceBody.classList.toggle('triage-mode', triage);
+}
+
 function clearPlaybookWorkspace() {
   if (!el.playbookWorkspaceBody) return;
+  setPlaybookWorkspaceMode('default');
   el.playbookWorkspaceBody.innerHTML = '';
   const empty = document.createElement('div');
   empty.className = 'playbook-workspace-empty';
@@ -686,6 +705,7 @@ function renderNextActions(actions) {
 }
 
 function createPlaybookProgressCard(runId, templateId) {
+  setPlaybookWorkspaceMode('default');
   const displayName = getPlaybookDisplayName(templateId);
   const card = cardTemplate(`Playbook 运行中 · ${templateId}`);
   card.dataset.playbookRunId = String(runId);
@@ -1723,6 +1743,7 @@ function renderRoutineFollowupCard(nextActions) {
 }
 
 function renderRoutineCheckCard(runData) {
+  setPlaybookWorkspaceMode('default');
   const vm = buildRoutineCheckViewModel(runData);
   const card = cardTemplate('', '');
   if (runData?.run_id != null) {
@@ -2241,6 +2262,7 @@ function showThreatCardToast(card, message) {
 }
 
 function renderThreatHuntingCard(runData) {
+  setPlaybookWorkspaceMode('default');
   const vm = buildThreatHuntingViewModel(runData);
   const card = cardTemplate('', '');
   if (runData?.run_id != null) {
@@ -2566,6 +2588,728 @@ function renderThreatHuntingCard(runData) {
   toastText.textContent = '已复制';
   toast.appendChild(toastText);
   card.appendChild(toast);
+
+  appendPlaybookWorkspaceCard(card);
+}
+
+function parseMetricPercent(value, fallback = 0) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return fallback;
+  const num = Number(raw.replace('%', ''));
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+function buildAlertTriageViewModel(runData) {
+  const result = runData?.result || {};
+  const triageView = result?.triage_view || {};
+  const header = triageView?.header || {};
+  const risk = triageView?.risk || {};
+  const attacker = triageView?.attacker || {};
+  const victim = triageView?.victim || {};
+  const impact = triageView?.impact || {};
+  const tactics = triageView?.tactics || {};
+  const payload = triageView?.payload || {};
+  const actionBlock = triageView?.actions || {};
+  const nextActions = Array.isArray(actionBlock?.next_actions) ? actionBlock.next_actions : (Array.isArray(result?.next_actions) ? result.next_actions : []);
+  const dangerAction = actionBlock?.danger_action || nextActions.find((action) => action?.style === 'danger') || null;
+  const supportActions = nextActions.filter((action) => action && action.style !== 'danger' && (!dangerAction || action.id !== dangerAction.id));
+  const incidentUuid = String(
+    header?.incident_uuid
+    || runData?.input?.params?.incident_uuid
+    || (Array.isArray(runData?.input?.params?.incident_uuids) ? runData.input.params.incident_uuids[0] : '')
+    || '-',
+  ).trim() || '-';
+  const incidentName = String(header?.incident_name || runData?.input?.params?.incident_name || '未知事件').trim() || '未知事件';
+  const summary = String(result?.summary || '').replace(/\*\*/g, '').trim();
+  const confidence = parseMetricPercent(attacker?.confidence, 0);
+  const payloadLines = dedupText(payload?.lines || []);
+  const rawPayloadText = String(payload?.raw_text || payloadLines.join('\n') || '未提取到高置信度原始 Payload 片段。').trim();
+  const attackerTags = dedupText(attacker?.tags || []);
+  const riskTags = dedupText(tactics?.risk_tags || []);
+  const mitreTags = dedupText(tactics?.mitre || []);
+  const title = String(header?.title || 'Playbook 报告 · 单点告警深度研判').trim();
+  const severityLabel = String(header?.severity_label || '深度研判').trim();
+  const conclusionTitle = String(risk?.conclusion_title || '系统研判结论').trim();
+  const conclusionText = String(risk?.conclusion_text || '研判已完成。').replace(/\*\*/g, '').trim();
+  const keyEvidence = String(risk?.key_evidence || '').trim();
+  const dangerLabel = isValidIpv4(attacker?.ip) ? `一键封禁源 IP (${attacker.ip})` : (dangerAction?.label || '执行处置');
+  const attackerHistory = String(attacker?.history_summary || '近7天未检索到同源高危攻击记录').trim();
+  const assetRole = String(victim?.asset_role || victim?.asset_name || '-').trim() || '-';
+  const recommendation = String(risk?.recommendation || '').trim();
+  const authenticityScore = Number(risk?.authenticity_score || 0);
+  const conclusionTone = String(risk?.tone || '').trim() || (authenticityScore >= 88 || recommendation.includes('立即') ? 'critical' : (authenticityScore >= 72 ? 'high' : (authenticityScore >= 40 ? 'medium' : 'low')));
+
+  return {
+    title,
+    incidentName,
+    incidentUuid,
+    severityLabel,
+    conclusionTitle,
+    conclusionText,
+    conclusionTone,
+    keyEvidence,
+    summary,
+    recommendation,
+    breachLabel: String(risk?.recommendation_label || '尚未确认边界突破').trim(),
+    lateralLabel: String(risk?.lateral_label || '当前未观测到高置信横向扩散证据').trim(),
+    boundaryBreached: Boolean(risk?.boundary_breached),
+    lateralMovement: Boolean(risk?.lateral_movement),
+    attacker: {
+      ip: String(attacker?.ip || '-').trim() || '-',
+      location: String(attacker?.location || '未知').trim() || '未知',
+      confidence,
+      tags: attackerTags,
+      history: attackerHistory,
+      severity: String(attacker?.severity || '未知').trim() || '未知',
+    },
+    victim: {
+      ip: String(victim?.ip || '-').trim() || '-',
+      hostName: String(victim?.host_name || '-').trim() || '-',
+      assetRole,
+    },
+    impact: {
+      windowDays: toMetricNumber(impact?.window_days || 7) || 7,
+      totalVisits: toMetricNumber(impact?.total_visits || 0),
+      highRiskVisits: toMetricNumber(impact?.high_risk_visits || 0),
+      successCount: toMetricNumber(impact?.success_count || 0),
+      lateralMovement: Boolean(impact?.lateral_movement),
+    },
+    tactics: {
+      mitre: mitreTags,
+      riskTags,
+      aiResult: String(tactics?.ai_result || '').trim(),
+    },
+    payload: {
+      title: String(payload?.title || '提取的关键恶意 Payload 片段（仅支持WAF类型告警）').trim(),
+      rawText: rawPayloadText,
+    },
+    dangerAction,
+    dangerLabel,
+    supportActions,
+  };
+}
+
+function createAlertTriageActionModal(ip) {
+  const overlay = document.createElement('div');
+  overlay.className = 'alert-triage-block-modal';
+  overlay.innerHTML = `
+    <div class="alert-triage-block-modal-card">
+      <h4>执行 SOAR 处置剧本</h4>
+      <p>正在通过现有处置链路提交针对源 IP ${escapeHtml(ip || '-')} 的封禁动作，请稍候...</p>
+      <div class="alert-triage-block-progress">
+        <div class="alert-triage-block-progress-bar"></div>
+      </div>
+      <div class="alert-triage-block-progress-text">剧本执行中</div>
+    </div>
+  `;
+  return overlay;
+}
+
+function renderAlertTriageCard(runData) {
+  const result = runData?.result || {};
+  if (!result?.triage_view && !result?.summary) {
+    renderPlaybookUnifiedCard(runData);
+    return;
+  }
+  setPlaybookWorkspaceMode('triage');
+  const vm = buildAlertTriageViewModel(runData);
+  const card = cardTemplate('', '');
+  if (runData?.run_id != null) {
+    card.dataset.playbookRunId = String(runData.run_id);
+  }
+  card.dataset.playbookCardType = 'triage-report';
+  card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card', 'alert-triage-card');
+
+  const header = document.createElement('div');
+  header.className = 'alert-triage-header';
+  const headerInfo = document.createElement('div');
+  const title = document.createElement('h3');
+  title.className = 'alert-triage-title';
+  title.textContent = vm.title;
+  headerInfo.appendChild(title);
+  const metaRow = document.createElement('div');
+  metaRow.className = 'alert-triage-meta-row';
+  const badge = document.createElement('span');
+  badge.className = `alert-triage-badge tone-${vm.conclusionTone}`;
+  badge.textContent = vm.severityLabel;
+  metaRow.appendChild(badge);
+  headerInfo.appendChild(metaRow);
+  const incidentName = document.createElement('div');
+  incidentName.className = 'alert-triage-event-name';
+  incidentName.textContent = `事件名称: ${vm.incidentName}`;
+  headerInfo.appendChild(incidentName);
+  const uuid = document.createElement('div');
+  uuid.className = 'alert-triage-uuid';
+  uuid.textContent = `UUID: ${vm.incidentUuid}`;
+  headerInfo.appendChild(uuid);
+  header.appendChild(headerInfo);
+
+  if (vm.dangerAction) {
+    const actionBtn = document.createElement('button');
+    actionBtn.type = 'button';
+    actionBtn.className = 'alert-triage-danger-btn';
+    actionBtn.textContent = vm.dangerLabel;
+    actionBtn.onclick = async () => {
+      const modal = createAlertTriageActionModal(vm.attacker.ip);
+      document.body.appendChild(modal);
+      try {
+        actionBtn.disabled = true;
+        await runPlaybook(vm.dangerAction.template_id, vm.dangerAction.params || {}, vm.dangerAction.label || vm.dangerAction.id || '执行动作');
+      } catch (err) {
+        setHint(el.playbookHint, err.message || '执行动作失败', 'error');
+      } finally {
+        actionBtn.disabled = false;
+        modal.remove();
+      }
+    };
+    header.appendChild(actionBtn);
+  }
+  card.appendChild(header);
+
+  const conclusion = document.createElement('section');
+  conclusion.className = `alert-triage-conclusion tone-${vm.conclusionTone}`;
+  conclusion.innerHTML = `
+    <div class="alert-triage-conclusion-icon">${vm.conclusionTone === 'critical' ? '!' : (vm.conclusionTone === 'low' ? 'i' : '△')}</div>
+    <div class="alert-triage-conclusion-body">
+      <h4>${escapeHtml(vm.conclusionTitle)}</h4>
+      <p>${escapeHtml(vm.conclusionText)}</p>
+      ${vm.keyEvidence ? `<div class="alert-triage-key-evidence">关键证据：${escapeHtml(vm.keyEvidence)}</div>` : ''}
+      <div class="alert-triage-conclusion-flags"></div>
+    </div>
+  `;
+  const flagWrap = conclusion.querySelector('.alert-triage-conclusion-flags');
+  [
+    vm.breachLabel,
+    vm.lateralLabel,
+  ].filter(Boolean).forEach((text, idx) => {
+    const item = document.createElement('span');
+    item.className = `alert-triage-flag ${idx === 0 ? 'critical' : 'warning'}`;
+    item.textContent = text;
+    flagWrap.appendChild(item);
+  });
+  card.appendChild(conclusion);
+
+  const grid = document.createElement('div');
+  grid.className = 'alert-triage-grid';
+
+  const attackerPanel = document.createElement('section');
+  attackerPanel.className = 'alert-triage-panel attacker';
+  attackerPanel.innerHTML = `
+    <div class="alert-triage-panel-title">攻击源画像</div>
+    <div class="alert-triage-ip">${escapeHtml(vm.attacker.ip)}</div>
+    <div class="alert-triage-sub">${escapeHtml(vm.attacker.location)}</div>
+    <div class="alert-triage-meter">
+      <div class="alert-triage-meter-head">
+        <span>情报置信度</span>
+        <strong>${vm.attacker.confidence}%</strong>
+      </div>
+      <div class="alert-triage-meter-track"><div class="alert-triage-meter-bar" style="width:${vm.attacker.confidence}%"></div></div>
+    </div>
+    <div class="alert-triage-chip-wrap"></div>
+    <div class="alert-triage-note">${escapeHtml(vm.attacker.history)}</div>
+  `;
+  const attackerChipWrap = attackerPanel.querySelector('.alert-triage-chip-wrap');
+  vm.attacker.tags.forEach((tag) => {
+    const chip = document.createElement('span');
+    chip.className = 'alert-triage-chip attacker';
+    chip.textContent = tag;
+    attackerChipWrap.appendChild(chip);
+  });
+  if (!vm.attacker.tags.length) {
+    const empty = document.createElement('span');
+    empty.className = 'alert-triage-chip muted';
+    empty.textContent = vm.attacker.severity || '暂无情报标签';
+    attackerChipWrap.appendChild(empty);
+  }
+  grid.appendChild(attackerPanel);
+
+  const victimPanel = document.createElement('section');
+  victimPanel.className = 'alert-triage-panel victim';
+  victimPanel.innerHTML = `
+    <div class="alert-triage-panel-title">受害目标画像</div>
+    <div class="alert-triage-kv-block">
+      <div class="label">受害资产 IP</div>
+      <div class="value">${escapeHtml(vm.victim.ip)}</div>
+    </div>
+    <div class="alert-triage-victim-grid">
+      <div><span>主机名</span><strong>${escapeHtml(vm.victim.hostName)}</strong></div>
+      <div><span>资产角色</span><strong>${escapeHtml(vm.victim.assetRole)}</strong></div>
+    </div>
+  `;
+  grid.appendChild(victimPanel);
+
+  const impactPanel = document.createElement('section');
+  impactPanel.className = 'alert-triage-panel impact';
+  impactPanel.innerHTML = `
+    <div class="alert-triage-panel-title">内部影响面</div>
+    <div class="alert-triage-impact-grid">
+      <div class="alert-triage-impact-item">
+        <span>近${vm.impact.windowDays}天总访问量</span>
+        <strong>${formatMetric(vm.impact.totalVisits)}</strong>
+      </div>
+      <div class="alert-triage-impact-item">
+        <span>高危攻击量</span>
+        <strong class="warn">${formatMetric(vm.impact.highRiskVisits)}</strong>
+      </div>
+      <div class="alert-triage-impact-item emphasis">
+        <span>有效攻击次数 (攻击成功)</span>
+        <strong>${formatMetric(vm.impact.successCount)}</strong>
+      </div>
+    </div>
+  `;
+  grid.appendChild(impactPanel);
+  card.appendChild(grid);
+
+  const tacticsPanel = document.createElement('section');
+  tacticsPanel.className = 'alert-triage-tactics';
+  const tacticsHeader = document.createElement('div');
+  tacticsHeader.className = 'alert-triage-tactics-tab';
+  tacticsHeader.textContent = '攻击手法特征';
+  tacticsPanel.appendChild(tacticsHeader);
+
+  const tacticsBody = document.createElement('div');
+  tacticsBody.className = 'alert-triage-tactics-body';
+  const mitreBlock = document.createElement('div');
+  const mitreTitle = document.createElement('h4');
+  mitreTitle.textContent = '命中 MITRE ATT&CK 战术';
+  mitreBlock.appendChild(mitreTitle);
+  const mitreWrap = document.createElement('div');
+  mitreWrap.className = 'alert-triage-chip-wrap';
+  vm.tactics.mitre.forEach((tag) => {
+    const chip = document.createElement('span');
+    chip.className = 'alert-triage-chip mitre';
+    chip.textContent = tag;
+    mitreWrap.appendChild(chip);
+  });
+  vm.tactics.riskTags.forEach((tag) => {
+    const chip = document.createElement('span');
+    chip.className = 'alert-triage-chip risk';
+    chip.textContent = tag;
+    mitreWrap.appendChild(chip);
+  });
+  if (!vm.tactics.mitre.length && !vm.tactics.riskTags.length) {
+    const chip = document.createElement('span');
+    chip.className = 'alert-triage-chip muted';
+    chip.textContent = '暂无攻击手法标签';
+    mitreWrap.appendChild(chip);
+  }
+  mitreBlock.appendChild(mitreWrap);
+  tacticsBody.appendChild(mitreBlock);
+
+  const payloadBlock = document.createElement('div');
+  const payloadTitle = document.createElement('h4');
+  payloadTitle.textContent = vm.payload.title;
+  payloadBlock.appendChild(payloadTitle);
+  const payloadPre = document.createElement('div');
+  payloadPre.className = 'alert-triage-payload-block';
+  payloadPre.innerHTML = `
+    <div class="alert-triage-payload-comment">// 提取的关键恶意 Payload 片段</div>
+    <pre>${escapeHtml(vm.payload.rawText)}</pre>
+  `;
+  payloadBlock.appendChild(payloadPre);
+  tacticsBody.appendChild(payloadBlock);
+
+  if (vm.tactics.aiResult) {
+    const aiBlock = document.createElement('p');
+    aiBlock.className = 'alert-triage-ai-note';
+    aiBlock.textContent = `AI举证摘要：${vm.tactics.aiResult}`;
+    tacticsBody.appendChild(aiBlock);
+  }
+  tacticsPanel.appendChild(tacticsBody);
+  card.appendChild(tacticsPanel);
+
+  if (vm.supportActions.length) {
+    const footer = document.createElement('div');
+    footer.className = 'alert-triage-footer-actions';
+    vm.supportActions.forEach((action) => footer.appendChild(createPlaybookActionButton(action)));
+    card.appendChild(footer);
+  }
+
+  appendPlaybookWorkspaceCard(card);
+}
+
+function parseAssetGuardTags(value) {
+  if (Array.isArray(value)) return dedupText(value);
+  const text = String(value || '').trim();
+  if (!text) return [];
+  return dedupText(text.split(/[、,，]/));
+}
+
+function normalizeAssetGuardSeverity(value) {
+  const raw = String(value || '未知').trim();
+  if (raw === '严重') return { label: '严重', tone: 'critical' };
+  if (raw === '高' || raw === '高危') return { label: '高危', tone: 'high' };
+  if (raw === '中' || raw === '中危') return { label: '中危', tone: 'medium' };
+  if (raw === '低' || raw === '低危') return { label: '低危', tone: 'low' };
+  return { label: raw || '未知', tone: 'muted' };
+}
+
+function buildAssetGuardViewModel(runData) {
+  const result = runData?.result || {};
+  const cards = Array.isArray(result?.cards) ? result.cards : [];
+  const asset = result?.asset || {};
+  const nextActions = Array.isArray(result?.next_actions) ? result.next_actions : [];
+  const dangerAction = nextActions.find((action) => action?.style === 'danger') || null;
+  const statsCard = cards.find((card) => card?.data?.namespace === 'asset_guard_stats') || {};
+  const intelCard = cards.find((card) => card?.data?.namespace === 'asset_guard_intel') || {};
+  const chartCard = cards.find((card) => card?.type === 'echarts_graph' && String(card?.data?.title || '').includes('流量威胁双向评估')) || {};
+  const actionCard = cards.find((card) => card?.type === 'text' && String(card?.data?.title || '') === '建议动作') || {};
+  const statsRows = Array.isArray(statsCard?.data?.rows) ? statsCard.data.rows : [];
+  const intelRowsRaw = Array.isArray(intelCard?.data?.rows) ? intelCard.data.rows : [];
+  const inboundRow = statsRows.find((row) => String(row?.direction || '').includes('入向')) || {};
+  const outboundRow = statsRows.find((row) => String(row?.direction || '').includes('出向')) || {};
+  const trend = result?.asset_guard_view?.trend || {};
+  const trendLabels = Array.isArray(trend?.labels) && trend.labels.length
+    ? trend.labels
+    : (Array.isArray(chartCard?.data?.option?.xAxis?.data) ? chartCard.data.option.xAxis.data : []);
+  const trendInbound = trendLabels.map((_, idx) => toMetricNumber(Array.isArray(trend?.inbound) ? trend.inbound[idx] : 0));
+  const trendOutbound = trendLabels.map((_, idx) => toMetricNumber(Array.isArray(trend?.outbound) ? trend.outbound[idx] : 0));
+  const trendMax = Math.max(1, ...trendInbound, ...trendOutbound);
+  const blockIps = dedupText(
+    Array.isArray(dangerAction?.params?.ips)
+      ? dangerAction.params.ips
+      : intelRowsRaw.map((row) => row?.ip),
+  ).filter((ip) => isValidIpv4(ip));
+  const summary = String(result?.summary || '').replace(/\*\*/g, '').trim();
+  const insightText = String(
+    trend?.insight
+    || chartCard?.data?.summary
+    || summary,
+  ).replace(/^AI\s*透视结论[:：]?\s*/i, '').trim();
+  const actionText = String(actionCard?.data?.text || '建议优先对 Top 外部访问实体执行封禁审批；并对封禁前后关联高危告警进行人工复核。')
+    .replace(/^建议动作[:：]?\s*/, '')
+    .trim();
+  const eventMax = Math.max(
+    1,
+    toMetricNumber(inboundRow?.event_count || 0),
+    toMetricNumber(outboundRow?.event_count || 0),
+  );
+  const logMax = Math.max(
+    1,
+    toMetricNumber(inboundRow?.log_count || 0),
+    toMetricNumber(outboundRow?.log_count || 0),
+  );
+  const intelRows = intelRowsRaw.map((row) => {
+    const severity = normalizeAssetGuardSeverity(row?.severity);
+    const confidenceValue = parseMetricPercent(row?.confidence, 0);
+    return {
+      ip: String(row?.ip || '-').trim() || '-',
+      severityLabel: severity.label,
+      severityTone: severity.tone,
+      confidenceText: `${confidenceValue}%`,
+      confidenceValue,
+      tags: parseAssetGuardTags(row?.tags),
+      source: String(row?.source || '未知').trim() || '未知',
+      hits: toMetricNumber(row?.hits || 0),
+    };
+  });
+
+  return {
+    title: 'Playbook 报告 · 核心资产防线透视',
+    subtitle: '面向业务负责人及管理层的自动化安全评估视图',
+    assetIp: String(asset?.asset_ip || runData?.input?.params?.asset_ip || '-').trim() || '-',
+    assetName: String(asset?.asset_name || runData?.input?.params?.asset_name || '').trim(),
+    windowHours: toMetricNumber(asset?.window_hours || runData?.input?.params?.window_hours || 24) || 24,
+    summary,
+    insightText: insightText || '近 7 天未发现明显的双向异常峰值，可继续维持常规关注。',
+    actionText,
+    metrics: {
+      inbound: {
+        eventCount: toMetricNumber(inboundRow?.event_count || 0),
+        logCount: toMetricNumber(inboundRow?.log_count || 0),
+      },
+      outbound: {
+        eventCount: toMetricNumber(outboundRow?.event_count || 0),
+        logCount: toMetricNumber(outboundRow?.log_count || 0),
+      },
+      eventMax,
+      logMax,
+    },
+    trend: {
+      labels: trendLabels,
+      inbound: trendInbound,
+      outbound: trendOutbound,
+      max: trendMax,
+    },
+    intelRows,
+    blockIps,
+    dangerAction,
+  };
+}
+
+function buildAssetGuardTrendChart(vm) {
+  const chartWrap = document.createElement('div');
+  chartWrap.className = 'asset-guard-chart-wrap';
+
+  const axis = document.createElement('div');
+  axis.className = 'asset-guard-chart-axis';
+  ['1.0', '0.8', '0.6', '0.4', '0.2', '0'].forEach((label) => {
+    const item = document.createElement('span');
+    item.textContent = label;
+    axis.appendChild(item);
+  });
+  chartWrap.appendChild(axis);
+
+  const plot = document.createElement('div');
+  plot.className = 'asset-guard-chart-plot';
+  const maxValue = Math.max(1, vm.trend.max);
+  (vm.trend.labels.length ? vm.trend.labels : ['-', '-', '-', '-', '-', '-', '-']).forEach((label, idx) => {
+    const inboundValue = toMetricNumber(vm.trend.inbound[idx] || 0);
+    const outboundValue = toMetricNumber(vm.trend.outbound[idx] || 0);
+    const inboundPct = Math.max(0, Math.min(100, Math.round((inboundValue / maxValue) * 100)));
+    const outboundPct = Math.max(0, Math.min(100, Math.round((outboundValue / maxValue) * 100)));
+    const col = document.createElement('div');
+    col.className = 'asset-guard-chart-col';
+    col.innerHTML = `
+      <div class="asset-guard-chart-tooltip">入向 ${formatMetric(inboundValue)} / 出向 ${formatMetric(outboundValue)}</div>
+      <div class="asset-guard-chart-bars">
+        <div class="asset-guard-chart-bar outbound" style="height:${outboundPct}%"></div>
+        <div class="asset-guard-chart-bar inbound" style="height:${inboundPct}%"></div>
+      </div>
+      <div class="asset-guard-chart-label">${escapeHtml(label)}</div>
+    `;
+    plot.appendChild(col);
+  });
+  chartWrap.appendChild(plot);
+  return chartWrap;
+}
+
+function renderAssetGuardCard(runData) {
+  const result = runData?.result || {};
+  if (!result?.cards?.length && !result?.summary) {
+    renderPlaybookUnifiedCard(runData);
+    return;
+  }
+  setPlaybookWorkspaceMode('default');
+  const vm = buildAssetGuardViewModel(runData);
+  const card = cardTemplate('', '');
+  if (runData?.run_id != null) {
+    card.dataset.playbookRunId = String(runData.run_id);
+  }
+  card.dataset.playbookCardType = 'asset-guard-report';
+  card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card', 'asset-guard-card');
+
+  const header = document.createElement('header');
+  header.className = 'asset-guard-header';
+  header.innerHTML = `
+    <div>
+      <h3 class="asset-guard-title">${escapeHtml(vm.title)}</h3>
+      <p class="asset-guard-subtitle">${escapeHtml(vm.subtitle)}</p>
+    </div>
+  `;
+  card.appendChild(header);
+
+  const summaryGrid = document.createElement('section');
+  summaryGrid.className = 'asset-guard-summary-grid';
+  summaryGrid.innerHTML = `
+    <article class="asset-guard-stat-card">
+      <div class="asset-guard-stat-label-row">
+        <span class="asset-guard-stat-icon neutral">▣</span>
+        <span class="asset-guard-stat-label">核心资产</span>
+      </div>
+      <div class="asset-guard-stat-main mono">${escapeHtml(vm.assetIp)}</div>
+      <div class="asset-guard-stat-sub">评估周期: 最近 ${formatMetric(vm.windowHours)} 小时内</div>
+    </article>
+    <article class="asset-guard-stat-card tone-inbound">
+      <div class="asset-guard-tone-bar"></div>
+      <div class="asset-guard-stat-label-row">
+        <span class="asset-guard-stat-icon inbound">↙</span>
+        <span class="asset-guard-stat-label">入向威胁 (目标为资产)</span>
+      </div>
+      <div class="asset-guard-metric-single">
+        <strong class="asset-guard-metric-value inbound">${formatMetric(vm.metrics.inbound.eventCount)}</strong>
+        <span class="asset-guard-metric-unit">告警</span>
+      </div>
+    </article>
+    <article class="asset-guard-stat-card tone-outbound">
+      <div class="asset-guard-tone-bar"></div>
+      <div class="asset-guard-stat-label-row">
+        <span class="asset-guard-stat-icon outbound">↗</span>
+        <span class="asset-guard-stat-label">出向威胁 (源为资产)</span>
+      </div>
+      <div class="asset-guard-metric-single">
+        <strong class="asset-guard-metric-value outbound">${formatMetric(vm.metrics.outbound.eventCount)}</strong>
+        <span class="asset-guard-metric-unit">告警</span>
+      </div>
+    </article>
+  `;
+  card.appendChild(summaryGrid);
+
+  const chartSection = document.createElement('section');
+  chartSection.className = 'asset-guard-panel';
+  const chartTitle = document.createElement('h4');
+  chartTitle.className = 'asset-guard-panel-title with-icon';
+  chartTitle.innerHTML = '<span class="asset-guard-panel-icon">▤</span>流量威胁双向评估 (近7天)';
+  chartSection.appendChild(chartTitle);
+  chartSection.appendChild(buildAssetGuardTrendChart(vm));
+  const insightBox = document.createElement('div');
+  insightBox.className = 'asset-guard-insight-box';
+  const insightMark = document.createElement('div');
+  insightMark.className = 'asset-guard-insight-mark';
+  insightMark.textContent = '✦';
+  const insightBody = document.createElement('div');
+  const insightHeading = document.createElement('h5');
+  insightHeading.textContent = 'AI 透视结论';
+  const insightParagraph = document.createElement('p');
+  const insightText = vm.insightText || '';
+  const assetIp = vm.assetIp && vm.assetIp !== '-' ? vm.assetIp : '';
+  if (assetIp && insightText.includes(assetIp)) {
+    const [before, after] = insightText.split(assetIp, 2);
+    if (before) insightParagraph.appendChild(document.createTextNode(before));
+    const code = document.createElement('code');
+    code.className = 'asset-guard-inline-code';
+    code.textContent = assetIp;
+    insightParagraph.appendChild(code);
+    if (after) insightParagraph.appendChild(document.createTextNode(after));
+  } else {
+    insightParagraph.textContent = insightText;
+  }
+  insightBody.appendChild(insightHeading);
+  insightBody.appendChild(insightParagraph);
+  insightBox.appendChild(insightMark);
+  insightBox.appendChild(insightBody);
+  chartSection.appendChild(insightBox);
+  card.appendChild(chartSection);
+
+  const intelSection = document.createElement('section');
+  intelSection.className = 'asset-guard-panel asset-guard-intel-section';
+  const intelTitle = document.createElement('h4');
+  intelTitle.className = 'asset-guard-panel-title with-icon';
+  intelTitle.innerHTML = '<span class="asset-guard-panel-icon warn">◈</span>Top 5 外部访问实体情报';
+  intelSection.appendChild(intelTitle);
+  const intelTableWrap = document.createElement('div');
+  intelTableWrap.className = 'asset-guard-table-wrap';
+  const intelTable = document.createElement('table');
+  intelTable.className = 'asset-guard-table';
+  intelTable.innerHTML = `
+    <thead>
+      <tr>
+        <th>IP 地址</th>
+        <th>威胁等级</th>
+        <th>置信度</th>
+        <th>情报标签</th>
+        <th>数据来源</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const intelBody = intelTable.querySelector('tbody');
+  (vm.intelRows.length ? vm.intelRows : [{
+    ip: '-',
+    severityLabel: '未知',
+    severityTone: 'muted',
+    confidenceText: '0%',
+    confidenceValue: 0,
+    tags: ['未知'],
+    source: '未知',
+  }]).forEach((row) => {
+    const tr = document.createElement('tr');
+    const tagsHtml = (row.tags.length ? row.tags : ['未知'])
+      .map((tag) => `<span class="asset-guard-tag">${escapeHtml(tag)}</span>`)
+      .join('');
+    tr.innerHTML = `
+      <td class="mono">${escapeHtml(row.ip)}</td>
+      <td><span class="asset-guard-severity ${row.severityTone}">${escapeHtml(row.severityLabel)}</span></td>
+      <td>
+        <div class="asset-guard-confidence">
+          <span>${escapeHtml(row.confidenceText)}</span>
+          <div class="asset-guard-confidence-bar">
+            <div class="asset-guard-confidence-fill ${row.severityTone}" style="width:${row.confidenceValue}%"></div>
+          </div>
+        </div>
+      </td>
+      <td><div class="asset-guard-tag-list">${tagsHtml}</div></td>
+      <td class="muted">${escapeHtml(row.source)}</td>
+    `;
+    intelBody.appendChild(tr);
+  });
+  intelTableWrap.appendChild(intelTable);
+  intelSection.appendChild(intelTableWrap);
+  card.appendChild(intelSection);
+
+  const actionSection = document.createElement('section');
+  actionSection.className = 'asset-guard-action-card';
+  actionSection.innerHTML = `
+    <div class="asset-guard-action-icon-wrap"><span class="asset-guard-action-icon">⛨</span></div>
+    <div class="asset-guard-action-body">
+      <h4 class="asset-guard-action-title">建议响应动作</h4>
+      <p class="asset-guard-action-desc">${escapeHtml(vm.actionText)}</p>
+      <div class="asset-guard-batch-box">
+        <div class="asset-guard-batch-head">
+          <h5 class="asset-guard-batch-title"></h5>
+          <span class="asset-guard-batch-tip">点击 ✕ 可移出本次封禁任务</span>
+        </div>
+        <div class="asset-guard-batch-list"></div>
+      </div>
+      <div class="asset-guard-action-footer">
+        <button type="button" class="asset-guard-danger-btn"></button>
+        <span class="asset-guard-action-note">点击后将进入工单流程，不会立即阻断业务</span>
+      </div>
+    </div>
+  `;
+  const batchTitle = actionSection.querySelector('.asset-guard-batch-title');
+  const batchList = actionSection.querySelector('.asset-guard-batch-list');
+  const actionBtn = actionSection.querySelector('.asset-guard-danger-btn');
+  const selectedIps = [...vm.blockIps];
+
+  const renderBatchTargets = () => {
+    batchTitle.textContent = `批量封禁目标名单 (${selectedIps.length} 个 IP)`;
+    batchList.innerHTML = '';
+    if (!selectedIps.length) {
+      const empty = document.createElement('div');
+      empty.className = 'asset-guard-empty';
+      empty.textContent = '已清空封禁名单，无动作执行。';
+      batchList.appendChild(empty);
+    } else {
+      selectedIps.forEach((ip) => {
+        const chip = document.createElement('div');
+        chip.className = 'asset-guard-ip-chip';
+        chip.innerHTML = `<span class="asset-guard-ip-chip-text">${escapeHtml(ip)}</span>`;
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'asset-guard-ip-chip-remove';
+        removeBtn.textContent = '✕';
+        removeBtn.title = '移出名单';
+        removeBtn.onclick = () => {
+          const index = selectedIps.indexOf(ip);
+          if (index >= 0) {
+            selectedIps.splice(index, 1);
+            renderBatchTargets();
+          }
+        };
+        chip.appendChild(removeBtn);
+        batchList.appendChild(chip);
+      });
+    }
+    actionBtn.textContent = `发起批量封禁审批 (${selectedIps.length} 个目标)`;
+    actionBtn.disabled = !selectedIps.length || !vm.dangerAction;
+  };
+
+  actionBtn.onclick = async () => {
+    if (!vm.dangerAction || !selectedIps.length) return;
+    const params = vm.dangerAction.params || {};
+    const blockTypeRaw = String(params.block_type || params.blockType || 'SRC_IP').toUpperCase();
+    const blockType = blockTypeRaw === 'DST_IP' ? 'DST_IP' : 'SRC_IP';
+    try {
+      actionBtn.disabled = true;
+      await openRoutineBlockDialog({
+        actionTitle: blockType === 'DST_IP' ? '封锁恶意外联IP' : '封禁恶意攻击源',
+        resultTitle: blockType === 'DST_IP' ? '外联封锁结果' : '网侧封禁结果',
+        blockType,
+        ips: [...selectedIps],
+        defaultReason: '由核心资产防线透视建议动作触发',
+        emptyMessage: '当前未提取到可下发封禁的目标 IP。',
+      });
+    } catch (err) {
+      setHint(el.playbookHint, err.message || '执行动作失败', 'error');
+    } finally {
+      renderBatchTargets();
+    }
+  };
+
+  renderBatchTargets();
+  card.appendChild(actionSection);
 
   appendPlaybookWorkspaceCard(card);
 }
@@ -2920,6 +3664,7 @@ async function downloadPlaybookReport(runData) {
 }
 
 function renderPlaybookUnifiedCard(runData) {
+  setPlaybookWorkspaceMode('default');
   const result = runData?.result || {};
   const summary = String(result.summary || runData?.error || '').trim();
   const cards = Array.isArray(result.cards) ? result.cards : [];
@@ -2979,6 +3724,14 @@ function renderPlaybookUnifiedCard(runData) {
 function renderPlaybookResult(runData) {
   if (runData?.template_id === 'routine_check') {
     renderRoutineCheckCard(runData);
+    return;
+  }
+  if (runData?.template_id === 'alert_triage') {
+    renderAlertTriageCard(runData);
+    return;
+  }
+  if (runData?.template_id === 'asset_guard') {
+    renderAssetGuardCard(runData);
     return;
   }
   if (runData?.template_id === 'threat_hunting') {
@@ -3593,18 +4346,24 @@ async function bootWorkspace() {
 }
 
 async function checkAuthStatus() {
-  setAuthState(false);
   try {
     const status = await api('/api/auth/status');
-    if (!status.authenticated) return;
+    if (!status.authenticated) {
+      setAuthState(false);
+      return;
+    }
     const url = status.base_url || '';
     state.xdrBaseUrl = url;
     const baseUrlInput = document.getElementById('baseUrl');
     if (baseUrlInput && !baseUrlInput.value && url) {
       baseUrlInput.value = url;
     }
-    setHint(el.loginResult, '检测到已保存凭证，请重新登录后进入工作台。', '');
-  } catch {}
+    setAuthState(true, `已登录平台：${url || '当前平台'}`);
+    setHint(el.loginResult, '已自动恢复上次登录状态。', 'success');
+    await bootWorkspace();
+  } catch {
+    setAuthState(false);
+  }
 }
 
 el.probeLoginBtn.onclick = async () => {
@@ -3632,21 +4391,26 @@ el.loginForm.addEventListener('submit', async (e) => {
   }
 });
 
-el.logoutBtn.onclick = () => {
-  state.sessionId = `session-${Date.now()}`;
-  state.xdrBaseUrl = '';
-  state.playbookTemplates = [];
-  state.activePlaybookRunId = null;
-  state.playbookRunCache = {};
-  state.playbookOpenTokens = {};
-  state.routineBlockDraft = null;
-  el.chatStream.innerHTML = '';
-  if (el.playbookCards) el.playbookCards.innerHTML = '';
-  if (el.playbookHint) setHint(el.playbookHint, '');
-  closeDialog(el.routineBlockDialog);
-  clearPlaybookWorkspace();
-  setHint(el.loginResult, '已退出到登录页（本地会话已重置）。', 'success');
-  setAuthState(false);
+el.logoutBtn.onclick = async () => {
+  try {
+    const result = await api('/api/auth/logout', { method: 'POST' });
+    state.sessionId = `session-${Date.now()}`;
+    state.xdrBaseUrl = '';
+    state.playbookTemplates = [];
+    state.activePlaybookRunId = null;
+    state.playbookRunCache = {};
+    state.playbookOpenTokens = {};
+    state.routineBlockDraft = null;
+    el.chatStream.innerHTML = '';
+    if (el.playbookCards) el.playbookCards.innerHTML = '';
+    if (el.playbookHint) setHint(el.playbookHint, '');
+    closeDialog(el.routineBlockDialog);
+    clearPlaybookWorkspace();
+    setHint(el.loginResult, result.message || '已退出到登录页。', 'success');
+    setAuthState(false);
+  } catch (err) {
+    setHint(el.loginResult, err.message || '退出失败，请稍后重试。', 'error');
+  }
 };
 
 el.openSettingsBtn.onclick = async () => {
@@ -3971,5 +4735,9 @@ el.chatForm.addEventListener('submit', async (e) => {
 (async function init() {
   initProviderUI();
   renderPlaybookCards([]);
-  await checkAuthStatus();
+  try {
+    await checkAuthStatus();
+  } finally {
+    finishBootTransition();
+  }
 })();

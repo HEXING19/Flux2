@@ -98,3 +98,10 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
         }
     )
     return LoginResponse(success=True, message="登录成功并已保存凭证")
+
+
+@router.post("/logout", response_model=LoginResponse)
+def logout(session: Session = Depends(get_session)) -> LoginResponse:
+    service = ConfigService(session)
+    service.clear_xdr_credentials()
+    return LoginResponse(success=True, message="已退出登录并清除已保存凭证")

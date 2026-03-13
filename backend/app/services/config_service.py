@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlmodel import Session, select
+from sqlmodel import Session, delete, select
 
 from app.models.db_models import CoreAsset, ProviderConfig, ThreatIntelConfig, XDRCredential
 
@@ -52,6 +52,10 @@ class ConfigService:
 
     def get_latest_credential(self) -> XDRCredential | None:
         return self.session.exec(select(XDRCredential).order_by(XDRCredential.id.desc())).first()
+
+    def clear_xdr_credentials(self) -> None:
+        self.session.exec(delete(XDRCredential))
+        self.session.commit()
 
     def get_threatbook_config(self) -> ThreatIntelConfig | None:
         return self.session.exec(
