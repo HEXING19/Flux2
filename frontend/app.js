@@ -1192,7 +1192,13 @@ function buildRoutineCheckViewModel(runData) {
     ? chartCard.data.option.xAxis.data
     : [];
   const trendValues = trendRawValues.slice(-7).map((value) => toMetricNumber(value));
-  const trendLabels = trendRawLabels.slice(-7).map((label) => String(label || '').slice(5, 10));
+  const trendLabels = trendRawLabels.slice(-7).map((label) => {
+    const text = String(label || '').trim();
+    if (!text) return '--';
+    const dayText = text.split(' ')[0];
+    const matched = dayText.match(/(\d{2}-\d{2})$/);
+    return matched ? matched[1] : dayText.slice(-5);
+  });
   while (trendValues.length < 7) trendValues.unshift(0);
   while (trendLabels.length < 7) trendLabels.unshift('--');
 
@@ -1805,7 +1811,7 @@ function renderRoutineCheckCard(runData) {
   trendBox.className = 'routine-panel';
   const trendTitle = document.createElement('h4');
   trendTitle.className = 'routine-panel-title';
-  trendTitle.textContent = '近期安全态势趋势 (近7段)';
+  trendTitle.textContent = '近期安全态势趋势 (近7天)';
   trendBox.appendChild(trendTitle);
   const bars = document.createElement('div');
   bars.className = 'routine-trend-bars';

@@ -379,28 +379,56 @@ class PlaybookService:
         )
 
         looked_up = False
-        if not source_ips:
+        scanned_incidents = 0
+        target_count = 3
+        if len(source_ips) < target_count or len(outbound_ips) < target_count:
             looked_up = True
-            for row in rows:
-                uid = str(row.get("uuId") or "").strip()
-                if not uid:
-                    continue
+            lookup_uuids = [
+                str(row.get("uuId") or "").strip()
+                for row in rows
+                if str(row.get("uuId") or "").strip()
+            ][:60]
+            scanned_incidents = len(lookup_uuids)
+
+            def enrich_one(uid: str) -> tuple[list[str], list[str], list[str]]:
                 resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
                 entities, _ = extract_entity_items_from_response(resp)
+                src_ips: list[str] = []
+                dst_ips: list[str] = []
+                unknown_ips: list[str] = []
                 for entity in entities:
                     ip = _parse_ipv4(entity.get("ip"))
                     if not ip:
                         continue
                     direction = self._classify_entity_ip_direction(entity)
                     if direction == "source":
-                        source_candidates.append(ip)
+                        src_ips.append(ip)
                     elif direction == "outbound":
-                        outbound_candidates.append(ip)
+                        dst_ips.append(ip)
                     else:
-                        unknown_entity_candidates.append(ip)
-            if not source_candidates:
+                        unknown_ips.append(ip)
+                return (
+                    _dedup_keep_order(src_ips),
+                    _dedup_keep_order(dst_ips),
+                    _dedup_keep_order(unknown_ips),
+                )
+
+            if lookup_uuids:
+                worker_count = max(4, min(12, len(lookup_uuids)))
+                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                    fut_map = {executor.submit(enrich_one, uid): uid for uid in lookup_uuids}
+                    for fut in as_completed(fut_map):
+                        try:
+                            src_ips, dst_ips, unknown_ips = fut.result()
+                        except Exception:
+                            continue
+                        source_candidates.extend(src_ips)
+                        outbound_candidates.extend(dst_ips)
+                        unknown_entity_candidates.extend(unknown_ips)
+
+            if not source_ips:
                 source_candidates.extend(unknown_entity_candidates)
-            if not outbound_candidates:
+            if not outbound_ips:
                 outbound_candidates.extend(unknown_entity_candidates)
             source_ips = self._normalize_candidate_ips(
                 source_candidates,
@@ -420,6 +448,7 @@ class PlaybookService:
             "outbound_ips": outbound_ips[:3],
             "host_ips": sorted(host_ips),
             "full_entity_lookup": looked_up,
+            "entity_lookup_scanned": scanned_incidents,
         }
 
     def block_malicious_sources(
@@ -1085,6 +1114,43 @@ class PlaybookService:
             values.append(max(0, _to_int(counted.get("total"), 0)))
         return labels, values
 
+    def _build_daily_log_trend_series(
+        self,
+        requester: APIRequester,
+        *,
+        days: int = 7,
+        end_ts: int | None = None,
+    ) -> tuple[list[str], list[int]]:
+        day_count = max(2, min(30, _to_int(days, 7)))
+        end_timestamp = _to_int(end_ts, to_ts(utc_now()))
+        end_dt = datetime.fromtimestamp(end_timestamp)
+        today_start = end_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        labels: list[str] = []
+        ranges: list[tuple[int, int]] = []
+        for offset in range(day_count - 1, -1, -1):
+            day_start = today_start - timedelta(days=offset)
+            day_start_ts = to_ts(day_start)
+            day_end_ts = end_timestamp if offset == 0 else to_ts(day_start + timedelta(days=1))
+            labels.append(day_start.strftime("%m-%d"))
+            ranges.append((day_start_ts, day_end_ts))
+
+        values: list[int] = [0 for _ in ranges]
+        worker_count = max(1, min(6, len(ranges)))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            fut_map = {
+                executor.submit(self._count_logs, requester, start_ts=start_ts, end_ts=end_ts): idx
+                for idx, (start_ts, end_ts) in enumerate(ranges)
+            }
+            for fut in as_completed(fut_map):
+                idx = fut_map[fut]
+                try:
+                    counted = fut.result()
+                    values[idx] = max(0, _to_int(counted.get("total"), 0))
+                except Exception:
+                    values[idx] = 0
+        return labels, values
+
     @staticmethod
     def _normalize_event_row(item: dict[str, Any], index: int = 0) -> dict[str, Any]:
         severity_code = _to_int(_pick(item, "incidentSeverity", "severity"), -1)
@@ -1740,11 +1806,10 @@ class PlaybookService:
                 protected_ips=protected_ips,
                 protected_cidrs=protected_cidrs,
             )
-            labels, points = self._build_log_trend_series(
+            labels, points = self._build_daily_log_trend_series(
                 requester,
-                start_ts=_to_int(node1.get("startTimestamp"), to_ts(utc_now()) - 24 * 3600),
+                days=7,
                 end_ts=_to_int(node1.get("endTimestamp"), to_ts(utc_now())),
-                buckets=12,
             )
             chart_option = {
                 "tooltip": {"trigger": "axis"},
@@ -1756,7 +1821,7 @@ class PlaybookService:
             cards = [
                 text_payload(summary, title="今日安全早报"),
                 echarts_payload(
-                    title="24h 日志总量趋势（按2小时统计）",
+                    title="近7天日志总量趋势（按天统计）",
                     option=chart_option,
                     summary=f"过去24小时日志总量：{node1.get('log_total_24h', 0)}",
                 ),
@@ -2854,12 +2919,15 @@ class PlaybookService:
             return {
                 "rows": [],
                 "raw_items": [],
+                "total_count": 0,
                 "error": str(resp.get("message") or "事件查询失败"),
                 "request": req,
             }
-        items = resp.get("data", {}).get("item", []) or []
+        data = resp.get("data", {}) if isinstance(resp.get("data"), dict) else {}
+        items = data.get("item", []) or []
+        total_count = _to_int(_pick(data, "total", "count", "totalCount"), len(items))
         rows = [self._normalize_event_row(item, idx) for idx, item in enumerate(items, start=1)]
-        return {"rows": rows, "raw_items": items, "error": None, "request": req}
+        return {"rows": rows, "raw_items": items, "total_count": total_count, "error": None, "request": req}
 
     @staticmethod
     def _is_external_ip(ip: str) -> bool:
@@ -3156,11 +3224,12 @@ class PlaybookService:
                 start_ts=start_ts,
                 end_ts=end_ts,
                 extra_filters={"dstIps": [asset_ip]},
+                page_size=200,
             )
             uuids = [row.get("uuId") for row in queried["rows"] if row.get("uuId")]
             return {
                 "rows": queried["rows"],
-                "count": len(queried["rows"]),
+                "count": _to_int(queried.get("total_count"), len(queried["rows"])),
                 "uuids": uuids,
                 "startTimestamp": start_ts,
                 "endTimestamp": end_ts,
@@ -3175,11 +3244,12 @@ class PlaybookService:
                 start_ts=node1["startTimestamp"],
                 end_ts=node1["endTimestamp"],
                 extra_filters={"srcIps": [asset_ip]},
+                page_size=200,
             )
             uuids = [row.get("uuId") for row in queried["rows"] if row.get("uuId")]
             return {
                 "rows": queried["rows"],
-                "count": len(queried["rows"]),
+                "count": _to_int(queried.get("total_count"), len(queried["rows"])),
                 "uuids": uuids,
                 "error": queried["error"],
                 "request": queried["request"],
@@ -3271,7 +3341,7 @@ class PlaybookService:
             intel_rows = ctx["nodes"]["node_6_external_intel_enrich"].get("intel_rows", [])
             fallback = (
                 f"核心资产 {asset_name}（{asset_ip}）在最近{window_hours}小时内完成体检。"
-                f"入向告警 {events_dst} 条、出向告警 {events_src} 条，入向访问 {logs_dst} 次、出向访问 {logs_src} 次。"
+                f"入向告警 {events_dst} 条、出向告警 {events_src} 条，入向日志总量 {logs_dst} 次、出向日志总量 {logs_src} 次。"
                 "建议优先复核高风险外部实体并跟进处置闭环。"
             )
             prompt = (
@@ -3280,8 +3350,8 @@ class PlaybookService:
                 f"\n资产IP: {asset_ip}"
                 f"\n入向告警数: {events_dst}"
                 f"\n出向告警数: {events_src}"
-                f"\n入向访问量: {logs_dst}"
-                f"\n出向访问量: {logs_src}"
+                f"\n入向日志总量: {logs_dst}"
+                f"\n出向日志总量: {logs_src}"
                 f"\nTop外部实体情报: {json.dumps(intel_rows, ensure_ascii=False)}"
             )
             briefing = self._safe_llm_complete(
@@ -3338,22 +3408,22 @@ class PlaybookService:
             for offset in range(6, -1, -1):
                 day_start = (now_dt - timedelta(days=offset)).replace(hour=0, minute=0, second=0, microsecond=0)
                 day_end = day_start + timedelta(days=1)
-                src_high = self._count_logs(
+                src_total = self._count_logs(
                     requester,
                     start_ts=to_ts(day_start),
                     end_ts=to_ts(day_end),
-                    extra_filters={"srcIps": [asset_ip], "severities": [3, 4]},
+                    extra_filters={"srcIps": [asset_ip]},
                 )["total"]
-                dst_high = self._count_logs(
+                dst_total = self._count_logs(
                     requester,
                     start_ts=to_ts(day_start),
                     end_ts=to_ts(day_end),
-                    extra_filters={"dstIps": [asset_ip], "severities": [3, 4]},
+                    extra_filters={"dstIps": [asset_ip]},
                 )["total"]
                 weekly_labels.append(weekday_labels[day_start.weekday()])
-                weekly_inbound_values.append(dst_high)
-                weekly_outbound_values.append(src_high)
-                weekly_values.append(src_high + dst_high)
+                weekly_inbound_values.append(dst_total)
+                weekly_outbound_values.append(src_total)
+                weekly_values.append(src_total + dst_total)
 
             baseline = max(5, int(sum(weekly_values) / max(1, len(weekly_values)) * 1.35))
             peak_days = [
@@ -3380,8 +3450,8 @@ class PlaybookService:
             high_risk_text = f"高风险外部实体集中在 {high_risk_ips[0]} 等目标。" if high_risk_ips else "当前 Top 外部实体以中低风险画像为主。"
             if peak_value <= 0 and node1.get("count", 0) == 0 and node2.get("count", 0) == 0:
                 chart_insight = (
-                    f"近7天未观测到核心资产 {asset_ip} 的明显高危双向流量，"
-                    f"当前入向高危流量累计 {inbound_total_7d}，出向高危流量累计 {outbound_total_7d}，"
+                    f"近7天未观测到核心资产 {asset_ip} 的明显双向流量波动，"
+                    f"当前入向日志累计 {inbound_total_7d}，出向日志累计 {outbound_total_7d}，"
                     "整体态势相对平稳，建议维持常规监控。"
                 )
             else:
@@ -3390,19 +3460,19 @@ class PlaybookService:
                 current_inbound_logs = _to_int(node3.get("log_total"), 0)
                 current_outbound_logs = _to_int(node4.get("log_total"), 0)
                 direction_text = {
-                    "入向": f"近7天高危趋势以入向为主，累计 {inbound_total_7d}",
-                    "出向": f"近7天高危趋势以出向为主，累计 {outbound_total_7d}",
-                    "双向": f"近7天高危趋势呈双向波动，入向累计 {inbound_total_7d}、出向累计 {outbound_total_7d}",
+                    "入向": f"近7天日志趋势以入向为主，累计 {inbound_total_7d}",
+                    "出向": f"近7天日志趋势以出向为主，累计 {outbound_total_7d}",
+                    "双向": f"近7天日志趋势呈双向波动，入向累计 {inbound_total_7d}、出向累计 {outbound_total_7d}",
                 }[dominant_direction]
                 peak_text = (
-                    f"{peak_day}达到高危峰值 {peak_value}"
+                    f"{peak_day}达到日志峰值 {peak_value}"
                     if peak_value > 0
-                    else "近7天未出现明显高危峰值"
+                    else "近7天未出现明显日志峰值"
                 )
                 chart_insight = (
                     f"{direction_text}；{peak_text}。"
                     f"最近24小时入向告警 {current_inbound_events} 条、出向告警 {current_outbound_events} 条，"
-                    f"入向访问 {current_inbound_logs} 次、出向访问 {current_outbound_logs} 次。"
+                    f"入向日志总量 {current_inbound_logs} 次、出向日志总量 {current_outbound_logs} 次。"
                     f"{high_risk_text}"
                     "建议优先结合峰值日期回溯关联告警与外部实体处置情况。"
                 )
@@ -3412,7 +3482,7 @@ class PlaybookService:
                 "yAxis": {"type": "value"},
                 "series": [
                     {
-                        "name": "双向高危流量",
+                        "name": "双向日志总量",
                         "type": "bar",
                         "data": weekly_values,
                         "itemStyle": {"color": "#3f7df5"},
@@ -3437,7 +3507,7 @@ class PlaybookService:
                     columns=[
                         {"key": "direction", "label": "方向"},
                         {"key": "event_count", "label": "告警数"},
-                        {"key": "log_count", "label": "访问量"},
+                        {"key": "log_count", "label": "日志总量"},
                     ],
                     rows=stats_rows,
                     namespace="asset_guard_stats",
