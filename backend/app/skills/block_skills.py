@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.block_devices import fetch_linkable_af_devices
 from app.core.exceptions import ConfirmationRequiredException, MissingParameterException, ValidationGuardException
 from app.core.payload import form_payload, table_payload, text_payload
 
@@ -82,20 +83,21 @@ class BlockQuerySkill(BaseSkill):
 
     def _build_quick_block_form(self, session_id: str, keyword: str) -> list[dict[str, Any]]:
         action_skill = BlockActionSkill(self.requester, self.context_manager)
-        online_devices = action_skill._list_online_devices()
+        device_lookup = action_skill._lookup_linkable_devices()
+        linkable_devices = device_lookup.get("devices") or []
         prepared: dict[str, Any] = {
             "views": [keyword],
             "time_type": "temporary",
             "time_value": 1,
             "time_unit": "d",
         }
-        prepared = action_skill._normalize_prepared(prepared, online_devices)
+        prepared = action_skill._normalize_prepared(prepared, linkable_devices)
         if not prepared.get("block_type"):
             prepared["block_type"] = action_skill._guess_block_type(prepared.get("views")) or "SRC_IP"
         return action_skill._build_param_form(
             session_id,
             prepared,
-            online_devices,
+            linkable_devices,
             reason=f"未查询到 {keyword} 的封禁策略。若需要立即封禁，请确认并提交以下必填参数。",
         )
 
@@ -184,12 +186,8 @@ class BlockActionSkill(BaseSkill):
     requires_confirmation = True
     apply_safety_gate = True
 
-    def _list_online_devices(self) -> list[dict[str, Any]]:
-        resp = self.requester.request("POST", "/api/xdr/v1/device/blockdevice/list", json_body={"type": ["AF"]})
-        if resp.get("code") != "Success":
-            return []
-        devices = resp.get("data", {}).get("item", [])
-        return [d for d in devices if d.get("deviceStatus") == "online"]
+    def _lookup_linkable_devices(self) -> dict[str, Any]:
+        return fetch_linkable_af_devices(self.requester)
 
     @staticmethod
     def _to_block_device(device: dict[str, Any]) -> dict[str, Any]:
@@ -225,7 +223,7 @@ class BlockActionSkill(BaseSkill):
             return result or None
         return None
 
-    def _normalize_prepared(self, prepared: dict[str, Any], online_devices: list[dict[str, Any]]) -> dict[str, Any]:
+    def _normalize_prepared(self, prepared: dict[str, Any], linkable_devices: list[dict[str, Any]]) -> dict[str, Any]:
         normalized = dict(prepared)
         normalized["views"] = self._normalize_views(normalized.get("views"))
 
@@ -243,11 +241,11 @@ class BlockActionSkill(BaseSkill):
         if not normalized.get("devices"):
             device_id = normalized.get("device_id")
             if device_id not in (None, ""):
-                chosen = next((d for d in online_devices if str(d.get("deviceId")) == str(device_id)), None)
+                chosen = next((d for d in linkable_devices if str(d.get("deviceId")) == str(device_id)), None)
                 if chosen:
                     normalized["devices"] = [self._to_block_device(chosen)]
-            elif len(online_devices) == 1:
-                normalized["devices"] = [self._to_block_device(online_devices[0])]
+            elif len(linkable_devices) == 1:
+                normalized["devices"] = [self._to_block_device(linkable_devices[0])]
 
         return normalized
 
@@ -255,7 +253,7 @@ class BlockActionSkill(BaseSkill):
         self,
         session_id: str,
         prepared: dict[str, Any],
-        online_devices: list[dict[str, Any]],
+        linkable_devices: list[dict[str, Any]],
         *,
         reason: str,
     ) -> list[dict[str, Any]]:
@@ -324,10 +322,10 @@ class BlockActionSkill(BaseSkill):
             },
         ]
 
-        if online_devices:
+        if linkable_devices:
             default_device_id = prepared.get("device_id")
             if default_device_id in (None, ""):
-                default_device_id = str(online_devices[0].get("deviceId"))
+                default_device_id = str(linkable_devices[0].get("deviceId"))
             fields.append(
                 {
                     "key": "device_id",
@@ -340,7 +338,7 @@ class BlockActionSkill(BaseSkill):
                             "label": f"{d.get('deviceName')} ({d.get('deviceId')})",
                             "value": str(d.get("deviceId")),
                         }
-                        for d in online_devices
+                        for d in linkable_devices
                     ],
                 }
             )
@@ -352,7 +350,7 @@ class BlockActionSkill(BaseSkill):
                     "type": "text",
                     "required": True,
                     "value": str(prepared.get("device_id") or ""),
-                    "placeholder": "请先在平台确认AF设备在线，再填写设备ID重试",
+                    "placeholder": "请先在平台确认 AF 设备可联动，再填写设备ID重试",
                 }
             )
 
@@ -400,8 +398,9 @@ class BlockActionSkill(BaseSkill):
             if inherited_target and any(k in user_text for k in ["它", "该IP", "这个IP", "这个地址", "这个实体", "封禁"]):
                 prepared["views"] = [str(inherited_target)]
 
-        online_devices = self._list_online_devices()
-        prepared = self._normalize_prepared(prepared, online_devices)
+        device_lookup = self._lookup_linkable_devices()
+        linkable_devices = device_lookup.get("devices") or []
+        prepared = self._normalize_prepared(prepared, linkable_devices)
 
         missing: list[str] = []
         if not prepared.get("block_type"):
@@ -415,30 +414,38 @@ class BlockActionSkill(BaseSkill):
         if prepared.get("time_type") == "temporary" and not prepared.get("time_unit"):
             missing.append("封禁时长单位")
         if not prepared.get("devices"):
-            if not online_devices:
+            if not linkable_devices:
                 missing.append("联动设备")
-            elif len(online_devices) > 1 and not prepared.get("device_id"):
+            elif len(linkable_devices) > 1 and not prepared.get("device_id"):
                 missing.append("联动设备")
             elif prepared.get("device_id"):
-                missing.append("联动设备(请确认设备在线)")
+                missing.append("联动设备(请确认设备可联动)")
 
         if missing:
             reason = f"请先补充参数后再执行封禁，当前缺少：{'、'.join(missing)}。"
-            if not online_devices:
-                reason += " 当前未检测到在线AF联动设备，请先在平台检查设备接入与在线状态。"
-            return self._build_param_form(session_id, prepared, online_devices, reason=reason)
+            if not linkable_devices:
+                lookup_message = str(device_lookup.get("message") or "").strip()
+                if lookup_message:
+                    reason += f" {lookup_message}"
+                else:
+                    reason += " 当前未检测到可联动 AF 设备，请先在平台检查设备接入与在线状态。"
+            return self._build_param_form(session_id, prepared, linkable_devices, reason=reason)
 
         model = self.validate_and_prepare(session_id, prepared)
 
         if not model.devices:
-            if len(online_devices) > 1:
+            if len(linkable_devices) > 1:
                 return self._build_param_form(
                     session_id,
                     prepared,
-                    online_devices,
-                    reason="检测到多个在线设备，请先选择执行封禁的目标设备。",
+                    linkable_devices,
+                    reason="检测到多台可联动设备，请先选择执行封禁的目标设备。",
                 )
-            raise MissingParameterException(skill_name=self.name, missing_fields=["devices"], question="当前无可用在线设备，无法下发封禁。")
+            raise MissingParameterException(
+                skill_name=self.name,
+                missing_fields=["devices"],
+                question=str(device_lookup.get("message") or "当前无可用可联动设备，无法下发封禁。"),
+            )
 
         if model.time_type == "temporary":
             if model.time_unit == "d" and not (1 <= model.time_value <= 15):

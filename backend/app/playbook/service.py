@@ -11,9 +11,10 @@ from typing import Any, Callable
 import httpx
 from sqlmodel import Session, select
 
+from app.core.block_devices import fetch_linkable_af_devices
 from app.core.context import context_manager
 from app.core.db import session_scope
-from app.core.exceptions import ConfirmationRequiredException
+from app.core.exceptions import ConfirmationRequiredException, MissingParameterException, ValidationGuardException
 from app.core.payload import approval_payload, echarts_payload, table_payload, text_payload
 from app.core.requester import APIRequester, get_requester_from_credential
 from app.core.threatbook import resolve_threatbook_api_key
@@ -486,21 +487,20 @@ class PlaybookService:
 
         credential = session.exec(select(XDRCredential).order_by(XDRCredential.id.desc())).first()
         requester = get_requester_from_credential(credential)
-        device_resp = requester.request("POST", "/api/xdr/v1/device/blockdevice/list", json_body={"type": ["AF"]})
-        raw_devices = device_resp.get("data", {}).get("item", []) if device_resp.get("code") == "Success" else []
-        online_devices = [d for d in raw_devices if d.get("deviceStatus") == "online"]
-        if not online_devices:
-            raise ValueError("当前没有在线AF联动设备，无法直接下发封禁。")
+        device_lookup = fetch_linkable_af_devices(requester)
+        if not device_lookup.get("device_options"):
+            raise ValueError(str(device_lookup.get("message") or "当前没有可联动 AF 设备，无法直接下发封禁。"))
+        linkable_devices = device_lookup.get("devices") or []
 
         selected_device = None
         if device_id:
-            selected_device = next((d for d in online_devices if str(d.get("deviceId")) == str(device_id)), None)
+            selected_device = next((d for d in linkable_devices if str(d.get("deviceId")) == str(device_id)), None)
             if not selected_device:
-                raise ValueError("所选联动设备不存在或不在线，请重新选择。")
-        elif len(online_devices) == 1:
-            selected_device = online_devices[0]
+                raise ValueError("所选联动设备不存在、不可联动或状态已变化，请重新选择。")
+        elif len(linkable_devices) == 1:
+            selected_device = linkable_devices[0]
         else:
-            raise ValueError("存在多个在线联动设备，请先选择设备后再下发封禁。")
+            raise ValueError("存在多台可联动 AF 设备，请先选择设备后再下发封禁。")
 
         block_devices = [
             {
@@ -531,7 +531,14 @@ class PlaybookService:
             "name": (rule_name or "").strip() or None,
             "confirm": True,
         }
-        payloads = block_skill.execute(str(session_id).strip(), params, "安全早报一键处置封禁恶意攻击源")
+        try:
+            payloads = block_skill.execute(str(session_id).strip(), params, "安全早报一键处置封禁恶意攻击源")
+        except ValidationGuardException as exc:
+            raise ValueError(str(exc)) from exc
+        except MissingParameterException as exc:
+            raise ValueError(exc.question) from exc
+        except ConfirmationRequiredException as exc:
+            raise ValueError(exc.summary) from exc
         success_payload = next((p for p in payloads if p.get("type") == "text"), {})
         success_text = str(success_payload.get("data", {}).get("text") or "").strip()
         if success_text and "封禁执行成功" in success_text:
@@ -572,19 +579,8 @@ class PlaybookService:
         credential = session.exec(select(XDRCredential).order_by(XDRCredential.id.desc())).first()
         requester = get_requester_from_credential(credential)
 
-        device_resp = requester.request("POST", "/api/xdr/v1/device/blockdevice/list", json_body={"type": ["AF"]})
-        raw_devices = device_resp.get("data", {}).get("item", []) if device_resp.get("code") == "Success" else []
-        online_devices = [d for d in raw_devices if d.get("deviceStatus") == "online"]
-        device_options = [
-            {
-                "device_id": str(d.get("deviceId") or ""),
-                "device_name": str(d.get("deviceName") or "-"),
-                "device_type": str(d.get("deviceType") or "-"),
-                "device_version": str(d.get("deviceVersion") or "-"),
-            }
-            for d in online_devices
-            if d.get("deviceId")
-        ]
+        device_lookup = fetch_linkable_af_devices(requester)
+        device_options = device_lookup.get("device_options") or []
 
         intel_rows: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=6) as executor:
@@ -625,6 +621,9 @@ class PlaybookService:
             "ips": filtered_ips,
             "skipped_ips": skipped_ips,
             "device_options": device_options,
+            "device_status": device_lookup.get("state") or "unknown",
+            "device_message": device_lookup.get("message") or "",
+            "default_device_id": device_lookup.get("default_device_id"),
             "intel_rows": intel_rows,
         }
 

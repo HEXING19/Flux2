@@ -12,10 +12,11 @@ from app.playbook.service import playbook_service
 
 
 class PlaybookRequester:
-    def __init__(self, *, proof_as_dict: bool = False) -> None:
+    def __init__(self, *, proof_as_dict: bool = False, device_response: dict | None = None) -> None:
         self.count_payloads: list[dict] = []
         self.alert_payloads: list[dict] = []
         self.proof_as_dict = proof_as_dict
+        self.device_response = device_response
 
     def request(self, method, path, *, json_body=None, params=None, timeout=15, max_retries=3):
         _ = (method, params, timeout, max_retries)
@@ -287,6 +288,26 @@ class PlaybookRequester:
                     ],
                 }
             return {"code": "Success", "data": []}
+
+        if path == "/api/xdr/v1/device/blockdevice/list":
+            if self.device_response is not None:
+                return self.device_response
+            return {
+                "code": "Success",
+                "message": "OK",
+                "data": {
+                    "item": [
+                        {
+                            "deviceId": 12346,
+                            "deviceName": "AF_011",
+                            "deviceStatus": "block success",
+                            "deviceType": "AF",
+                            "deviceVersion": "8.0.15",
+                            "remark": "(可联动)",
+                        }
+                    ]
+                },
+            }
 
         return {"code": "Failed", "message": f"unhandled path: {path}", "data": {}}
 
@@ -618,6 +639,72 @@ class PlaybookServiceTest(unittest.TestCase):
         self.assertEqual(assessment.get("authenticity"), "较低")
         self.assertEqual(assessment.get("recommendation"), "归档告警，无需进一步处置")
         self.assertIn("无MITRE攻击技术匹配", assessment.get("key_evidence", ""))
+
+    def test_preview_block_targets_should_expose_linkable_af_devices(self):
+        fake_requester = PlaybookRequester(
+            device_response={
+                "code": "Success",
+                "message": "OK",
+                "data": {
+                    "item": [
+                        {
+                            "deviceId": 12346,
+                            "deviceName": "AF_011",
+                            "deviceStatus": "block success",
+                            "deviceType": "AF",
+                            "deviceVersion": "8.0.15",
+                            "remark": "(可联动)",
+                        }
+                    ]
+                },
+            }
+        )
+        with (
+            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
+            patch.object(
+                playbook_service,
+                "_query_intel",
+                return_value={"ip": "86.223.99.28", "severity": "low", "confidence": 73, "tags": ["unknown"], "source": "local_fallback"},
+            ),
+        ):
+            with Session(engine) as session:
+                result = playbook_service.preview_block_targets(
+                    session,
+                    session_id="s-preview-1",
+                    ips=["86.223.99.28"],
+                    block_type="SRC_IP",
+                )
+        self.assertEqual(result["device_status"], "ready")
+        self.assertEqual(result["default_device_id"], "12346")
+        self.assertEqual(result["device_options"][0]["device_name"], "AF_011")
+        self.assertIn("可联动 AF 设备", result["device_message"])
+
+    def test_preview_block_targets_should_surface_device_query_error(self):
+        fake_requester = PlaybookRequester(
+            device_response={
+                "code": "Failed",
+                "message": "请求失败(403): forbid。认证失败或权限不足，请重新登录并确认账号已开通该接口权限。",
+                "data": {},
+            }
+        )
+        with (
+            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
+            patch.object(
+                playbook_service,
+                "_query_intel",
+                return_value={"ip": "86.223.99.28", "severity": "low", "confidence": 73, "tags": ["unknown"], "source": "local_fallback"},
+            ),
+        ):
+            with Session(engine) as session:
+                result = playbook_service.preview_block_targets(
+                    session,
+                    session_id="s-preview-2",
+                    ips=["86.223.99.28"],
+                    block_type="SRC_IP",
+                )
+        self.assertEqual(result["device_status"], "query_error")
+        self.assertEqual(result["device_options"], [])
+        self.assertIn("查询 AF 联动设备失败", result["device_message"])
 
 
 if __name__ == "__main__":

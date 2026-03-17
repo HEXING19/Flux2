@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
 from app.core.db import get_session
+from app.core.exceptions import FluxError
 from app.playbook.schemas import PlaybookRunRequest, RoutineCheckBlockPreviewRequest, RoutineCheckBlockRequest
 from app.playbook.service import playbook_service
 
@@ -26,6 +27,8 @@ def run_playbook(payload: PlaybookRunRequest, session: Session = Depends(get_ses
             session_id=payload.session_id,
         )
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FluxError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     data = playbook_service.serialize_run(run)
@@ -59,6 +62,8 @@ def routine_check_block_sources(payload: RoutineCheckBlockRequest, session: Sess
             rule_name=payload.rule_name,
         )
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FluxError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

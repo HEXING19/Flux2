@@ -3640,6 +3640,25 @@ dialog::backdrop {
   gap: 12px;
 }
 
+.routine-block-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.routine-block-field-note {
+  color: #80a8da;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.routine-block-context-note {
+  margin: -2px 0 0;
+  color: #90a8cf;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .close-icon-btn {
   background: transparent;
   border: none;

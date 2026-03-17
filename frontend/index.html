@@ -309,7 +309,7 @@
       </div>
 
       <div class="routine-block-section">
-        <p class="routine-block-label">待下发目标IP</p>
+        <p id="routineBlockTargetLabel" class="routine-block-label">待下发目标IP</p>
         <div id="routineBlockTargetList" class="routine-block-target-list"></div>
         <p id="routineBlockSkipped" class="routine-block-skipped hidden"></p>
       </div>
@@ -337,6 +337,7 @@
       <div class="routine-block-form">
         <label>联动设备
           <select id="routineBlockDevice"></select>
+          <span class="routine-block-field-note">当前仅支持深信服 AF 设备执行网侧联动封禁。</span>
         </label>
         <label>封禁时长（小时）
           <input type="number" id="routineBlockHours" min="1" max="360" value="24" />
@@ -344,9 +345,13 @@
         <label>规则名称
           <input type="text" id="routineBlockRuleName" placeholder="可留空自动命名" />
         </label>
+        <label>封禁方向
+          <input type="text" id="routineBlockDirection" readonly />
+        </label>
         <label class="full-width">备注
           <input type="text" id="routineBlockReason" placeholder="填写处置备注，便于审计追溯" />
         </label>
+        <p id="routineBlockContextNote" class="routine-block-context-note full-width"></p>
         <p id="routineBlockHint" class="hint full-width"></p>
       </div>
 

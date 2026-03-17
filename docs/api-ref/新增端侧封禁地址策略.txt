@@ -1,0 +1,273 @@
+/api/xdr/v1/responses/blockiprule/endpoint
+新增端侧封禁地址策略
+更新时间：2025-03-10 11:58:28
+OpenAPI：
+Body 请求参数
+JSON
+最外层结构为：Object
+切换成文本视图
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+name
+[string]
+是	规则名称	主机对内网发起SQL注入攻击_10.0.1.27	收缩	
+参数限制：
+正则： "[^*<>\"'%\\[\\]+&\\\\]*" 最小长度1，最大长度512 名称可以重复
+参数示例：
+主机对内网发起SQL注入攻击_10.0.1.27
+最小长度：
+最大长度：
+最小值：
+最大值：
+reason
+[string]
+-	封禁备注	禁了	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+参数示例：
+禁了
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeType
+[string]
+是	封禁时长类型	forever	收缩	
+参数限制：
+枚举：1-forever-永久封禁，2-temporary-自定义封禁时长，当类型为temporary时，timeUnit 和 timeValue 都必须填
+数据字典：
+forever	| [string]
+|
+永久封禁
+| 默认值
+temporary	| [string]
+|
+自定义封禁时长
+参数示例：
+forever
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeValue
+[int]
+-	封禁时长，当封禁时长类型为自定义封禁时长时，该字段不能为空	10	收缩	
+参数限制：
+当timeUnit 是 d 时，最小1，最大15，当timeUnit 是h时，最小是1，最大是360，当timeUnit时m时，最小是3，最大是21600
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+timeUnit
+[string]
+-	时间单位，当封禁时长类型为自定义封禁时长时，该字段不能为空	d	收缩	
+参数限制：
+枚举值 d天，h小时，m分钟
+数据字典：
+d	| [string]
+|
+天
+| 默认值
+h	| [string]
+|
+小时
+m	| [string]
+|
+分钟
+参数示例：
+d
+最小长度：
+最大长度：
+最小值：
+最大值：
+plugIpList
+[array]
+是	封堵ip列表	["1.33.55.211","1.33.44.55"]	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+参数示例：
+["1.33.55.211","1.33.44.55"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+direction
+[string]
+是	封堵方向	SRC_IP	收缩	
+数据字典：
+SRC_IP	| [string]
+|
+源ip
+| 默认值
+DST_IP	| [string]
+|
+目的ip
+SRC_DST_IP	| [string]
+|
+其他
+参数示例：
+SRC_IP
+plugPort
+[array]
+是	封堵端口	["any"]	收缩	
+参数限制：
+限制范围：1<= port <= 65535
+数据字典：
+["any"]	| [string]
+|
+全部端口
+| 默认值
+["100"]	| [string]
+|
+端口100
+["100-10000"]	| [string]
+|
+端口范围100-10000
+参数示例：
+["any"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θdevices
+[array]
+是	设备信息列表			
+devId
+[int]
+是	设备id	123456	收缩	
+参数示例：
+123456
+最小长度：
+最大长度：
+最小值：
+最大值：
+devType
+[string]
+是	设备类型	EDR	收缩	
+参数限制：
+枚举值 [EDR,EDR LITE，SAAS EDR LITE，SAAS EDR]
+数据字典：
+EDR	| [string]
+|
+EDR
+| 默认值
+EDR LITE	| [string]
+|
+EDR LITE
+SAAS EDR LITE	| [string]
+|
+SAAS EDR LITE
+SAAS EDR	| [string]
+|
+SAAS EDR
+参数示例：
+EDR
+最小长度：
+最大长度：
+最小值：
+最大值：
+devName
+[string]
+是	设备名字	EDR_001	收缩	
+参数限制：
+正则： "^[^*<>()\"'%\\[\\]+&\\\\]*$"
+参数示例：
+EDR_001
+最小长度：
+最大长度：
+最小值：
+最大值：
+devVersion
+[string]
+-	设备版本	8.0.15	收缩	
+参数限制：
+正则： "^[^*<>()\"'%\\[\\]+&\\\\]*$"
+参数示例：
+8.0.15
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θagents
+[array]
+是	封堵终端列表			
+agentId
+[string]
+是	终端id	2483471461	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+参数示例：
+2483471461
+最小长度：
+最大长度：
+最小值：
+最大值：
+agentIp
+[string]
+-	终端IP	10.246.152.197	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+参数示例：
+10.246.152.197
+最小长度：
+最大长度：
+最小值：
+最大值：
+branchName
+[string]
+-	资产组名	管理IP范围	收缩	
+参数限制：
+正则："[^*<>\"'%\\[\\]+&\\\\]*"
+参数示例：
+管理IP范围
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是	状态码	Success	收缩	
+数据字典：
+Success	| [string]	| 默认值
+参数示例：
+Success
+message
+[string]
+是	响应消息	OK	收缩	
+数据字典：
+Ok	| [string]	| 默认值
+成功	| [string]
+参数示例：
+OK
+Θdata
+[object]
+是				
+ids
+[array]
+是	封禁规则id	["634818311968cc7c4dbc9eb5"]	收缩	
+参数限制：
+当一次输入多个封禁ip(plugIpList)时，可能返回多个id
+参数示例：
+["634818311968cc7c4dbc9eb5"]
+返回示例
+
+成功示例失败示例
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/responses/blockiprule/endpoint
+
+HTTP Status Code:200 Content-Type:text/html; charset=UTF-8 √格式整理
+Θ{
+    "code":"Success",
+    "message":"成功",
+    "data":Θ{
+        "ids":Θ[
+            "64df39ce79fbfc7a177e8338",
+            "64df39ce79fbfc7a177e8337"
+        ]
+    }
+}

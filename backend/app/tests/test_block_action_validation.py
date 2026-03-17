@@ -9,13 +9,22 @@ from app.skills.block_skills import BlockActionSkill, BlockQuerySkill
 
 
 class FakeRequester:
-    def __init__(self, *, block_items: list[dict[str, Any]] | None = None, online_devices: list[dict[str, Any]] | None = None):
+    def __init__(
+        self,
+        *,
+        block_items: list[dict[str, Any]] | None = None,
+        online_devices: list[dict[str, Any]] | None = None,
+        device_response: dict[str, Any] | None = None,
+    ):
         self.block_items = block_items or []
         self.online_devices = online_devices if online_devices is not None else []
+        self.device_response = device_response
 
     def request(self, method, path, *, json_body=None, params=None, timeout=15):
         _ = (method, json_body, params, timeout)
         if path == "/api/xdr/v1/device/blockdevice/list":
+            if self.device_response is not None:
+                return self.device_response
             return {"code": "Success", "message": "成功", "data": {"item": self.online_devices}}
         if path == "/api/xdr/v1/responses/blockiprule/list":
             return {"code": "Success", "message": "成功", "data": {"item": self.block_items}}
@@ -88,6 +97,62 @@ class BlockSkillValidationTest(unittest.TestCase):
         self.assertIn("联动设备", payloads[0]["data"]["description"])
         field_keys = {f["key"] for f in payloads[0]["data"]["fields"]}
         self.assertIn("device_id", field_keys)
+
+    def test_block_action_should_recognize_linkable_device_by_remark(self):
+        skill = BlockActionSkill(
+            FakeRequester(
+                online_devices=[
+                    {
+                        "deviceId": 9,
+                        "deviceName": "AF_009",
+                        "deviceStatus": "block success",
+                        "deviceType": "AF",
+                        "deviceVersion": "8.0",
+                        "remark": "(可联动)",
+                    }
+                ]
+            ),
+            self.ctx,
+        )
+        payloads = skill.execute(
+            "s1",
+            {
+                "block_type": "SRC_IP",
+                "views": ["111.112.113.201"],
+                "time_type": "temporary",
+                "time_value": 1,
+                "time_unit": "d",
+                "confirm": True,
+            },
+            "封禁这个IP",
+        )
+        self.assertEqual(payloads[0]["type"], "text")
+        self.assertIn("封禁执行成功", payloads[0]["data"]["text"])
+
+    def test_block_action_should_surface_device_lookup_error(self):
+        skill = BlockActionSkill(
+            FakeRequester(
+                device_response={
+                    "code": "Failed",
+                    "message": "请求失败(403): forbid。认证失败或权限不足，请重新登录并确认账号已开通该接口权限。",
+                    "data": {},
+                }
+            ),
+            self.ctx,
+        )
+        payloads = skill.execute(
+            "s1",
+            {
+                "block_type": "SRC_IP",
+                "views": ["111.112.113.201"],
+                "time_type": "temporary",
+                "time_value": 1,
+                "time_unit": "d",
+            },
+            "封禁这个IP",
+        )
+        self.assertEqual(payloads[0]["type"], "form_card")
+        self.assertIn("查询 AF 联动设备失败", payloads[0]["data"]["description"])
 
 
 if __name__ == "__main__":

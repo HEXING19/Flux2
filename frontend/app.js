@@ -8,6 +8,7 @@ const state = {
   playbookRunCache: {},
   playbookOpenTokens: {},
   routineBlockDraft: null,
+  routineBlockAutoCloseTimer: null,
   slashVisible: false,
   slashActiveIndex: 0,
   slashFiltered: [],
@@ -201,6 +202,7 @@ const el = {
   dangerText: document.getElementById('dangerText'),
   routineBlockDialog: document.getElementById('routineBlockDialog'),
   routineBlockTitle: document.getElementById('routineBlockTitle'),
+  routineBlockTargetLabel: document.getElementById('routineBlockTargetLabel'),
   routineBlockTargetList: document.getElementById('routineBlockTargetList'),
   routineBlockSkipped: document.getElementById('routineBlockSkipped'),
   routineBlockIntelBody: document.getElementById('routineBlockIntelBody'),
@@ -208,6 +210,8 @@ const el = {
   routineBlockHours: document.getElementById('routineBlockHours'),
   routineBlockReason: document.getElementById('routineBlockReason'),
   routineBlockRuleName: document.getElementById('routineBlockRuleName'),
+  routineBlockDirection: document.getElementById('routineBlockDirection'),
+  routineBlockContextNote: document.getElementById('routineBlockContextNote'),
   routineBlockHint: document.getElementById('routineBlockHint'),
   routineBlockCancel: document.getElementById('routineBlockCancel'),
   routineBlockConfirm: document.getElementById('routineBlockConfirm'),
@@ -1496,6 +1500,10 @@ async function fetchRoutineBlockPreview(ips, blockType = 'SRC_IP') {
 }
 
 function resetRoutineBlockDialog() {
+  if (state.routineBlockAutoCloseTimer) {
+    window.clearInterval(state.routineBlockAutoCloseTimer);
+    state.routineBlockAutoCloseTimer = null;
+  }
   if (el.routineBlockTargetList) el.routineBlockTargetList.innerHTML = '';
   if (el.routineBlockIntelBody) el.routineBlockIntelBody.innerHTML = '';
   if (el.routineBlockDevice) el.routineBlockDevice.innerHTML = '';
@@ -1509,11 +1517,39 @@ function resetRoutineBlockDialog() {
   }
 }
 
+function closeRoutineBlockDialog() {
+  if (state.routineBlockAutoCloseTimer) {
+    window.clearInterval(state.routineBlockAutoCloseTimer);
+    state.routineBlockAutoCloseTimer = null;
+  }
+  state.routineBlockDraft = null;
+  closeDialog(el.routineBlockDialog);
+}
+
 function setRoutineBlockHint(message, type = '') {
   if (!el.routineBlockHint) return;
   el.routineBlockHint.textContent = message || '';
   el.routineBlockHint.classList.remove('success', 'error');
   if (type) el.routineBlockHint.classList.add(type);
+}
+
+function getRoutineBlockModeMeta(blockType) {
+  if (String(blockType || '').toUpperCase() === 'DST_IP') {
+    return {
+      directionValue: '目的IP',
+      modeLabel: '目的IP封禁',
+      targetLabel: '待封锁目的IP',
+      confirmLabel: '确认并封锁目的IP',
+      contextNote: '当前模式：目的IP封禁，仅支持深信服 AF 设备联动。',
+    };
+  }
+  return {
+    directionValue: '源IP',
+    modeLabel: '源IP封禁',
+    targetLabel: '待封禁源IP',
+    confirmLabel: '确认并封禁源IP',
+    contextNote: '当前模式：源IP封禁，仅支持深信服 AF 设备联动。',
+  };
 }
 
 function removeRoutineBlockIp(ip) {
@@ -1523,6 +1559,7 @@ function removeRoutineBlockIp(ip) {
 }
 
 function createRoutineTargetChip(ip) {
+  const isLocked = !!state.routineBlockDraft?.successState;
   const chip = document.createElement('div');
   chip.className = 'routine-block-target-chip';
   const text = document.createElement('span');
@@ -1534,9 +1571,11 @@ function createRoutineTargetChip(ip) {
   removeBtn.type = 'button';
   removeBtn.className = 'routine-block-remove-btn';
   removeBtn.textContent = '移除';
+  removeBtn.disabled = isLocked;
   removeBtn.onclick = (event) => {
     event.preventDefault();
     event.stopPropagation();
+    if (isLocked) return;
     removeRoutineBlockIp(ip);
   };
   chip.appendChild(removeBtn);
@@ -1547,8 +1586,19 @@ function renderRoutineBlockDialogContent() {
   const draft = state.routineBlockDraft;
   if (!draft) return;
   const selectedIps = draft.selectedIps || [];
+  const modeMeta = draft.modeMeta || getRoutineBlockModeMeta(draft.blockType);
+  const successState = draft.successState || null;
   if (el.routineBlockTitle) {
     el.routineBlockTitle.textContent = `${draft.actionTitle || '一键处置'}（${selectedIps.length}个目标）`;
+  }
+  if (el.routineBlockTargetLabel) el.routineBlockTargetLabel.textContent = modeMeta.targetLabel;
+  if (el.routineBlockDirection) el.routineBlockDirection.value = modeMeta.directionValue || '-';
+  if (el.routineBlockContextNote) el.routineBlockContextNote.textContent = modeMeta.contextNote;
+  if (el.routineBlockConfirm) {
+    el.routineBlockConfirm.textContent = successState ? '封禁已完成' : modeMeta.confirmLabel;
+  }
+  if (el.routineBlockCancel) {
+    el.routineBlockCancel.textContent = successState ? '立即关闭' : '取消';
   }
   if (el.routineBlockTargetList) {
     el.routineBlockTargetList.innerHTML = '';
@@ -1578,7 +1628,9 @@ function renderRoutineBlockDialogContent() {
       `;
       const removeBtn = tr.querySelector('.routine-table-remove-btn');
       if (removeBtn) {
+        removeBtn.disabled = !!successState;
         removeBtn.onclick = () => {
+          if (successState) return;
           removeRoutineBlockIp(ip);
         };
       }
@@ -1592,15 +1644,26 @@ function renderRoutineBlockDialogContent() {
   }
 
   const hasOnlineDevice = Array.isArray(draft.deviceOptions) && draft.deviceOptions.length > 0;
+  const deviceMessage = String(draft.deviceMessage || '').trim();
+  if (el.routineBlockDevice) el.routineBlockDevice.disabled = !!successState;
+  if (el.routineBlockHours) el.routineBlockHours.disabled = !!successState;
+  if (el.routineBlockRuleName) el.routineBlockRuleName.disabled = !!successState;
+  if (el.routineBlockDirection) el.routineBlockDirection.disabled = true;
+  if (el.routineBlockReason) el.routineBlockReason.disabled = !!successState;
   if (el.routineBlockConfirm) {
-    el.routineBlockConfirm.disabled = !hasOnlineDevice || !selectedIps.length;
+    el.routineBlockConfirm.disabled = !!successState || !hasOnlineDevice || !selectedIps.length;
+  }
+  if (successState) {
+    const countdown = Math.max(0, Number(successState.countdown) || 0);
+    setRoutineBlockHint(`${successState.message || '封禁执行成功。'} ${countdown}秒后自动关闭弹窗，你也可以手动关闭。`, 'success');
+    return;
   }
   if (!selectedIps.length) {
     setRoutineBlockHint('请至少保留一个目标IP后再下发。', 'error');
   } else if (!hasOnlineDevice) {
-    setRoutineBlockHint('当前没有在线AF联动设备，暂无法直接下发。', 'error');
+    setRoutineBlockHint(deviceMessage || '当前没有可联动 AF 设备，暂无法直接下发。', 'error');
   } else {
-    setRoutineBlockHint('请核对威胁情报、设备与封禁时长后下发。', '');
+    setRoutineBlockHint(deviceMessage || '已找到可联动 AF 设备，请核对威胁情报、设备与封禁时长后下发。', '');
   }
 }
 
@@ -1637,15 +1700,24 @@ async function openRoutineBlockDialog(config) {
       intelRowsByIp[ip] = row;
     });
     const devices = preview?.device_options || [];
+    const deviceStatus = String(preview?.device_status || '').trim();
+    const deviceMessage = String(preview?.device_message || '').trim();
+    const defaultDeviceId = String(preview?.default_device_id || (devices[0]?.device_id || '')).trim();
+    const resolvedBlockType = preview.block_type || config.blockType || 'SRC_IP';
+    const modeMeta = getRoutineBlockModeMeta(resolvedBlockType);
 
     state.routineBlockDraft = {
       actionTitle: config.actionTitle || '一键处置',
       resultTitle: config.resultTitle || '网侧封禁结果',
-      blockType: preview.block_type || config.blockType || 'SRC_IP',
+      blockType: resolvedBlockType,
+      modeMeta,
       allIps: [...targets],
       selectedIps: [...targets],
       skippedIps: preview.skipped_ips || [],
       deviceOptions: devices,
+      deviceStatus,
+      deviceMessage,
+      defaultDeviceId,
       intelRowsByIp,
     };
 
@@ -1663,10 +1735,15 @@ async function openRoutineBlockDialog(config) {
         option.textContent = `${item.device_name} (${item.device_id})`;
         el.routineBlockDevice.appendChild(option);
       });
+      if (defaultDeviceId) {
+        el.routineBlockDevice.value = defaultDeviceId;
+      }
       if (!devices.length) {
         const option = document.createElement('option');
         option.value = '';
-        option.textContent = '暂无在线AF设备';
+        option.textContent = deviceStatus === 'query_error'
+          ? 'AF设备查询失败'
+          : '暂无可联动AF设备';
         el.routineBlockDevice.appendChild(option);
       }
     }
@@ -1709,7 +1786,6 @@ async function submitRoutineBlockDialog() {
       deviceId,
       ruleName,
     });
-    closeDialog(el.routineBlockDialog);
     setHint(el.playbookHint, data.message || '封禁执行成功。', 'success');
     const resultCard = cardTemplate(state.routineBlockDraft.resultTitle || '网侧封禁结果');
     const selectedText = selectedIps.length ? `\n\n已下发目标IP：${selectedIps.join('、')}` : '';
@@ -1718,14 +1794,33 @@ async function submitRoutineBlockDialog() {
       : '';
     resultCard.appendChild(createMarkdownBlock(`${data.message || '已完成下发。'}${selectedText}${filteredText}`));
     appendPlaybookWorkspaceCard(resultCard);
-    state.routineBlockDraft = null;
+    state.routineBlockDraft.successState = {
+      message: data.message || '封禁执行成功。',
+      countdown: 3,
+    };
+    renderRoutineBlockDialogContent();
+    state.routineBlockAutoCloseTimer = window.setInterval(() => {
+      if (!state.routineBlockDraft?.successState) {
+        if (state.routineBlockAutoCloseTimer) {
+          window.clearInterval(state.routineBlockAutoCloseTimer);
+          state.routineBlockAutoCloseTimer = null;
+        }
+        return;
+      }
+      state.routineBlockDraft.successState.countdown -= 1;
+      if (state.routineBlockDraft.successState.countdown <= 0) {
+        closeRoutineBlockDialog();
+        return;
+      }
+      renderRoutineBlockDialogContent();
+    }, 1000);
   } catch (err) {
     setRoutineBlockHint(err.message || '下发失败，请检查参数。', 'error');
   } finally {
     if (el.routineBlockConfirm && state.routineBlockDraft) {
       const hasOnlineDevice = Array.isArray(state.routineBlockDraft.deviceOptions) && state.routineBlockDraft.deviceOptions.length > 0;
       const selectedIpsNow = state.routineBlockDraft.selectedIps || [];
-      el.routineBlockConfirm.disabled = !hasOnlineDevice || !selectedIpsNow.length;
+      el.routineBlockConfirm.disabled = !!state.routineBlockDraft.successState || !hasOnlineDevice || !selectedIpsNow.length;
     }
   }
 }
@@ -4406,11 +4501,10 @@ el.logoutBtn.onclick = async () => {
     state.activePlaybookRunId = null;
     state.playbookRunCache = {};
     state.playbookOpenTokens = {};
-    state.routineBlockDraft = null;
+    closeRoutineBlockDialog();
     el.chatStream.innerHTML = '';
     if (el.playbookCards) el.playbookCards.innerHTML = '';
     if (el.playbookHint) setHint(el.playbookHint, '');
-    closeDialog(el.routineBlockDialog);
     clearPlaybookWorkspace();
     setHint(el.loginResult, result.message || '已退出到登录页。', 'success');
     setAuthState(false);
@@ -4447,8 +4541,7 @@ if (el.closePlaybookWorkspaceBtn) {
 
 if (el.routineBlockCancel) {
   el.routineBlockCancel.onclick = () => {
-    state.routineBlockDraft = null;
-    closeDialog(el.routineBlockDialog);
+    closeRoutineBlockDialog();
   };
 }
 
@@ -4471,8 +4564,7 @@ if (el.routineBlockDialog) {
     const isOutside =
       event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
     if (isOutside) {
-      state.routineBlockDraft = null;
-      closeDialog(el.routineBlockDialog);
+      closeRoutineBlockDialog();
     }
   });
 }

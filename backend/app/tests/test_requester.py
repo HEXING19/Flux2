@@ -4,6 +4,7 @@ import unittest
 from typing import Any
 
 from app.core.requester import APIRequester
+from app.core.signature import Signature
 
 
 class FakeResponse:
@@ -33,6 +34,34 @@ class FakeSession:
 
 
 class RequesterTest(unittest.TestCase):
+    def test_signature_payload_transform_should_support_chinese_payload(self):
+        signature = Signature(ak="demo-ak", sk="demo-sk")
+        payload = '{"reason":"由安全早报一键处置触发","devices":[{"devName":"物联网安全网关"}]}'
+
+        hashed = signature._payload_transform(payload)
+
+        self.assertIsInstance(hashed, str)
+        self.assertEqual(len(hashed), 64)
+
+    def test_post_json_should_escape_non_ascii_for_signed_requests(self):
+        requester = APIRequester(
+            base_url="https://example.local",
+            auth_code=None,
+            access_key="demo-ak",
+            secret_key="demo-sk",
+            verify_ssl=False,
+        )
+        fake_session = FakeSession([FakeResponse(200, {"code": "Success", "data": {}})])
+        requester.session = fake_session
+
+        result = requester.request("POST", "/api/xdr/v1/responses/blockiprule/network", json_body={"reason": "物联网安全网关"})
+
+        self.assertEqual(result.get("code"), "Success")
+        self.assertEqual(len(fake_session.prepared_requests), 1)
+        body = fake_session.prepared_requests[0].body.decode("utf-8") if isinstance(fake_session.prepared_requests[0].body, bytes) else fake_session.prepared_requests[0].body
+        self.assertIn("\\u7269\\u8054\\u7f51\\u5b89\\u5168\\u7f51\\u5173", body)
+        self.assertNotIn("物联网安全网关", body)
+
     def test_get_request_should_not_send_empty_json_body(self):
         requester = APIRequester(
             base_url="https://example.local",
@@ -67,7 +96,5 @@ class RequesterTest(unittest.TestCase):
         self.assertIn("认证失败或权限不足", result.get("message", ""))
         self.assertIn("request_id=", result.get("message", ""))
 
-
 if __name__ == "__main__":
     unittest.main()
-

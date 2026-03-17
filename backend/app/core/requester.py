@@ -51,7 +51,10 @@ class APIRequester:
             try:
                 req_kwargs: dict[str, Any] = {"headers": dict(sign_headers), "params": params}
                 if json_body is not None:
-                    req_kwargs["data"] = json.dumps(json_body, ensure_ascii=False)
+                    # Some XDR high-privilege APIs reject raw UTF-8 JSON under auth-code
+                    # signing, but accept the same payload when non-ASCII characters are
+                    # escaped as \uXXXX sequences.
+                    req_kwargs["data"] = json.dumps(json_body, ensure_ascii=True)
                 elif method_upper in {"POST", "PUT", "PATCH"}:
                     req_kwargs["data"] = "{}"
 
@@ -85,7 +88,6 @@ class APIRequester:
 
                     if response.status_code in {401, 403}:
                         message = f"{message}。认证失败或权限不足，请重新登录并确认账号已开通该接口权限。"
-
                     return {
                         "code": "Failed",
                         "message": f"请求失败({response.status_code}): {message} (request_id={request_id})",

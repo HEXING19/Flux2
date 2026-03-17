@@ -4,7 +4,6 @@ import binascii
 import hashlib
 import hmac
 import json
-import struct
 import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -45,7 +44,7 @@ class Signature:
         if req.data:
             payload = req.data if isinstance(req.data, str) else req.data.decode("utf-8")
         elif req.json:
-            payload = json.dumps(req.json, ensure_ascii=False)
+            payload = json.dumps(req.json, ensure_ascii=True)
 
         host = self._get_host(req.url)
         req.headers, sign_date = self._header_check(req.headers, host)
@@ -164,11 +163,9 @@ class Signature:
         if not payload:
             return self._sha256_hex_upper(b"")
         payload_bytes = payload.encode("utf-8")
-        byte_values = [struct.unpack("b", bytes([byte]))[0] for byte in payload_bytes]
-        byte_values.sort()
-        normalized = bytearray()
-        for byte in byte_values:
-            normalized.append(byte)
+        # Keep bytes unsigned (0-255). Signed-byte normalization breaks on UTF-8
+        # payloads containing Chinese characters and raises "byte must be in range(0, 256)".
+        normalized = bytearray(sorted(payload_bytes))
         normalized = self._remove_spaces(normalized)
         return self._sha256_hex_upper(bytes(normalized))
 
