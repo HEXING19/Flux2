@@ -19,6 +19,26 @@ class EntityQueryInput(BaseModel):
     incident_uuids: list[str] | None = None
 
 
+def _remember_entity_ips(context_manager, session_id: str, ips: list[str]) -> None:
+    cleaned = [str(ip).strip() for ip in ips if str(ip).strip()]
+    if not cleaned:
+        return
+    existing = context_manager.get_param(session_id, "last_entity_ips")
+    merged: list[str] = []
+    if isinstance(existing, list):
+        merged.extend(str(ip).strip() for ip in existing if str(ip).strip())
+    for ip in cleaned:
+        if ip not in merged:
+            merged.append(ip)
+    context_manager.update_params(
+        session_id,
+        {
+            "last_entity_ip": cleaned[0],
+            "last_entity_ips": merged[-20:],
+        },
+    )
+
+
 class EntityQuerySkill(BaseSkill):
     name = "EntityQuerySkill"
     __init_schema__ = EntityQueryInput
@@ -99,7 +119,7 @@ class EntityQuerySkill(BaseSkill):
                 if inherited_ips:
                     dedup = list(dict.fromkeys(inherited_ips))
                     prepared["ips"] = dedup
-                    self.context_manager.update_params(session_id, {"last_entity_ip": dedup[0]})
+                    _remember_entity_ips(self.context_manager, session_id, dedup)
                 elif api_errors:
                     return [text_payload("事件外网实体查询失败：" + "；".join(api_errors[:3]), title="实体情报结果")]
                 else:
@@ -117,6 +137,7 @@ class EntityQuerySkill(BaseSkill):
                 question="请提供要查询的IP实体，或指定事件序号/事件ID（如“查看序号1外网实体”或“查看事件ID为incident-xxx的外网实体”）。",
             )
 
+        _remember_entity_ips(self.context_manager, session_id, list(model.ips))
         rows = [self._query_threatbook(ip) for ip in model.ips]
         summary = "已完成实体情报查询。" if resolve_threatbook_api_key() else "未检测到微步Key，已返回本地评估结果。"
         return [

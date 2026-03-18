@@ -4244,11 +4244,7 @@ async function readSSEStream(response) {
         }
         if (batchPayloads.length > 1) {
           const primaryTitle = batchPayloads[0]?.data?.title || '任务执行结果';
-          renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads, {
-            downloadable: true,
-            downloadLabel: '下载任务内容（HTML）',
-            filenamePrefix: 'chat-task-report',
-          });
+          renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads);
         } else if (batchPayloads.length === 1) {
           renderPayload(batchPayloads[0]);
         }
@@ -4290,11 +4286,7 @@ async function readSSEStream(response) {
   }
   if (batchPayloads.length > 1) {
     const primaryTitle = batchPayloads[0]?.data?.title || '任务执行结果';
-    renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads, {
-      downloadable: true,
-      downloadLabel: '下载任务内容（HTML）',
-      filenamePrefix: 'chat-task-report',
-    });
+    renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads);
   } else if (batchPayloads.length === 1) {
     renderPayload(batchPayloads[0]);
   }

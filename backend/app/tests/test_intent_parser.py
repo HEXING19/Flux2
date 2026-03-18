@@ -22,7 +22,11 @@ class IntentParserTest(unittest.TestCase):
         self.assertEqual(parsed.intent, "block_action")
         self.assertEqual(parsed.params.get("time_type"), "temporary")
 
+    def test_explicit_block_action_should_extract_ip_without_spaces(self):
+        parsed = self.parser.parse("帮我封禁124.34.53.234这个IP地址")
+        self.assertEqual(parsed.intent, "block_action")
+        self.assertEqual(parsed.params.get("views"), ["124.34.53.234"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

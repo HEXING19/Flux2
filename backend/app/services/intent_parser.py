@@ -36,6 +36,9 @@ BLOCK_TYPE_MAP = {
     "dns": "DNS",
 }
 
+IPV4_PATTERN = r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"
+DOMAIN_PATTERN = r"(?<![a-zA-Z0-9-])(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?![a-zA-Z0-9-])"
+
 
 @dataclass
 class ParsedIntent:
@@ -153,10 +156,10 @@ class IntentParser:
         return False
 
     def _extract_ip_or_domain(self, text: str) -> str | None:
-        ip_match = re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
+        ip_match = re.search(IPV4_PATTERN, text)
         if ip_match:
             return ip_match.group(0)
-        domain_match = re.search(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b", text)
+        domain_match = re.search(DOMAIN_PATTERN, text)
         if domain_match:
             return domain_match.group(0)
         return None
@@ -180,8 +183,8 @@ class IntentParser:
                 params["block_type"] = mapped
                 break
 
-        ip_list = re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
-        domain_list = re.findall(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b", text)
+        ip_list = re.findall(IPV4_PATTERN, text)
+        domain_list = re.findall(DOMAIN_PATTERN, text)
         views = ip_list or domain_list
         if views:
             params["views"] = views
@@ -203,7 +206,7 @@ class IntentParser:
         return params
 
     def _parse_entity_query(self, text: str) -> dict[str, Any]:
-        ip_list = re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
+        ip_list = re.findall(IPV4_PATTERN, text)
         params: dict[str, Any] = {"ref_text": text}
         if ip_list:
             params["ips"] = ip_list

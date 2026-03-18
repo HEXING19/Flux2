@@ -80,6 +80,31 @@ class BlockSkillValidationTest(unittest.TestCase):
         self.assertEqual(payloads[0]["type"], "text")
         self.assertIn("111.112.113.201", payloads[0]["data"]["text"])
 
+    def test_block_query_table_should_show_ip_from_block_ip_rule_view(self):
+        query_skill = BlockQuerySkill(
+            FakeRequester(
+                block_items=[
+                    {
+                        "id": "rule-001",
+                        "name": "新增IP封锁_1773786034",
+                        "status": "unblocked",
+                        "reason": "智能对抗",
+                        "updateTime": 1710249600,
+                        "blockIpRule": {
+                            "type": "SRC_IP",
+                            "mode": "in",
+                            "view": ["49.210.199.214"],
+                        },
+                    }
+                ],
+                online_devices=self.online_devices,
+            ),
+            self.ctx,
+        )
+        payloads = query_skill.execute("s1", {"keyword": "49.210.199.214"}, "查看这个IP地址是不是已经被封禁")
+        self.assertEqual(payloads[1]["type"], "table")
+        self.assertEqual(payloads[1]["data"]["rows"][0]["view"], "49.210.199.214")
+
     def test_block_action_form_should_include_device_field_when_no_online_device(self):
         skill = BlockActionSkill(FakeRequester(online_devices=[]), self.ctx)
         payloads = skill.execute(
@@ -153,6 +178,21 @@ class BlockSkillValidationTest(unittest.TestCase):
         )
         self.assertEqual(payloads[0]["type"], "form_card")
         self.assertIn("查询 AF 联动设备失败", payloads[0]["data"]["description"])
+
+    def test_block_action_should_prefer_explicit_ip_over_inherited_context(self):
+        skill = BlockActionSkill(FakeRequester(online_devices=self.online_devices), self.ctx)
+        self.ctx.update_params("s1", {"last_block_target": "49.210.199.214", "last_entity_ip": "49.210.199.214"})
+        payloads = skill.execute(
+            "s1",
+            {
+                "block_type": "SRC_IP",
+                "views": ["124.34.53.234"],
+            },
+            "帮我封禁124.34.53.234这个IP地址",
+        )
+        self.assertEqual(payloads[0]["type"], "form_card")
+        view_field = next(f for f in payloads[0]["data"]["fields"] if f["key"] == "views")
+        self.assertEqual(view_field["value"], "124.34.53.234")
 
 
 if __name__ == "__main__":

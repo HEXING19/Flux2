@@ -33,6 +33,31 @@ def _format_ts(timestamp: Any) -> str:
         return "-"
 
 
+def _format_block_views(item: dict[str, Any]) -> str:
+    block_rule = item.get("blockIpRule") if isinstance(item.get("blockIpRule"), dict) else {}
+    raw_views = (
+        block_rule.get("view")
+        or item.get("view")
+        or item.get("target")
+        or item.get("views")
+    )
+    if isinstance(raw_views, list):
+        values = [str(v).strip() for v in raw_views if str(v).strip()]
+        return "、".join(values) if values else "-"
+    if raw_views not in (None, ""):
+        return str(raw_views).strip() or "-"
+    return "-"
+
+
+def _dedup_text(values: list[Any]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
 class BlockQueryInput(BaseModel):
     page: int = 1
     page_size: int = Field(default=10)
@@ -81,6 +106,80 @@ class BlockQuerySkill(BaseSkill):
     name = "BlockQuerySkill"
     __init_schema__ = BlockQueryInput
 
+    @staticmethod
+    def _is_multi_ip_followup(user_text: str) -> bool:
+        text = str(user_text or "").strip()
+        if not text:
+            return False
+        phrases = [
+            "以上所有IP",
+            "以上所有ip",
+            "所有IP",
+            "所有ip",
+            "这些IP",
+            "这些ip",
+            "上面的IP",
+            "上面的ip",
+            "上述IP",
+            "上述ip",
+        ]
+        return any(token in text for token in phrases)
+
+    def _build_query_payload(self, model: BlockQueryInput, keyword: str | None = None) -> dict[str, Any]:
+        payload = {
+            "page": model.page,
+            "pageSize": model.page_size,
+            "status": model.status or [],
+            "startTimestamp": model.startTimestamp,
+            "endTimestamp": model.endTimestamp,
+        }
+        if keyword:
+            payload["searchInfos"] = [{"fieldName": "view", "fieldValue": keyword}]
+        return payload
+
+    def _request_rules(self, model: BlockQueryInput, keyword: str | None = None) -> tuple[list[dict[str, Any]], str | None]:
+        payload = self._build_query_payload(model, keyword)
+        response = self.requester.request("POST", "/api/xdr/v1/responses/blockiprule/list", json_body=payload)
+        if response.get("code") != "Success":
+            return [], response.get("message", "未知错误")
+        items = response.get("data", {}).get("item", [])
+        return items, None
+
+    @staticmethod
+    def _build_rule_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        rows = []
+        for idx, item in enumerate(items, start=1):
+            rows.append(
+                {
+                    "index": idx,
+                    "id": _pick(item, "id", "ruleId", "taskId"),
+                    "name": _pick(item, "name", "ruleName", default="-"),
+                    "status": _pick(item, "status", "dealStatus", default="-"),
+                    "view": _format_block_views(item),
+                    "reason": _pick(item, "reason", "remark", default="-"),
+                    "updateTime": _format_ts(_pick(item, "updateTime", "createTime", default=0)),
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _append_unmatched_target_rows(rows: list[dict[str, Any]], targets: list[str]) -> list[dict[str, Any]]:
+        next_index = len(rows) + 1
+        for target in targets:
+            rows.append(
+                {
+                    "index": next_index,
+                    "id": "-",
+                    "name": "-",
+                    "status": "未封禁",
+                    "view": target,
+                    "reason": "未查询到封禁策略",
+                    "updateTime": "-",
+                }
+            )
+            next_index += 1
+        return rows
+
     def _build_quick_block_form(self, session_id: str, keyword: str) -> list[dict[str, Any]]:
         action_skill = BlockActionSkill(self.requester, self.context_manager)
         device_lookup = action_skill._lookup_linkable_devices()
@@ -103,65 +202,76 @@ class BlockQuerySkill(BaseSkill):
 
     def execute(self, session_id: str, params: dict[str, Any], user_text: str) -> list[dict[str, Any]]:
         prepared = dict(params)
+        multi_targets: list[str] = []
         if not prepared.get("keyword"):
+            recent_targets = self.context_manager.get_param(session_id, "last_entity_ips")
+            if self._is_multi_ip_followup(user_text) and isinstance(recent_targets, list):
+                multi_targets = _dedup_text(recent_targets)
             inherited_target = (
                 self.context_manager.get_param(session_id, "last_block_target")
                 or self.context_manager.get_param(session_id, "last_entity_ip")
                 or self.context_manager.get_param(session_id, "keyword")
             )
-            if inherited_target and any(k in user_text for k in ["这个IP", "该IP", "这个地址", "它", "是否", "是不是", "有没有"]):
+            if not multi_targets and inherited_target and any(k in user_text for k in ["这个IP", "该IP", "这个地址", "它", "是否", "是不是", "有没有"]):
                 prepared["keyword"] = str(inherited_target)
 
         model = self.validate_and_prepare(session_id, prepared)
-        if model.keyword:
+        if multi_targets:
+            self.context_manager.update_params(session_id, {"last_block_target": multi_targets[-1]})
+        elif model.keyword:
             self.context_manager.update_params(session_id, {"last_block_target": model.keyword})
-        payload = {
-            "page": model.page,
-            "pageSize": model.page_size,
-            "status": model.status or [],
-            "startTimestamp": model.startTimestamp,
-            "endTimestamp": model.endTimestamp,
-        }
-        if model.keyword:
-            payload["searchInfos"] = [{"fieldName": "view", "fieldValue": model.keyword}]
 
-        response = self.requester.request("POST", "/api/xdr/v1/responses/blockiprule/list", json_body=payload)
-        if response.get("code") != "Success":
-            return [text_payload(f"封禁策略查询失败: {response.get('message', '未知错误')}", title="封禁策略查询")]
-        items = response.get("data", {}).get("item", [])
+        if multi_targets:
+            items: list[dict[str, Any]] = []
+            seen_rule_ids: set[str] = set()
+            unmatched_targets: list[str] = []
+            for target in multi_targets:
+                target_items, error = self._request_rules(model, target)
+                if error:
+                    return [text_payload(f"封禁策略查询失败: {error}", title="封禁策略查询")]
+                if not target_items:
+                    unmatched_targets.append(target)
+                    continue
+                for item in target_items:
+                    rule_id = str(_pick(item, "id", "ruleId", "taskId", default="")).strip()
+                    dedup_key = rule_id or f"{target}:{_format_block_views(item)}:{_pick(item, 'name', 'ruleName', default='-')}:{_pick(item, 'status', 'dealStatus', default='-')}"
+                    if dedup_key in seen_rule_ids:
+                        continue
+                    seen_rule_ids.add(dedup_key)
+                    items.append(item)
+        else:
+            items, error = self._request_rules(model, model.keyword)
+            if error:
+                return [text_payload(f"封禁策略查询失败: {error}", title="封禁策略查询")]
 
         rule_ids = [_pick(item, "id", "ruleId", "taskId") for item in items]
         rule_ids = [rule_id for rule_id in rule_ids if rule_id]
         self.context_manager.store_index_mapping(session_id, "block_rules", rule_ids)
 
-        rows = []
-        for idx, item in enumerate(items, start=1):
-            rows.append(
-                {
-                    "index": idx,
-                    "id": _pick(item, "id", "ruleId", "taskId"),
-                    "name": _pick(item, "name", "ruleName", default="-"),
-                    "status": _pick(item, "status", "dealStatus", default="-"),
-                    "view": _pick(item, "view", "target", default="-"),
-                    "reason": _pick(item, "reason", "remark", default="-"),
-                    "updateTime": _format_ts(_pick(item, "updateTime", "createTime", default=0)),
-                }
-            )
+        rows = self._build_rule_rows(items)
+        if multi_targets and unmatched_targets:
+            rows = self._append_unmatched_target_rows(rows, unmatched_targets)
 
         if not rows:
-            target = model.keyword or "目标对象"
+            target = "、".join(multi_targets) if multi_targets else (model.keyword or "目标对象")
             payloads = [
                 text_payload(f"未查询到 {target} 的封禁策略，当前可视为未封禁。", title="封禁策略查询"),
             ]
-            if model.keyword:
+            if model.keyword and not multi_targets:
                 try:
                     payloads.extend(self._build_quick_block_form(session_id, model.keyword))
                 except Exception:
                     payloads.append(text_payload(f"如需立即封禁，可直接发送：封禁 {model.keyword} 24小时。"))
             return payloads
 
+        summary_text = (
+            f"已查询 {len(multi_targets)} 个IP，共命中 {len(items)} 条封禁策略"
+            + (f"，其中 {len(unmatched_targets)} 个IP未命中策略。" if unmatched_targets else "。")
+            if multi_targets
+            else f"已查询 {len(rows)} 条封禁策略并建立序号映射。"
+        )
         return [
-            text_payload(f"已查询 {len(rows)} 条封禁策略并建立序号映射。", title="封禁策略查询"),
+            text_payload(summary_text, title="封禁策略查询"),
             table_payload(
                 title="封禁地址策略",
                 columns=[
