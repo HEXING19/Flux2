@@ -14,6 +14,7 @@ from app.llm.router import LLMRouter
 from app.models.db_models import AuditAction, PlaybookRun, XDRCredential
 from app.pipeline.service import IntentPipeline
 from app.skills.registry import SkillRegistry
+from app.services.config_service import ConfigService
 
 from .intent_parser import IntentParser
 
@@ -167,6 +168,8 @@ class ChatService:
             )
             return payloads
         except MissingParameterException as exc:
+            if exc.payloads:
+                return exc.payloads
             return [text_payload(exc.question)]
         except ConfirmationRequiredException as exc:
             token = f"pending-{session_id}-{exc.skill_name}"
@@ -214,7 +217,21 @@ class ChatService:
 
     def _handle_single(self, session_id: str, message: str, active_playbook_run_id: Optional[int] = None) -> list[dict[str, Any]]:
         self._bind_active_playbook_context(session_id, active_playbook_run_id)
-        parsed = self.intent_parser.parse(message)
+        semantic_rules = []
+        for row in ConfigService(self.session).list_semantic_rules(enabled_only=True):
+            payload = ConfigService.decode_semantic_rule_payload(row)
+            semantic_rules.append(
+                {
+                    "domain": row.domain,
+                    "slot_name": row.slot_name,
+                    "phrase": row.phrase,
+                    "match_mode": row.match_mode,
+                    "action_type": payload.get("action_type") or "append",
+                    "rule_value": payload.get("rule_value"),
+                    "priority": row.priority,
+                }
+            )
+        parsed = self.intent_parser.parse(message, semantic_rules=semantic_rules)
         parsed.params = self._inject_playbook_params_if_needed(session_id, parsed.intent, parsed.params, message)
 
         if parsed.intent == "confirm_pending":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import ipaddress
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -58,13 +59,11 @@ class BaseSkill(ABC):
         Global Safety Gate (安全防卫门)
         在 IR (Schema) 校验通过后、执行实际操作前拦截高危指令。可被子类继承以实现特定业务的安全红线。
         """
-        import ipaddress
         from sqlmodel import select
         from app.core.db import session_scope
         from app.models.db_models import SafetyGateRule
 
-        # 知名公共 DNS 或基础服务 IP
-        well_known_ips = {
+        protected_ips = {
             "8.8.8.8", "8.8.4.4",      # Google DNS
             "1.1.1.1", "1.0.0.1",      # Cloudflare DNS
             "114.114.114.114",         # 114 DNS
@@ -73,52 +72,139 @@ class BaseSkill(ABC):
             "127.0.0.1", "0.0.0.0"     # Loopback/Unspecified
         }
 
-        # 知名公共基础域名
-        well_known_domains = {
+        protected_domains = {
             "localhost", "github.com", "google.com", "baidu.com", "qq.com"
         }
 
-        # 保留的内网或高危网段
-        reserved_networks = [
+        protected_networks = [
             ipaddress.ip_network("10.0.0.0/8"),
             ipaddress.ip_network("172.16.0.0/12"),
             ipaddress.ip_network("192.168.0.0/16"),
             ipaddress.ip_network("127.0.0.0/8"),
         ]
 
-        # 动态加载用户自定义前端拦截名单
-        custom_targets = set()
+        custom_ips: set[str] = set()
+        custom_domains: set[str] = set()
         try:
             with session_scope() as session:
                 custom_rules = session.exec(select(SafetyGateRule)).all()
                 for rule in custom_rules:
-                    custom_targets.add(rule.target.strip().lower())
+                    target = str(rule.target or "").strip().lower()
+                    rule_type = str(rule.rule_type or "").strip().lower()
+                    if not target:
+                        continue
+                    if rule_type == "cidr":
+                        try:
+                            net = ipaddress.ip_network(target, strict=False)
+                        except ValueError:
+                            continue
+                        if isinstance(net, ipaddress.IPv4Network):
+                            protected_networks.append(net)
+                        continue
+                    if rule_type == "domain":
+                        custom_domains.add(target)
+                        continue
+                    custom_ips.add(target)
         except Exception:
             # In early init or isolated unit tests the table may not exist yet.
-            custom_targets = set()
+            custom_ips = set()
+            custom_domains = set()
 
         def _is_dangerous(val: str) -> bool:
-            val = val.strip().lower()
-            if val in well_known_ips or val in well_known_domains or val in custom_targets:
+            normalized = val.strip().lower()
+            if normalized in protected_ips or normalized in protected_domains or normalized in custom_ips or normalized in custom_domains:
                 return True
             try:
-                ip_obj = ipaddress.ip_address(val)
-                for net in reserved_networks:
+                ip_obj = ipaddress.ip_address(normalized)
+                for net in protected_networks:
                     if ip_obj in net:
                         return True
             except ValueError:
-                pass  # Not an IP address, ignore CIDR check
+                pass
             return False
 
         dump = model.model_dump()
-        for key, value in dump.items():
+        self.ensure_safe_gate_targets(dump, checker=_is_dangerous)
+
+    def ensure_safe_gate_targets(
+        self,
+        payload: dict[str, Any],
+        *,
+        checker: Any | None = None,
+    ) -> None:
+        if checker is None:
+            checker = self._build_safety_target_checker()
+
+        for value in payload.values():
             if isinstance(value, str):
-                if _is_dangerous(value):
+                if checker(value):
                     raise ValidationGuardException(f"Safety Gate 拦截: 禁止对系统保留/高危/自定义白名单目标 ({value}) 执行该操作。")
             elif isinstance(value, list):
                 for item in value:
-                    if isinstance(item, str) and _is_dangerous(item):
+                    if isinstance(item, str) and checker(item):
                         raise ValidationGuardException(f"Safety Gate 拦截: 禁止对系统保留/高危/自定义白名单目标 ({item}) 执行该操作。")
+
+    def _build_safety_target_checker(self):
+        import ipaddress
+        from sqlmodel import select
+        from app.core.db import session_scope
+        from app.models.db_models import SafetyGateRule
+
+        protected_ips = {
+            "8.8.8.8", "8.8.4.4",
+            "1.1.1.1", "1.0.0.1",
+            "114.114.114.114",
+            "223.5.5.5", "223.6.6.6",
+            "119.29.29.29",
+            "127.0.0.1", "0.0.0.0",
+        }
+        protected_domains = {"localhost", "github.com", "google.com", "baidu.com", "qq.com"}
+        protected_networks = [
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+            ipaddress.ip_network("127.0.0.0/8"),
+        ]
+        custom_ips: set[str] = set()
+        custom_domains: set[str] = set()
+        try:
+            with session_scope() as session:
+                custom_rules = session.exec(select(SafetyGateRule)).all()
+                for rule in custom_rules:
+                    target = str(rule.target or "").strip().lower()
+                    rule_type = str(rule.rule_type or "").strip().lower()
+                    if not target:
+                        continue
+                    if rule_type == "cidr":
+                        try:
+                            net = ipaddress.ip_network(target, strict=False)
+                        except ValueError:
+                            continue
+                        if isinstance(net, ipaddress.IPv4Network):
+                            protected_networks.append(net)
+                        continue
+                    if rule_type == "domain":
+                        custom_domains.add(target)
+                        continue
+                    custom_ips.add(target)
+        except Exception:
+            custom_ips = set()
+            custom_domains = set()
+
+        def _is_dangerous(val: str) -> bool:
+            normalized = val.strip().lower()
+            if normalized in protected_ips or normalized in protected_domains or normalized in custom_ips or normalized in custom_domains:
+                return True
+            try:
+                ip_obj = ipaddress.ip_address(normalized)
+                for net in protected_networks:
+                    if ip_obj in net:
+                        return True
+            except ValueError:
+                pass
+            return False
+
+        return _is_dangerous
 
 
     @abstractmethod

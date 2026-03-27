@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.semantic_rules import apply_rule_to_params, match_rule_phrase
 from app.core.time_parser import parse_cn_number
 
 
@@ -47,7 +48,7 @@ class ParsedIntent:
 
 
 class IntentParser:
-    def parse(self, text: str) -> ParsedIntent:
+    def parse(self, text: str, semantic_rules: list[dict[str, Any]] | None = None) -> ParsedIntent:
         normalized = text.strip()
 
         if normalized in {"确认", "同意", "批准", "执行"}:
@@ -62,10 +63,10 @@ class IntentParser:
             return ParsedIntent(intent="workflow_approval", params={})
 
         if any(k in normalized for k in ["日志统计", "日志数量", "日志趋势", "网络安全日志", "日志总数", "安全日志"]):
-            return ParsedIntent(intent="log_stats", params=self._parse_common_filters(normalized))
+            return ParsedIntent(intent="log_stats", params=self._parse_common_filters(normalized, intent="log_stats", semantic_rules=semantic_rules))
 
         if self._looks_like_block_query(normalized):
-            params = self._parse_common_filters(normalized)
+            params = self._parse_common_filters(normalized, intent="block_query", semantic_rules=semantic_rules)
             keyword = self._extract_keyword(normalized)
             if not keyword:
                 keyword = self._extract_ip_or_domain(normalized)
@@ -74,7 +75,7 @@ class IntentParser:
             return ParsedIntent(intent="block_query", params=params)
 
         if any(k in normalized for k in ["封禁", "拉黑", "阻断"]) and not self._looks_like_block_query(normalized):
-            params = self._parse_block_action(normalized)
+            params = self._parse_block_action(normalized, semantic_rules=semantic_rules)
             return ParsedIntent(intent="block_action", params=params)
 
         if any(k in normalized for k in ["实体", "情报", "外网ip", "外网IP"]):
@@ -88,12 +89,63 @@ class IntentParser:
             return ParsedIntent(intent="event_action", params=params)
 
         if any(k in normalized for k in ["事件", "告警", "incident", "查询"]):
-            params = self._parse_common_filters(normalized)
+            params = self._parse_common_filters(normalized, intent="event_query", semantic_rules=semantic_rules)
             return ParsedIntent(intent="event_query", params=params)
 
         return ParsedIntent(intent="chat_fallback", params={"query": normalized})
 
-    def _parse_common_filters(self, text: str) -> dict[str, Any]:
+    @staticmethod
+    def _merge_param_list(params: dict[str, Any], key: str, values: list[Any]) -> None:
+        if not values:
+            return
+        existing = params.get(key)
+        merged: list[Any] = []
+        seen: set[Any] = set()
+        if isinstance(existing, list):
+            for item in existing:
+                if item in seen:
+                    continue
+                seen.add(item)
+                merged.append(item)
+        for item in values:
+            if item in seen:
+                continue
+            seen.add(item)
+            merged.append(item)
+        if merged:
+            params[key] = merged
+
+    def _apply_semantic_rules(
+        self,
+        text: str,
+        *,
+        intent: str,
+        params: dict[str, Any],
+        semantic_rules: list[dict[str, Any]] | None = None,
+    ) -> None:
+        rules = sorted(semantic_rules or [], key=lambda item: int(item.get("priority", 100)))
+        for rule in rules:
+            if str(rule.get("domain") or "").strip() != intent:
+                continue
+            phrase = str(rule.get("phrase") or "").strip()
+            if not phrase or not match_rule_phrase(text, phrase, rule.get("match_mode") or "contains"):
+                continue
+            slot_name = str(rule.get("slot_name") or "").strip()
+            action_type = rule.get("action_type") or "append"
+            rule_value = rule.get("rule_value")
+            if slot_name:
+                try:
+                    apply_rule_to_params(params, domain=intent, slot_name=slot_name, action_type=action_type, rule_value=rule_value)
+                except ValueError:
+                    continue
+
+    def _parse_common_filters(
+        self,
+        text: str,
+        *,
+        intent: str,
+        semantic_rules: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         params: dict[str, Any] = {}
 
         severities = [v for k, v in SEVERITY_MAP.items() if k in text]
@@ -117,6 +169,7 @@ class IntentParser:
             if count:
                 params["page_size"] = min(200, max(5, count))
 
+        self._apply_semantic_rules(text, intent=intent, params=params, semantic_rules=semantic_rules)
         return params
 
     def _extract_keyword(self, text: str) -> str | None:
@@ -176,7 +229,7 @@ class IntentParser:
                 params["deal_comment"] = parts[1].strip("：: ")
         return params
 
-    def _parse_block_action(self, text: str) -> dict[str, Any]:
+    def _parse_block_action(self, text: str, semantic_rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {"raw_text": text}
         for key, mapped in BLOCK_TYPE_MAP.items():
             if key in text:
@@ -203,6 +256,7 @@ class IntentParser:
                 params["time_unit"] = unit_map[duration.group(2)]
                 params["time_type"] = "temporary"
 
+        self._apply_semantic_rules(text, intent="block_action", params=params, semantic_rules=semantic_rules)
         return params
 
     def _parse_entity_query(self, text: str) -> dict[str, Any]:

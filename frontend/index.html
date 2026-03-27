@@ -149,6 +149,7 @@
           <button class="settings-tab active" data-tab="tab_llm_config">大模型认知引擎</button>
           <button class="settings-tab" data-tab="tab_safety_gate">高危防线与红线</button>
           <button class="settings-tab" data-tab="tab_core_assets">核心资产管理</button>
+          <button class="settings-tab" data-tab="tab_semantic_rules">语义理解配置</button>
           <button class="settings-tab" data-tab="tab_threatbook">威胁情报联动</button>
         </nav>
       </aside>
@@ -258,6 +259,55 @@
             <p id="coreAssetResult" class="hint full-width"></p>
           </form>
           <div id="coreAssetList" class="list-box"></div>
+        </section>
+
+        <section id="tab_semantic_rules" class="settings-section">
+          <div class="section-header">
+            <h3>语义理解配置</h3>
+            <p class="section-note">维护用户习惯话术与系统参数的通用语义规则。你可以定义某句表达命中后，要对哪个参数执行“追加、替换、仅缺省时生效”等动作，而不是只绑定单一场景。</p>
+          </div>
+          <form id="semanticRuleForm" class="settings-form-grid">
+            <input type="hidden" id="semanticRuleId" />
+            <label>适用场景
+              <select id="semanticRuleDomain"></select>
+            </label>
+            <label>目标参数
+              <select id="semanticRuleSlot"></select>
+            </label>
+            <label>匹配方式
+              <select id="semanticRuleMatchMode"></select>
+            </label>
+            <label>动作类型
+              <select id="semanticRuleActionType"></select>
+            </label>
+            <label class="full-width">用户话术 / 表达式
+              <input type="text" id="semanticRulePhrase" placeholder="如：高等级、重点威胁、未处理、近期" required />
+            </label>
+            <div class="full-width semantic-value-editor-wrap">
+              <span id="semanticRuleValueLabel" class="semantic-field-label">规则值</span>
+              <p id="semanticRuleValueHelp" class="section-note semantic-value-help"></p>
+              <div id="semanticRuleValueEditor" class="semantic-value-editor"></div>
+            </div>
+            <label>优先级
+              <input type="number" id="semanticRulePriority" min="0" max="10000" value="100" />
+            </label>
+            <label class="full-width">备注
+              <input type="text" id="semanticRuleDesc" placeholder="如：适配本客户的日常值班表达习惯" />
+            </label>
+            <label class="checkbox-line full-width">
+              <input type="checkbox" id="semanticRuleEnabled" checked />
+              启用这条语义规则
+            </label>
+            <div class="form-footer full-width">
+              <p class="section-note" style="margin:0;">示例：把“高等级”映射为事件等级追加“高危、严重”；把“近期”映射为时间范围“最近三天”；把“临时封禁”映射为封禁方式“temporary”。</p>
+              <div class="action-row" style="margin:0;">
+                <button type="button" id="resetSemanticRuleForm" class="secondary-btn">取消编辑</button>
+                <button type="submit" id="saveSemanticRule" class="primary-btn">保存规则</button>
+              </div>
+            </div>
+            <p id="semanticRuleResult" class="hint full-width"></p>
+          </form>
+          <div id="semanticRuleList" class="list-box"></div>
         </section>
 
         <section id="tab_threatbook" class="settings-section">

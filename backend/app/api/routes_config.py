@@ -8,14 +8,54 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session
 
 from app.core.db import get_session
+from app.core.semantic_rules import (
+    get_action_type_label,
+    get_domain_label,
+    get_match_mode_label,
+    get_rule_meta_payload,
+    get_rule_value_labels,
+    get_slot_label,
+)
 from app.core.settings import settings
 from app.core.threatbook import mask_secret, resolve_threatbook_api_key
 from app.llm.providers import OpenAICompatProvider, ZhipuProvider
-from app.models.schemas import CoreAssetIn, ProviderConfigIn, ProviderConnectivityRequest, ThreatbookConfigIn, ThreatbookConnectivityRequest
+from app.models.schemas import (
+    CoreAssetIn,
+    ProviderConfigIn,
+    ProviderConnectivityRequest,
+    SemanticRuleIn,
+    ThreatbookConfigIn,
+    ThreatbookConnectivityRequest,
+)
 from app.services.config_service import ConfigService
 
 
 router = APIRouter(prefix="/api/config", tags=["config"])
+
+
+def _serialize_semantic_rule(service: ConfigService, row) -> dict:
+    payload = service.decode_semantic_rule_payload(row)
+    action_type = payload.get("action_type") or "append"
+    rule_value = payload.get("rule_value")
+    return {
+        "id": row.id,
+        "domain": row.domain,
+        "domain_label": get_domain_label(row.domain),
+        "slot_name": row.slot_name,
+        "slot_label": get_slot_label(row.domain, row.slot_name),
+        "phrase": row.phrase,
+        "match_mode": row.match_mode,
+        "match_mode_label": get_match_mode_label(row.match_mode),
+        "action_type": action_type,
+        "action_type_label": get_action_type_label(action_type),
+        "rule_value": rule_value,
+        "rule_value_labels": get_rule_value_labels(row.domain, row.slot_name, rule_value),
+        "description": row.description,
+        "enabled": row.enabled,
+        "priority": row.priority,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
 
 
 @router.get("/providers")
@@ -74,6 +114,48 @@ def test_provider(payload: ProviderConnectivityRequest):
         return {"success": True, "message": "连通成功", "sample": result[:120]}
     except Exception as exc:
         return {"success": False, "message": f"连通失败: {exc}"}
+
+
+@router.get("/semantic-rules/meta")
+def get_semantic_rule_meta():
+    return get_rule_meta_payload()
+
+
+@router.get("/semantic-rules")
+def list_semantic_rules(session: Session = Depends(get_session)):
+    service = ConfigService(session)
+    rows = service.list_semantic_rules()
+    return [_serialize_semantic_rule(service, row) for row in rows]
+
+
+@router.post("/semantic-rules")
+def create_semantic_rule(payload: SemanticRuleIn, session: Session = Depends(get_session)):
+    service = ConfigService(session)
+    try:
+        row = service.upsert_semantic_rule(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _serialize_semantic_rule(service, row)
+
+
+@router.put("/semantic-rules/{rule_id}")
+def update_semantic_rule(rule_id: int, payload: SemanticRuleIn, session: Session = Depends(get_session)):
+    service = ConfigService(session)
+    try:
+        row = service.upsert_semantic_rule(payload.model_dump(), rule_id=rule_id)
+    except ValueError as exc:
+        status_code = 404 if "不存在" in str(exc) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return _serialize_semantic_rule(service, row)
+
+
+@router.delete("/semantic-rules/{rule_id}")
+def delete_semantic_rule(rule_id: int, session: Session = Depends(get_session)):
+    service = ConfigService(session)
+    deleted = service.delete_semantic_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="语义规则不存在。")
+    return {"success": True}
 
 
 @router.get("/threatbook")

@@ -107,6 +107,21 @@ class ThreatIntelConfig(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class SemanticRule(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    domain: str = Field(index=True)
+    slot_name: str = Field(index=True)
+    phrase: str
+    phrase_key: str = Field(index=True)
+    match_mode: str = Field(default="contains")
+    mapped_value_json: str
+    description: Optional[str] = None
+    enabled: bool = True
+    priority: int = Field(default=100, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class CoreAsset(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     asset_name: str

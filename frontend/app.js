@@ -12,6 +12,8 @@ const state = {
   slashVisible: false,
   slashActiveIndex: 0,
   slashFiltered: [],
+  semanticRuleMeta: null,
+  semanticRules: [],
 };
 
 const DEFAULT_PLAYBOOK_SCENES = [
@@ -79,9 +81,9 @@ const SLASH_COMMANDS = [
 const PLAYBOOK_STAGE_META = {
   routine_check: {
     node_1_log_count_24h: { title: '统计日志总量', desc: '统计过去窗口期日志体量' },
-    node_2_unhandled_high_events_24h: { title: '检索高危未处置事件', desc: '筛选需要优先关注的高危告警' },
+    node_2_unhandled_high_events_24h: { title: '检索需要优先关注的威胁', desc: '筛选需要优先关注的时间' },
     node_3_sample_detail_parallel: { title: '并行拉取样本证据', desc: '补充样本事件证据和实体信息' },
-    node_4_llm_briefing: { title: '生成早报结论', desc: '输出面向值班交接的结论与建议' },
+    node_4_llm_briefing: { title: '生成早报结论', desc: '输出安全态势的结论与建议' },
   },
   alert_triage: {
     analyze: {
@@ -188,6 +190,23 @@ const el = {
   coreAssetMeta: document.getElementById('coreAssetMeta'),
   coreAssetResult: document.getElementById('coreAssetResult'),
   coreAssetList: document.getElementById('coreAssetList'),
+  semanticRuleForm: document.getElementById('semanticRuleForm'),
+  semanticRuleId: document.getElementById('semanticRuleId'),
+  semanticRuleDomain: document.getElementById('semanticRuleDomain'),
+  semanticRuleSlot: document.getElementById('semanticRuleSlot'),
+  semanticRuleMatchMode: document.getElementById('semanticRuleMatchMode'),
+  semanticRuleActionType: document.getElementById('semanticRuleActionType'),
+  semanticRulePhrase: document.getElementById('semanticRulePhrase'),
+  semanticRuleValueLabel: document.getElementById('semanticRuleValueLabel'),
+  semanticRuleValueHelp: document.getElementById('semanticRuleValueHelp'),
+  semanticRuleValueEditor: document.getElementById('semanticRuleValueEditor'),
+  semanticRulePriority: document.getElementById('semanticRulePriority'),
+  semanticRuleDesc: document.getElementById('semanticRuleDesc'),
+  semanticRuleEnabled: document.getElementById('semanticRuleEnabled'),
+  semanticRuleResult: document.getElementById('semanticRuleResult'),
+  semanticRuleList: document.getElementById('semanticRuleList'),
+  resetSemanticRuleFormBtn: document.getElementById('resetSemanticRuleForm'),
+  saveSemanticRuleBtn: document.getElementById('saveSemanticRule'),
 
   chatForm: document.getElementById('chatForm'),
   chatMessage: document.getElementById('chatMessage'),
@@ -589,6 +608,38 @@ function renderPayload(payload) {
     return;
   }
 
+  if (payload.type === 'quick_actions') {
+    const card = cardTemplate(payload.data.title || '快捷操作', 'quick-action-card');
+    const desc = document.createElement('p');
+    desc.textContent = payload.data.text || '';
+    card.appendChild(desc);
+
+    const actions = document.createElement('div');
+    actions.className = 'action-row quick-action-row';
+    (payload.data.actions || []).forEach((action) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = action.style === 'primary' ? 'primary-btn quick-action-btn' : 'secondary-btn quick-action-btn';
+      btn.textContent = action.label || '继续';
+      btn.onclick = async () => {
+        if (!action.message) return;
+        btn.disabled = true;
+        try {
+          await sendChat(String(action.message));
+        } finally {
+          btn.disabled = false;
+        }
+      };
+      actions.appendChild(btn);
+    });
+
+    if (actions.childNodes.length) {
+      card.appendChild(actions);
+    }
+    appendCard(card);
+    return;
+  }
+
   if (payload.type === 'form_card') {
     const card = cardTemplate(payload.data.title || '参数表单');
     const desc = document.createElement('p');
@@ -622,6 +673,12 @@ function renderPayload(payload) {
 
       inputEl.name = field.key;
       if (field.required) inputEl.required = true;
+      if (field.pattern) inputEl.pattern = field.pattern;
+      if (field.min != null) inputEl.min = String(field.min);
+      if (field.max != null) inputEl.max = String(field.max);
+      if (field.step != null) inputEl.step = String(field.step);
+      if (field.inputmode) inputEl.inputMode = field.inputmode;
+      if (field.title) inputEl.title = field.title;
       wrap.appendChild(inputEl);
       form.appendChild(wrap);
     });
@@ -636,12 +693,14 @@ function renderPayload(payload) {
 
     form.onsubmit = async (event) => {
       event.preventDefault();
+      if (!form.reportValidity()) return;
       const fd = new FormData(form);
       const params = {};
       fields.forEach((field) => {
         const raw = (fd.get(field.key) || '').toString().trim();
         if (!raw) return;
         if (field.key === 'views') {
+          validateBlockTargetValues(raw, (fd.get('block_type') || '').toString().trim());
           params[field.key] = raw;
           return;
         }
@@ -1100,6 +1159,31 @@ function isValidIpv4(ip) {
   return parts.every((part) => /^\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
 }
 
+function isValidIncidentUuid(value) {
+  return /^incident-[A-Za-z0-9-]{6,}$/.test(String(value || '').trim());
+}
+
+function isValidDomainName(value) {
+  return /^(?=.{1,253}$)(?!-)(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}\.?$/.test(String(value || '').trim());
+}
+
+function isValidUrlTarget(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^https?:\/\//i.test(text)) {
+    try {
+      const parsed = new URL(text);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }
+  const slashIndex = text.indexOf('/');
+  if (slashIndex <= 0) return false;
+  const host = text.slice(0, slashIndex);
+  return isValidIpv4(host) || isValidDomainName(host);
+}
+
 function isPrivateIpv4(ip) {
   if (!isValidIpv4(ip)) return false;
   const [a, b] = String(ip).split('.').map((n) => Number(n));
@@ -1113,6 +1197,33 @@ function isPrivateIpv4(ip) {
 function extractIpv4List(text) {
   const found = String(text || '').match(IPV4_REGEX) || [];
   return dedupText(found.filter((ip) => isValidIpv4(ip)));
+}
+
+function splitTargetValues(value) {
+  return dedupText(String(value || '').split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean));
+}
+
+function validateBlockTargetValues(rawValue, blockType) {
+  const values = splitTargetValues(rawValue);
+  if (!values.length) {
+    throw new Error('请输入至少一个封禁对象。');
+  }
+  const normalizedType = String(blockType || '').trim().toUpperCase();
+  const validatorMap = {
+    SRC_IP: { fn: isValidIpv4, label: 'IPv4 地址' },
+    DST_IP: { fn: isValidIpv4, label: 'IPv4 地址' },
+    DNS: { fn: isValidDomainName, label: '域名' },
+    URL: { fn: isValidUrlTarget, label: 'URL' },
+  };
+  const validator = validatorMap[normalizedType];
+  if (!validator) {
+    throw new Error('封禁对象类型不合法。');
+  }
+  const invalid = values.find((item) => !validator.fn(item));
+  if (invalid) {
+    throw new Error(`封禁对象 ${invalid} 不是合法的${validator.label}。`);
+  }
+  return values;
 }
 
 function extractCveList(...texts) {
@@ -3443,6 +3554,12 @@ function createFormNode(payload) {
 
     inputEl.name = field.key;
     if (field.required) inputEl.required = true;
+    if (field.pattern) inputEl.pattern = field.pattern;
+    if (field.min != null) inputEl.min = String(field.min);
+    if (field.max != null) inputEl.max = String(field.max);
+    if (field.step != null) inputEl.step = String(field.step);
+    if (field.inputmode) inputEl.inputMode = field.inputmode;
+    if (field.title) inputEl.title = field.title;
     wrap.appendChild(inputEl);
     form.appendChild(wrap);
   });
@@ -3457,12 +3574,14 @@ function createFormNode(payload) {
 
   form.onsubmit = async (event) => {
     event.preventDefault();
+    if (!form.reportValidity()) return;
     const fd = new FormData(form);
     const params = {};
     fields.forEach((field) => {
       const raw = (fd.get(field.key) || '').toString().trim();
       if (!raw) return;
       if (field.key === 'views') {
+        validateBlockTargetValues(raw, (fd.get('block_type') || '').toString().trim());
         params[field.key] = raw;
         return;
       }
@@ -3576,6 +3695,36 @@ function createUnifiedPayloadSection(payload, index) {
     section.appendChild(actions);
     return section;
   }
+  if (payload?.type === 'quick_actions') {
+    if (payload?.data?.text) {
+      const p = document.createElement('p');
+      p.textContent = payload.data.text;
+      section.appendChild(p);
+    }
+    const actions = payload?.data?.actions || [];
+    if (actions.length) {
+      const row = document.createElement('div');
+      row.className = 'action-row quick-action-row';
+      actions.forEach((action) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = action.style === 'primary' ? 'primary-btn quick-action-btn' : 'secondary-btn quick-action-btn';
+        btn.textContent = action.label || '继续';
+        btn.onclick = async () => {
+          if (!action.message) return;
+          btn.disabled = true;
+          try {
+            await sendChat(String(action.message));
+          } finally {
+            btn.disabled = false;
+          }
+        };
+        row.appendChild(btn);
+      });
+      section.appendChild(row);
+    }
+    return section;
+  }
   if (payload?.type === 'form_card') {
     const desc = document.createElement('p');
     desc.textContent = payload?.data?.description || '';
@@ -3624,6 +3773,14 @@ function buildPayloadExportHtml(payloads, bundleTitle = '任务报告', metaText
     }
     if (payload?.type === 'approval_card') {
       sections.push(`<section><h2>${title}</h2>${markdownToHtml(payload?.data?.summary || '')}</section>`);
+      return;
+    }
+    if (payload?.type === 'quick_actions') {
+      const text = escapeHtml(payload?.data?.text || '');
+      const actions = (payload?.data?.actions || [])
+        .map((action) => `<span style="display:inline-block;margin:6px 8px 0 0;padding:6px 10px;border-radius:999px;border:1px solid rgba(98,137,208,.45);background:rgba(28,97,231,.12);color:#e7efff;">${escapeHtml(action.label || '继续')}</span>`)
+        .join('');
+      sections.push(`<section><h2>${title}</h2><p>${text}</p><div>${actions}</div></section>`);
       return;
     }
     if (payload?.type === 'form_card') {
@@ -3822,7 +3979,23 @@ function renderPlaybookUnifiedCard(runData) {
   requestAnimationFrame(() => mountDeferredCharts(card));
 }
 
+function renderPlaybookFailedCard(runData) {
+  const card = cardTemplate('Playbook 执行失败');
+  if (runData?.run_id != null) {
+    card.dataset.playbookRunId = String(runData.run_id);
+  }
+  card.dataset.playbookCardType = 'playbook-failed';
+  card.classList.add('workspace-panel-card');
+  const detail = String(runData?.error || '后台任务执行失败，请查看节点详情或稍后重试。').trim();
+  card.appendChild(createMarkdownBlock(detail));
+  appendPlaybookWorkspaceCard(card);
+}
+
 function renderPlaybookResult(runData) {
+  if (runData?.status === 'Failed') {
+    renderPlaybookFailedCard(runData);
+    return;
+  }
   if (runData?.template_id === 'routine_check') {
     renderRoutineCheckCard(runData);
     return;
@@ -3849,6 +4022,9 @@ function buildSceneParams(scene) {
     const value = (raw || '').trim();
     if (!value) return null;
     if (!/^\d+$/.test(value)) {
+      if (!isValidIncidentUuid(value)) {
+        throw new Error('输入格式错误，请填写事件序号或合法的 incident UUID。');
+      }
       return { ...base, incident_uuid: value };
     }
     const idx = Number(value);
@@ -3862,6 +4038,9 @@ function buildSceneParams(scene) {
     const raw = window.prompt('请输入要追踪的攻击者IP：', '');
     const value = (raw || '').trim();
     if (!value) return null;
+    if (!isValidIpv4(value)) {
+      throw new Error('请输入合法的 IPv4 地址。');
+    }
     return { ...base, ip: value };
   }
 
@@ -3878,6 +4057,9 @@ function buildSceneParams(scene) {
     if (ipMatch) {
       assetIp = ipMatch[0];
       assetName = value.replace(assetIp, '').trim();
+      if (!isValidIpv4(assetIp)) {
+        throw new Error('请输入合法的核心资产 IPv4。');
+      }
     } else {
       throw new Error('请输入合法的核心资产IP。');
     }
@@ -3885,6 +4067,62 @@ function buildSceneParams(scene) {
   }
 
   return base;
+}
+
+function validatePlaybookParams(templateId, params = {}) {
+  const next = { ...(params || {}) };
+  if (templateId === 'alert_triage') {
+    if (next.incident_uuid && !isValidIncidentUuid(next.incident_uuid)) {
+      throw new Error('incident_uuid 格式不正确。');
+    }
+    if (Array.isArray(next.incident_uuids)) {
+      next.incident_uuids.forEach((item) => {
+        if (!isValidIncidentUuid(item)) {
+          throw new Error(`incident_uuid ${item} 格式不正确。`);
+        }
+      });
+    }
+    if (next.event_index != null && (!(Number(next.event_index) > 0) || !Number.isInteger(Number(next.event_index)))) {
+      throw new Error('event_index 必须是正整数。');
+    }
+    if (Array.isArray(next.event_indexes)) {
+      next.event_indexes.forEach((item) => {
+        if (!(Number(item) > 0) || !Number.isInteger(Number(item))) {
+          throw new Error('event_indexes 必须全部是正整数。');
+        }
+      });
+    }
+    if (next.ip && !isValidIpv4(next.ip)) {
+      throw new Error('ip 必须是合法的 IPv4 地址。');
+    }
+    if (Array.isArray(next.ips)) {
+      next.ips.forEach((item) => {
+        if (!isValidIpv4(item)) {
+          throw new Error(`IP ${item} 不是合法的 IPv4 地址。`);
+        }
+      });
+    }
+  }
+  if (templateId === 'threat_hunting') {
+    if (!isValidIpv4(next.ip)) {
+      throw new Error('攻击者活动轨迹的目标必须是合法的 IPv4 地址。');
+    }
+    const startTs = next.startTimestamp == null ? null : Number(next.startTimestamp);
+    const endTs = next.endTimestamp == null ? null : Number(next.endTimestamp);
+    if (startTs != null && (!Number.isFinite(startTs) || startTs < 0)) {
+      throw new Error('startTimestamp 不合法。');
+    }
+    if (endTs != null && (!Number.isFinite(endTs) || endTs < 0)) {
+      throw new Error('endTimestamp 不合法。');
+    }
+    if (startTs != null && endTs != null && startTs > endTs) {
+      throw new Error('startTimestamp 不能晚于 endTimestamp。');
+    }
+  }
+  if (templateId === 'asset_guard' && !isValidIpv4(next.asset_ip)) {
+    throw new Error('核心资产体检的 asset_ip 必须是合法的 IPv4 地址。');
+  }
+  return next;
 }
 
 function formatTriggerLabel(templateId, triggerLabel, params) {
@@ -4186,16 +4424,18 @@ async function runPlaybook(templateId, params = {}, triggerLabel = '') {
     throw new Error('缺少 template_id');
   }
 
+  const safeParams = validatePlaybookParams(templateId, params);
+
   const requestPayload = {
     template_id: templateId,
-    params,
+    params: safeParams,
     session_id: state.sessionId,
   };
 
   const introCard = cardTemplate('', 'user playbook-trigger-card');
   const introBubble = document.createElement('div');
   introBubble.className = 'playbook-trigger-pill';
-  introBubble.textContent = formatTriggerLabel(templateId, triggerLabel, params);
+  introBubble.textContent = formatTriggerLabel(templateId, triggerLabel, safeParams);
   const introAvatar = document.createElement('div');
   introAvatar.className = 'playbook-trigger-avatar';
   introAvatar.textContent = '👤';
@@ -4395,6 +4635,325 @@ async function refreshCoreAssets() {
   });
 }
 
+function getSemanticDomainMeta(domainValue) {
+  const domains = state.semanticRuleMeta?.domains || [];
+  return domains.find((item) => item.value === domainValue) || null;
+}
+
+function getSemanticSlotMeta(domainValue, slotValue) {
+  const domain = getSemanticDomainMeta(domainValue);
+  if (!domain) return null;
+  return (domain.targets || []).find((item) => item.value === slotValue) || null;
+}
+
+function coerceSemanticRuleValue(rawValue, slotMeta) {
+  if (slotMeta?.value_type === 'int') {
+    return Number(rawValue);
+  }
+  return rawValue;
+}
+
+function populateSemanticRuleDomains(selectedDomain = '', selectedSlot = '') {
+  if (!el.semanticRuleDomain || !el.semanticRuleSlot) return;
+  const domains = state.semanticRuleMeta?.domains || [];
+  el.semanticRuleDomain.innerHTML = '';
+  domains.forEach((domain) => {
+    const option = document.createElement('option');
+    option.value = domain.value;
+    option.textContent = domain.label || domain.value;
+    el.semanticRuleDomain.appendChild(option);
+  });
+  if (selectedDomain && domains.some((domain) => domain.value === selectedDomain)) {
+    el.semanticRuleDomain.value = selectedDomain;
+  }
+  populateSemanticRuleMatchModes();
+  populateSemanticRuleSlots(selectedSlot);
+}
+
+function populateSemanticRuleSlots(selectedSlot = '') {
+  if (!el.semanticRuleDomain || !el.semanticRuleSlot) return;
+  const domain = getSemanticDomainMeta(el.semanticRuleDomain.value);
+  const slots = domain?.targets || [];
+  el.semanticRuleSlot.innerHTML = '';
+  slots.forEach((slot) => {
+    const option = document.createElement('option');
+    option.value = slot.value;
+    option.textContent = slot.label || slot.value;
+    el.semanticRuleSlot.appendChild(option);
+  });
+  if (selectedSlot && slots.some((slot) => slot.value === selectedSlot)) {
+    el.semanticRuleSlot.value = selectedSlot;
+  }
+  populateSemanticRuleActionTypes();
+}
+
+function populateSemanticRuleMatchModes(selectedMatchMode = 'contains') {
+  if (!el.semanticRuleMatchMode) return;
+  const modes = state.semanticRuleMeta?.match_modes || [];
+  el.semanticRuleMatchMode.innerHTML = '';
+  modes.forEach((mode) => {
+    const option = document.createElement('option');
+    option.value = mode.value;
+    option.textContent = mode.label || mode.value;
+    el.semanticRuleMatchMode.appendChild(option);
+  });
+  if (selectedMatchMode && modes.some((mode) => mode.value === selectedMatchMode)) {
+    el.semanticRuleMatchMode.value = selectedMatchMode;
+  }
+}
+
+function populateSemanticRuleActionTypes(selectedAction = '', selectedRuleValue = undefined) {
+  if (!el.semanticRuleActionType) return;
+  const slotMeta = getSemanticSlotMeta(el.semanticRuleDomain?.value, el.semanticRuleSlot?.value);
+  const actions = slotMeta?.supported_actions || [];
+  el.semanticRuleActionType.innerHTML = '';
+  actions.forEach((action) => {
+    const option = document.createElement('option');
+    option.value = action.value;
+    option.textContent = action.label || action.value;
+    el.semanticRuleActionType.appendChild(option);
+  });
+  const fallbackAction = slotMeta?.default_action || actions[0]?.value || 'append';
+  if (selectedAction && actions.some((action) => action.value === selectedAction)) {
+    el.semanticRuleActionType.value = selectedAction;
+  } else {
+    el.semanticRuleActionType.value = fallbackAction;
+  }
+  renderSemanticRuleValueEditor(selectedRuleValue);
+}
+
+function renderSemanticRuleValueEditor(selectedRuleValue = undefined) {
+  if (!el.semanticRuleValueEditor) return;
+  const slotMeta = getSemanticSlotMeta(el.semanticRuleDomain?.value, el.semanticRuleSlot?.value);
+  const actionType = el.semanticRuleActionType?.value || '';
+  el.semanticRuleValueEditor.innerHTML = '';
+
+  if (!slotMeta) {
+    if (el.semanticRuleValueHelp) el.semanticRuleValueHelp.textContent = '';
+    if (el.semanticRuleValueLabel) el.semanticRuleValueLabel.textContent = '规则值';
+    return;
+  }
+
+  const currentValue = selectedRuleValue !== undefined ? selectedRuleValue : getSemanticSelectedRuleValue();
+  if (el.semanticRuleValueLabel) {
+    el.semanticRuleValueLabel.textContent = `${slotMeta.label || '规则值'} 取值`;
+  }
+  if (el.semanticRuleValueHelp) {
+    const actionLabel = (slotMeta.supported_actions || []).find((action) => action.value === actionType)?.label || actionType;
+    const placeholder = slotMeta.placeholder ? ` 输入建议：${slotMeta.placeholder}` : '';
+    el.semanticRuleValueHelp.textContent = `当前将对参数“${slotMeta.label || slotMeta.value}”执行“${actionLabel}”。${placeholder}`;
+  }
+
+  if (slotMeta.editor === 'enum') {
+    const values = Array.isArray(currentValue)
+      ? currentValue.map((item) => String(item))
+      : currentValue == null || currentValue === ''
+        ? []
+        : [String(currentValue)];
+    const grid = document.createElement('div');
+    grid.className = 'semantic-option-grid';
+    (slotMeta.options || []).forEach((optionMeta) => {
+      const label = document.createElement('label');
+      label.className = 'semantic-option-item';
+
+      const input = document.createElement('input');
+      input.type = slotMeta.multiple ? 'checkbox' : 'radio';
+      input.name = 'semanticRuleValueChoice';
+      input.value = String(optionMeta.value);
+      input.checked = values.includes(String(optionMeta.value));
+
+      const text = document.createElement('span');
+      text.textContent = optionMeta.label || String(optionMeta.value);
+      label.appendChild(input);
+      label.appendChild(text);
+      grid.appendChild(label);
+    });
+    el.semanticRuleValueEditor.appendChild(grid);
+    return;
+  }
+
+  const input = document.createElement('input');
+  input.className = 'semantic-value-input';
+  input.name = 'semanticRuleValueInput';
+  input.type = slotMeta.editor === 'number' ? 'number' : 'text';
+  if (slotMeta.placeholder) input.placeholder = slotMeta.placeholder;
+  if (slotMeta.min != null) input.min = String(slotMeta.min);
+  if (slotMeta.max != null) input.max = String(slotMeta.max);
+  if (currentValue != null && currentValue !== '') input.value = String(currentValue);
+  el.semanticRuleValueEditor.appendChild(input);
+}
+
+function getSemanticSelectedRuleValue() {
+  const slotMeta = getSemanticSlotMeta(el.semanticRuleDomain?.value, el.semanticRuleSlot?.value);
+  if (!slotMeta) return null;
+
+  if (slotMeta.editor === 'enum') {
+    const checked = Array.from(el.semanticRuleValueEditor?.querySelectorAll('input[name="semanticRuleValueChoice"]:checked') || []);
+    if (slotMeta.multiple) {
+      return checked.map((input) => coerceSemanticRuleValue(input.value, slotMeta));
+    }
+    const selected = checked[0];
+    return selected ? coerceSemanticRuleValue(selected.value, slotMeta) : null;
+  }
+
+  const input = el.semanticRuleValueEditor?.querySelector('input[name="semanticRuleValueInput"]');
+  const rawValue = input?.value ?? '';
+  if (String(rawValue).trim() === '') return null;
+  return coerceSemanticRuleValue(rawValue, slotMeta);
+}
+
+function resetSemanticRuleForm() {
+  if (!el.semanticRuleForm) return;
+  el.semanticRuleForm.reset();
+  if (el.semanticRuleId) el.semanticRuleId.value = '';
+  if (el.semanticRuleEnabled) el.semanticRuleEnabled.checked = true;
+  if (el.semanticRulePriority) el.semanticRulePriority.value = '100';
+  populateSemanticRuleDomains();
+  if (el.saveSemanticRuleBtn) {
+    el.saveSemanticRuleBtn.textContent = '保存规则';
+  }
+  if (el.resetSemanticRuleFormBtn) {
+    el.resetSemanticRuleFormBtn.textContent = '取消编辑';
+  }
+  setHint(el.semanticRuleResult, '');
+}
+
+async function loadSemanticRuleMeta() {
+  state.semanticRuleMeta = await api('/api/config/semantic-rules/meta');
+  populateSemanticRuleDomains();
+}
+
+function buildSemanticRulePayload() {
+  const domain = el.semanticRuleDomain?.value || '';
+  const slot = el.semanticRuleSlot?.value || '';
+  const slotMeta = getSemanticSlotMeta(domain, slot);
+  const actionType = el.semanticRuleActionType?.value || slotMeta?.default_action || 'append';
+  const ruleValue = getSemanticSelectedRuleValue();
+  const priority = Number(el.semanticRulePriority?.value || 100);
+  if (
+    ruleValue == null ||
+    ruleValue === '' ||
+    (Array.isArray(ruleValue) && !ruleValue.length)
+  ) {
+    throw new Error('请先填写规则值。');
+  }
+  return {
+    domain,
+    slot_name: slot,
+    match_mode: el.semanticRuleMatchMode?.value || 'contains',
+    action_type: actionType,
+    phrase: el.semanticRulePhrase?.value.trim() || '',
+    rule_value: ruleValue,
+    description: el.semanticRuleDesc?.value.trim() || null,
+    enabled: !!el.semanticRuleEnabled?.checked,
+    priority: Number.isFinite(priority) ? priority : 100,
+  };
+}
+
+function fillSemanticRuleForm(rule) {
+  if (!rule || !el.semanticRuleForm) return;
+  if (el.semanticRuleId) el.semanticRuleId.value = String(rule.id || '');
+  populateSemanticRuleDomains(rule.domain, rule.slot_name);
+  populateSemanticRuleMatchModes(rule.match_mode || 'contains');
+  populateSemanticRuleActionTypes(rule.action_type || '', rule.rule_value);
+  if (el.semanticRulePhrase) el.semanticRulePhrase.value = rule.phrase || '';
+  if (el.semanticRuleDesc) el.semanticRuleDesc.value = rule.description || '';
+  if (el.semanticRuleEnabled) el.semanticRuleEnabled.checked = rule.enabled !== false;
+  if (el.semanticRulePriority) el.semanticRulePriority.value = String(rule.priority ?? 100);
+  if (el.saveSemanticRuleBtn) {
+    el.saveSemanticRuleBtn.textContent = '保存修改';
+  }
+  if (el.resetSemanticRuleFormBtn) {
+    el.resetSemanticRuleFormBtn.textContent = '退出编辑';
+  }
+}
+
+async function refreshSemanticRules() {
+  if (!el.semanticRuleList) return;
+  if (!state.semanticRuleMeta) {
+    await loadSemanticRuleMeta();
+  }
+  const items = await api('/api/config/semantic-rules');
+  state.semanticRules = items;
+  renderList(el.semanticRuleList, items, (item) => {
+    const labels = (item.rule_value_labels || [])
+      .map((label) => `<span class="badge-tag semantic-value-tag">${escapeHtml(label)}</span>`)
+      .join('');
+    return `
+      <div class="semantic-rule-row">
+        <div class="semantic-rule-main">
+          <div class="semantic-rule-title-row">
+            <strong style="color:var(--sec-medium);">${escapeHtml(item.phrase || '-')}</strong>
+            <span class="semantic-rule-status ${item.enabled ? 'enabled' : 'disabled'}">${item.enabled ? '启用中' : '已停用'}</span>
+          </div>
+          <div class="semantic-rule-meta">${escapeHtml(item.domain_label || item.domain)} / ${escapeHtml(item.slot_label || item.slot_name)} · ${escapeHtml(item.match_mode_label || item.match_mode)} · ${escapeHtml(item.action_type_label || item.action_type)}</div>
+          <div class="semantic-rule-tags">${labels || '<span class="semantic-rule-empty">暂无规则值</span>'}</div>
+          <div class="semantic-rule-desc">${escapeHtml(item.description || '无备注')}</div>
+        </div>
+        <div class="semantic-rule-actions">
+          <button data-edit-semantic-rule="${item.id}" class="secondary-btn" style="padding:4px 8px; font-size:0.85em;">编辑</button>
+          <button data-toggle-semantic-rule="${item.id}" class="secondary-btn" style="padding:4px 8px; font-size:0.85em;">${item.enabled ? '停用' : '启用'}</button>
+          <button data-delete-semantic-rule="${item.id}" class="secondary-btn" style="padding:4px 8px; font-size:0.85em;">删除</button>
+        </div>
+      </div>
+    `;
+  });
+
+  el.semanticRuleList.querySelectorAll('button[data-edit-semantic-rule]').forEach((btn) => {
+    btn.onclick = () => {
+      const ruleId = Number(btn.getAttribute('data-edit-semantic-rule'));
+      const rule = state.semanticRules.find((item) => Number(item.id) === ruleId);
+      if (!rule) return;
+      fillSemanticRuleForm(rule);
+      setHint(el.semanticRuleResult, '已载入规则，可直接修改后保存。');
+    };
+  });
+
+  el.semanticRuleList.querySelectorAll('button[data-toggle-semantic-rule]').forEach((btn) => {
+    btn.onclick = async () => {
+      const ruleId = Number(btn.getAttribute('data-toggle-semantic-rule'));
+      const rule = state.semanticRules.find((item) => Number(item.id) === ruleId);
+      if (!rule) return;
+      try {
+        await api(`/api/config/semantic-rules/${ruleId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            domain: rule.domain,
+            slot_name: rule.slot_name,
+            match_mode: rule.match_mode || 'contains',
+            action_type: rule.action_type || 'append',
+            phrase: rule.phrase,
+            rule_value: rule.rule_value,
+            description: rule.description || null,
+            enabled: !rule.enabled,
+            priority: rule.priority ?? 100,
+          }),
+        });
+        setHint(el.semanticRuleResult, `规则已${rule.enabled ? '停用' : '启用'}。`, 'success');
+        await refreshSemanticRules();
+      } catch (err) {
+        setHint(el.semanticRuleResult, err.message || '更新失败', 'error');
+      }
+    };
+  });
+
+  el.semanticRuleList.querySelectorAll('button[data-delete-semantic-rule]').forEach((btn) => {
+    btn.onclick = async () => {
+      const ruleId = Number(btn.getAttribute('data-delete-semantic-rule'));
+      try {
+        await api(`/api/config/semantic-rules/${ruleId}`, { method: 'DELETE' });
+        setHint(el.semanticRuleResult, '规则已删除。', 'success');
+        if (String(ruleId) === String(el.semanticRuleId?.value || '')) {
+          resetSemanticRuleForm();
+        }
+        await refreshSemanticRules();
+      } catch (err) {
+        setHint(el.semanticRuleResult, err.message || '删除失败', 'error');
+      }
+    };
+  });
+}
+
 
 async function sendChat(message) {
   if (!state.isAuthenticated) {
@@ -4516,6 +5075,7 @@ el.openSettingsBtn.onclick = async () => {
     await window.refreshSafetyRules?.();
     await loadThreatbookConfig();
     await refreshCoreAssets();
+    await refreshSemanticRules();
   } catch (err) {
     setHint(el.providerResult, err.message || '配置加载失败', 'error');
   }
@@ -4662,6 +5222,49 @@ document.getElementById('safetyRuleForm').addEventListener('submit', async (e) =
   }
 });
 
+if (el.semanticRuleDomain) {
+  el.semanticRuleDomain.addEventListener('change', () => populateSemanticRuleSlots());
+}
+
+if (el.semanticRuleSlot) {
+  el.semanticRuleSlot.addEventListener('change', () => populateSemanticRuleActionTypes());
+}
+
+if (el.semanticRuleActionType) {
+  el.semanticRuleActionType.addEventListener('change', () => renderSemanticRuleValueEditor());
+}
+
+if (el.resetSemanticRuleFormBtn) {
+  el.resetSemanticRuleFormBtn.onclick = () => {
+    resetSemanticRuleForm();
+  };
+}
+
+if (el.semanticRuleForm) {
+  el.semanticRuleForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      if (!state.isAuthenticated) {
+        setHint(el.semanticRuleResult, '请先登录平台。', 'error');
+        return;
+      }
+      if (!state.semanticRuleMeta) {
+        await loadSemanticRuleMeta();
+      }
+      const payload = buildSemanticRulePayload();
+      const ruleId = String(el.semanticRuleId?.value || '').trim();
+      const path = ruleId ? `/api/config/semantic-rules/${ruleId}` : '/api/config/semantic-rules';
+      const method = ruleId ? 'PUT' : 'POST';
+      await api(path, { method, body: JSON.stringify(payload) });
+      setHint(el.semanticRuleResult, ruleId ? '语义规则已更新。' : '语义规则已创建。', 'success');
+      resetSemanticRuleForm();
+      await refreshSemanticRules();
+    } catch (err) {
+      setHint(el.semanticRuleResult, err.message || '保存失败', 'error');
+    }
+  });
+}
+
 
 document.getElementById('testProvider').onclick = async () => {
   try {
@@ -4736,6 +5339,7 @@ if (el.coreAssetForm) {
 
 window.refreshSafetyRules = refreshSafetyRules;
 window.refreshCoreAssets = refreshCoreAssets;
+window.refreshSemanticRules = refreshSemanticRules;
 
 if (el.chatMessage) {
   el.chatMessage.addEventListener('input', () => {

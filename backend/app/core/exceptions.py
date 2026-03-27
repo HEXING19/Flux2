@@ -13,6 +13,7 @@ class MissingParameterException(FluxError):
     skill_name: str
     missing_fields: list[str]
     question: str
+    payloads: list[dict[str, Any]] | None = None
 
 
 @dataclass

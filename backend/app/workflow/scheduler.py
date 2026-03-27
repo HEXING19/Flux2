@@ -4,6 +4,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlmodel import select
 
+from app.core.validation import validate_cron_expr
 from app.core.db import session_scope
 from app.models.db_models import WorkflowConfig
 
@@ -14,9 +15,7 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 
 
 def _parse_cron_expr(expr: str) -> CronTrigger:
-    parts = expr.strip().split()
-    if len(parts) != 5:
-        raise ValueError("cron 表达式必须是 5 段")
+    parts = validate_cron_expr(expr).split()
     minute, hour, day, month, day_of_week = parts
     return CronTrigger(minute=minute, hour=hour, day=day, month=month, day_of_week=day_of_week)
 

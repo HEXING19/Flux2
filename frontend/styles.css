@@ -3481,6 +3481,29 @@ button {
   background: linear-gradient(90deg, rgba(211, 47, 47, 0.05) 0%, transparent 100%);
 }
 
+.quick-action-card {
+  border-color: rgba(73, 130, 241, 0.3);
+  background:
+    radial-gradient(circle at top right, rgba(26, 188, 156, 0.12), transparent 36%),
+    rgba(255, 255, 255, 0.025);
+}
+
+.quick-action-card p {
+  margin: 0;
+  color: #c6d5ef;
+  line-height: 1.7;
+}
+
+.quick-action-row {
+  flex-wrap: wrap;
+}
+
+.quick-action-btn {
+  border-radius: 999px;
+  min-height: 40px;
+  padding: 0 16px;
+}
+
 /* Tables */
 .table-wrap {
   overflow-x: auto;
@@ -3797,6 +3820,56 @@ dialog::backdrop {
   line-height: 1.5;
 }
 
+.semantic-field-label {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text-main);
+  font-size: 14px;
+}
+
+.semantic-value-editor-wrap {
+  padding: 2px 0;
+}
+
+.semantic-value-help {
+  margin: 0 0 10px;
+}
+
+.semantic-value-editor {
+  min-height: 44px;
+}
+
+.semantic-option-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+}
+
+.semantic-option-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-main);
+}
+
+.semantic-option-item input {
+  width: auto;
+}
+
+.semantic-option-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.semantic-value-input {
+  width: 100%;
+}
+
 /* Lists */
 .list-box {
   margin-top: 16px;
@@ -3819,6 +3892,80 @@ dialog::backdrop {
 
 .list-item:hover {
   background: rgba(255, 255, 255, 0.02);
+}
+
+.semantic-rule-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.semantic-rule-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.semantic-rule-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.semantic-rule-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid transparent;
+}
+
+.semantic-rule-status.enabled {
+  color: #93f5ca;
+  background: rgba(20, 143, 119, 0.12);
+  border-color: rgba(20, 143, 119, 0.3);
+}
+
+.semantic-rule-status.disabled {
+  color: #d6c6a8;
+  background: rgba(160, 64, 0, 0.12);
+  border-color: rgba(160, 64, 0, 0.24);
+}
+
+.semantic-rule-meta {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.semantic-rule-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.semantic-value-tag {
+  font-family: inherit;
+}
+
+.semantic-rule-desc {
+  margin-top: 10px;
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.semantic-rule-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.semantic-rule-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 

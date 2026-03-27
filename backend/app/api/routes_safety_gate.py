@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, field_validator, model_validator
 from sqlmodel import Session, select
 
 from app.core.db import get_session
+from app.core.validation import clean_optional_text, clean_text, validate_cidr, validate_domain, validate_ipv4
 from app.models.db_models import SafetyGateRule
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/config/safety_gate", tags=["safety_gate"])
 
@@ -14,6 +15,29 @@ class SafetyRuleCreate(BaseModel):
     rule_type: str
     target: str
     description: str | None = None
+
+    @field_validator("rule_type")
+    @classmethod
+    def validate_rule_type(cls, value: str) -> str:
+        normalized = clean_text(value).lower()
+        if normalized not in {"ip", "domain", "cidr"}:
+            raise ValueError("rule_type 仅支持 ip、domain、cidr。")
+        return normalized
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        return clean_optional_text(value)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "SafetyRuleCreate":
+        if self.rule_type == "ip":
+            self.target = validate_ipv4(self.target, field_name="target")
+        elif self.rule_type == "domain":
+            self.target = validate_domain(self.target, field_name="target")
+        else:
+            self.target = validate_cidr(self.target, field_name="target")
+        return self
 
 
 @router.get("/")

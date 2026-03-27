@@ -1,10 +1,21 @@
 from __future__ import annotations
-
 from datetime import datetime, timezone
 
 from sqlmodel import Session, delete, select
 
-from app.models.db_models import CoreAsset, ProviderConfig, ThreatIntelConfig, XDRCredential
+from app.core.semantic_rules import (
+    decode_rule_payload,
+    encode_rule_payload,
+    normalize_rule_text,
+    normalize_rule_value,
+    validate_action_type,
+    validate_description,
+    validate_match_mode,
+    validate_phrase,
+    validate_rule_domain,
+    validate_rule_slot,
+)
+from app.models.db_models import CoreAsset, ProviderConfig, SemanticRule, ThreatIntelConfig, XDRCredential
 
 
 class ConfigService:
@@ -85,6 +96,79 @@ class ConfigService:
         self.session.commit()
         self.session.refresh(model)
         return model
+
+    def list_semantic_rules(self, *, enabled_only: bool = False) -> list[SemanticRule]:
+        query = select(SemanticRule)
+        if enabled_only:
+            query = query.where(SemanticRule.enabled == True)  # noqa: E712
+        query = query.order_by(SemanticRule.priority.asc(), SemanticRule.updated_at.desc(), SemanticRule.id.desc())
+        return list(self.session.exec(query).all())
+
+    @staticmethod
+    def decode_semantic_rule_payload(rule: SemanticRule) -> dict[str, object]:
+        return decode_rule_payload(rule.mapped_value_json)
+
+    def upsert_semantic_rule(self, payload: dict, *, rule_id: int | None = None) -> SemanticRule:
+        domain = validate_rule_domain(payload.get("domain"))
+        slot_name = validate_rule_slot(domain, payload.get("slot_name"))
+        match_mode = validate_match_mode(payload.get("match_mode") or "contains")
+        phrase = validate_phrase(payload.get("phrase"), match_mode=match_mode)
+        phrase_key = normalize_rule_text(phrase)
+        action_type = validate_action_type(domain, slot_name, payload.get("action_type") or None)
+        rule_value = normalize_rule_value(domain, slot_name, action_type, payload.get("rule_value"))
+        description = validate_description(payload.get("description"))
+        enabled = bool(payload.get("enabled", True))
+        priority = int(payload.get("priority", 100))
+        if priority < 0:
+            raise ValueError("priority 不能小于 0。")
+
+        siblings = self.session.exec(
+            select(SemanticRule).where(SemanticRule.domain == domain, SemanticRule.slot_name == slot_name)
+        ).all()
+        for row in siblings:
+            if row.phrase_key == phrase_key and row.id != rule_id:
+                raise ValueError("同一作用域和槽位下已存在相同话术。")
+
+        if rule_id is not None:
+            model = self.session.get(SemanticRule, rule_id)
+            if not model:
+                raise ValueError("语义规则不存在。")
+        else:
+            model = SemanticRule(
+                domain=domain,
+                slot_name=slot_name,
+                phrase=phrase,
+                phrase_key=phrase_key,
+                match_mode=match_mode,
+                mapped_value_json="[]",
+                enabled=enabled,
+                priority=priority,
+                description=description,
+            )
+
+        model.domain = domain
+        model.slot_name = slot_name
+        model.phrase = phrase
+        model.phrase_key = phrase_key
+        model.match_mode = match_mode
+        model.mapped_value_json = encode_rule_payload(action_type, rule_value)
+        model.description = description
+        model.enabled = enabled
+        model.priority = priority
+        model.updated_at = datetime.now(timezone.utc)
+
+        self.session.add(model)
+        self.session.commit()
+        self.session.refresh(model)
+        return model
+
+    def delete_semantic_rule(self, rule_id: int) -> bool:
+        row = self.session.get(SemanticRule, rule_id)
+        if not row:
+            return False
+        self.session.delete(row)
+        self.session.commit()
+        return True
 
     def list_core_assets(self) -> list[CoreAsset]:
         return list(self.session.exec(select(CoreAsset).order_by(CoreAsset.updated_at.desc())).all())

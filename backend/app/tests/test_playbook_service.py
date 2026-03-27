@@ -340,6 +340,16 @@ class EndlessIncidentsRequester:
         return {"code": "Success", "data": {"item": items}}
 
 
+class RoutineCheckDegradedRequester(PlaybookRequester):
+    def request(self, method, path, *, json_body=None, params=None, timeout=15, max_retries=3):
+        _ = (method, params, timeout, max_retries)
+        if path == "/api/xdr/v1/analysislog/networksecurity/count":
+            return {"code": "Failed", "message": "模拟日志统计接口异常", "data": {}}
+        if path == "/api/xdr/v1/incidents/list":
+            return {"code": "Failed", "message": "模拟事件接口异常", "data": {}}
+        return super().request(method, path, json_body=json_body, params=params, timeout=timeout, max_retries=max_retries)
+
+
 class PlaybookServiceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -380,6 +390,20 @@ class PlaybookServiceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 playbook_service.start_run(
                     session,
+                    template_id="threat_hunting",
+                    params={"ip": "not-an-ip"},
+                    session_id="s-validation-2b",
+                )
+            with self.assertRaises(ValueError):
+                playbook_service.start_run(
+                    session,
+                    template_id="threat_hunting",
+                    params={"ip": "9.9.9.9", "startTimestamp": 200, "endTimestamp": 100},
+                    session_id="s-validation-2c",
+                )
+            with self.assertRaises(ValueError):
+                playbook_service.start_run(
+                    session,
                     template_id="asset_guard",
                     params={},
                     session_id="s-validation-3",
@@ -390,6 +414,27 @@ class PlaybookServiceTest(unittest.TestCase):
                     template_id="asset_guard",
                     params={"asset_ip": "bad-ip"},
                     session_id="s-validation-4",
+                )
+            with self.assertRaises(ValueError):
+                playbook_service.start_run(
+                    session,
+                    template_id="asset_guard",
+                    params={"asset_ip": "2001:db8::1"},
+                    session_id="s-validation-4b",
+                )
+            with self.assertRaises(ValueError):
+                playbook_service.start_run(
+                    session,
+                    template_id="alert_triage",
+                    params={"incident_uuid": "invalid-uuid"},
+                    session_id="s-validation-5",
+                )
+            with self.assertRaises(ValueError):
+                playbook_service.start_run(
+                    session,
+                    template_id="alert_triage",
+                    params={"mode": "block_ip", "ip": "bad-ip"},
+                    session_id="s-validation-6",
                 )
 
     def test_alert_triage_count_payloads(self):
@@ -486,6 +531,31 @@ class PlaybookServiceTest(unittest.TestCase):
                 self.assertIn("509", result.get("summary", ""))
                 self.assertGreaterEqual(len(result.get("cards", [])), 3)
                 self.assertGreaterEqual(len(result.get("next_actions", [])), 1)
+
+    def test_routine_check_degrades_instead_of_failing_when_upstream_unavailable(self):
+        fake_requester = RoutineCheckDegradedRequester()
+        with (
+            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
+            patch("app.playbook.service.LLMRouter.complete", return_value="should not be used"),
+        ):
+            with Session(engine) as session:
+                run = playbook_service.start_run(
+                    session,
+                    template_id="routine_check",
+                    params={},
+                    session_id="s-routine-degraded",
+                )
+                final_run = self._wait_run_finished(session, run.id)
+                self.assertEqual(final_run.status, "Finished")
+                payload = playbook_service.serialize_run(final_run)
+                self.assertFalse(payload.get("error"))
+                result = payload.get("result", {})
+                self.assertIn("暂不可用", result.get("summary", ""))
+                cards = result.get("cards", [])
+                titles = [card.get("data", {}).get("title") for card in cards]
+                self.assertIn("数据源提醒", titles)
+                self.assertIn("日志趋势说明", titles)
+                self.assertEqual(result.get("next_actions", []), [])
 
     def test_routine_check_dependency_declared(self):
         status = playbook_service._initial_node_status("routine_check", None)

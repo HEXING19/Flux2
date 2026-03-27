@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from pydantic import ValidationError
 from sqlmodel import Session, select
 
 from app.core.context import context_manager
@@ -14,6 +15,7 @@ from app.core.payload import approval_payload, text_payload
 from app.core.requester import get_requester_from_credential
 from app.llm.router import LLMRouter
 from app.models.db_models import ApprovalRequest, WorkflowConfig, WorkflowRun, XDRCredential
+from app.models.schemas import WorkflowConfigIn
 from app.skills.registry import SkillRegistry
 
 from .engine import PipelineNode, WorkflowEngine
@@ -31,16 +33,20 @@ class WorkflowService:
 
     def create_or_update_workflow(self, session: Session, payload: dict[str, Any]) -> WorkflowConfig:
         workflow_id = payload.get("id")
+        try:
+            validated = WorkflowConfigIn(**{k: v for k, v in payload.items() if k != "id"}).model_dump()
+        except ValidationError as exc:
+            raise ValueError(str(exc)) from exc
         if workflow_id:
             wf = session.get(WorkflowConfig, workflow_id)
             if not wf:
                 raise ValueError("workflow not found")
-            wf.name = payload["name"]
-            wf.cron_expr = payload["cron_expr"]
-            wf.enabled = payload.get("enabled", True)
-            wf.levels = ",".join(str(x) for x in payload.get("levels", [3, 4]))
-            wf.require_approval = payload.get("require_approval", True)
-            wf.webhook_url = payload.get("webhook_url")
+            wf.name = validated["name"]
+            wf.cron_expr = validated["cron_expr"]
+            wf.enabled = validated.get("enabled", True)
+            wf.levels = ",".join(str(x) for x in validated.get("levels", [3, 4]))
+            wf.require_approval = validated.get("require_approval", True)
+            wf.webhook_url = validated.get("webhook_url")
             wf.updated_at = datetime.now(timezone.utc)
             session.add(wf)
             session.commit()
@@ -48,12 +54,12 @@ class WorkflowService:
             return wf
 
         wf = WorkflowConfig(
-            name=payload["name"],
-            cron_expr=payload["cron_expr"],
-            enabled=payload.get("enabled", True),
-            levels=",".join(str(x) for x in payload.get("levels", [3, 4])),
-            require_approval=payload.get("require_approval", True),
-            webhook_url=payload.get("webhook_url"),
+            name=validated["name"],
+            cron_expr=validated["cron_expr"],
+            enabled=validated.get("enabled", True),
+            levels=",".join(str(x) for x in validated.get("levels", [3, 4])),
+            require_approval=validated.get("require_approval", True),
+            webhook_url=validated.get("webhook_url"),
         )
         session.add(wf)
         session.commit()

@@ -4,11 +4,18 @@ import re
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.block_devices import fetch_linkable_af_devices
+from app.core.validation import (
+    clean_optional_text,
+    clean_text,
+    infer_block_view_type,
+    validate_block_view,
+    validate_time_range,
+)
 from app.core.exceptions import ConfirmationRequiredException, MissingParameterException, ValidationGuardException
-from app.core.payload import form_payload, table_payload, text_payload
+from app.core.payload import form_payload, quick_action_payload, table_payload, text_payload
 
 from .base import BaseSkill
 
@@ -58,14 +65,67 @@ def _dedup_text(values: list[Any]) -> list[str]:
     return result
 
 
+def _is_multi_ip_followup_text(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    phrases = [
+        "以上所有IP",
+        "以上所有ip",
+        "所有IP",
+        "所有ip",
+        "这些IP",
+        "这些ip",
+        "上面的IP",
+        "上面的ip",
+        "上述IP",
+        "上述ip",
+    ]
+    return any(token in text for token in phrases)
+
+
+def _normalize_block_views(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        result = [str(v).strip() for v in value if str(v).strip()]
+        return result or None
+    if isinstance(value, str):
+        result = [v.strip() for v in re.split(r"[,\s，]+", value) if v.strip()]
+        return result or None
+    return None
+
+
 class BlockQueryInput(BaseModel):
-    page: int = 1
-    page_size: int = Field(default=10)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=10, ge=1, le=200)
     status: list[str] | None = None
     keyword: str | None = None
     startTimestamp: int | None = None
     endTimestamp: int | None = None
     time_text: str | None = None
+
+    @field_validator("status")
+    @classmethod
+    def normalize_status(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        for item in value:
+            text = clean_text(item)
+            if text and text not in normalized:
+                normalized.append(text)
+        return normalized or None
+
+    @field_validator("keyword", "time_text", mode="before")
+    @classmethod
+    def normalize_optional_text_fields(cls, value: str | None) -> str | None:
+        return clean_optional_text(value)
+
+    @model_validator(mode="after")
+    def validate_query_time_range(self) -> "BlockQueryInput":
+        validate_time_range(self.startTimestamp, self.endTimestamp)
+        return self
 
 
 class BlockActionInput(BaseModel):
@@ -80,12 +140,31 @@ class BlockActionInput(BaseModel):
     name: str | None = None
     confirm: bool = False
 
+    @field_validator("block_type", mode="before")
+    @classmethod
+    def normalize_block_type(cls, value: str | None) -> str | None:
+        text = clean_optional_text(value)
+        return text.upper() if text else None
+
     @field_validator("block_type")
     @classmethod
     def validate_block_type(cls, value: str | None) -> str | None:
         if value and value not in ALLOWED_BLOCK_TYPES:
             raise ValueError("block_type 非法")
         return value
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        normalized = clean_text(value).lower()
+        if normalized not in {"in", "out"}:
+            raise ValueError("mode 非法")
+        return normalized
+
+    @field_validator("views", mode="before")
+    @classmethod
+    def normalize_views(cls, value: Any) -> list[str] | None:
+        return _normalize_block_views(value)
 
     @field_validator("time_type")
     @classmethod
@@ -101,6 +180,49 @@ class BlockActionInput(BaseModel):
             raise ValueError("time_unit 非法")
         return value
 
+    @field_validator("devices")
+    @classmethod
+    def validate_devices(cls, value: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("devices 非法")
+        normalized: list[dict[str, Any]] = []
+        for idx, item in enumerate(value, start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f"devices[{idx}] 非法")
+            dev_id = item.get("devId")
+            if dev_id in (None, ""):
+                raise ValueError(f"devices[{idx}].devId 不能为空")
+            normalized.append(
+                {
+                    "devId": dev_id,
+                    "devName": clean_text(item.get("devName")),
+                    "devType": clean_text(item.get("devType")),
+                    "devVersion": clean_text(item.get("devVersion")),
+                }
+            )
+        return normalized
+
+    @field_validator("reason", "name", mode="before")
+    @classmethod
+    def normalize_reason_and_name(cls, value: str | None) -> str | None:
+        return clean_optional_text(value)
+
+    @model_validator(mode="after")
+    def validate_block_action(self) -> "BlockActionInput":
+        if self.time_type == "temporary":
+            if self.time_value is None:
+                raise ValueError("temporary 模式必须提供 time_value")
+            if self.time_unit is None:
+                raise ValueError("temporary 模式必须提供 time_unit")
+        if self.block_type and self.views:
+            self.views = [
+                validate_block_view(view, block_type=self.block_type, field_name=f"views[{idx}]")
+                for idx, view in enumerate(self.views, start=1)
+            ]
+        return self
+
 
 class BlockQuerySkill(BaseSkill):
     name = "BlockQuerySkill"
@@ -108,22 +230,7 @@ class BlockQuerySkill(BaseSkill):
 
     @staticmethod
     def _is_multi_ip_followup(user_text: str) -> bool:
-        text = str(user_text or "").strip()
-        if not text:
-            return False
-        phrases = [
-            "以上所有IP",
-            "以上所有ip",
-            "所有IP",
-            "所有ip",
-            "这些IP",
-            "这些ip",
-            "上面的IP",
-            "上面的ip",
-            "上述IP",
-            "上述ip",
-        ]
-        return any(token in text for token in phrases)
+        return _is_multi_ip_followup_text(user_text)
 
     def _build_query_payload(self, model: BlockQueryInput, keyword: str | None = None) -> dict[str, Any]:
         payload = {
@@ -180,24 +287,18 @@ class BlockQuerySkill(BaseSkill):
             next_index += 1
         return rows
 
-    def _build_quick_block_form(self, session_id: str, keyword: str) -> list[dict[str, Any]]:
-        action_skill = BlockActionSkill(self.requester, self.context_manager)
-        device_lookup = action_skill._lookup_linkable_devices()
-        linkable_devices = device_lookup.get("devices") or []
-        prepared: dict[str, Any] = {
-            "views": [keyword],
-            "time_type": "temporary",
-            "time_value": 1,
-            "time_unit": "d",
-        }
-        prepared = action_skill._normalize_prepared(prepared, linkable_devices)
-        if not prepared.get("block_type"):
-            prepared["block_type"] = action_skill._guess_block_type(prepared.get("views")) or "SRC_IP"
-        return action_skill._build_param_form(
-            session_id,
-            prepared,
-            linkable_devices,
-            reason=f"未查询到 {keyword} 的封禁策略。若需要立即封禁，请确认并提交以下必填参数。",
+    @staticmethod
+    def _build_quick_block_actions(keyword: str) -> dict[str, Any]:
+        return quick_action_payload(
+            title="封禁操作建议",
+            text=f"当前 {keyword} 可视为未封禁。若需要立即处置，可点击下方气泡继续填写封禁参数。",
+            actions=[
+                {
+                    "label": f"封禁 {keyword}",
+                    "message": f"封禁 {keyword}",
+                    "style": "primary",
+                }
+            ],
         )
 
     def execute(self, session_id: str, params: dict[str, Any], user_text: str) -> list[dict[str, Any]]:
@@ -258,10 +359,7 @@ class BlockQuerySkill(BaseSkill):
                 text_payload(f"未查询到 {target} 的封禁策略，当前可视为未封禁。", title="封禁策略查询"),
             ]
             if model.keyword and not multi_targets:
-                try:
-                    payloads.extend(self._build_quick_block_form(session_id, model.keyword))
-                except Exception:
-                    payloads.append(text_payload(f"如需立即封禁，可直接发送：封禁 {model.keyword} 24小时。"))
+                payloads.append(self._build_quick_block_actions(model.keyword))
             return payloads
 
         summary_text = (
@@ -313,25 +411,18 @@ class BlockActionSkill(BaseSkill):
         if not views:
             return None
         first = views[0]
-        if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", first):
+        inferred = infer_block_view_type(first)
+        if inferred == "ip":
             return "SRC_IP"
-        if "/" in first:
+        if inferred == "url":
             return "URL"
-        if re.match(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}$", first):
+        if inferred == "domain":
             return "DNS"
         return None
 
     @staticmethod
     def _normalize_views(value: Any) -> list[str] | None:
-        if value is None:
-            return None
-        if isinstance(value, list):
-            result = [str(v).strip() for v in value if str(v).strip()]
-            return result or None
-        if isinstance(value, str):
-            result = [v.strip() for v in re.split(r"[,\s，]+", value) if v.strip()]
-            return result or None
-        return None
+        return _normalize_block_views(value)
 
     def _normalize_prepared(self, prepared: dict[str, Any], linkable_devices: list[dict[str, Any]]) -> dict[str, Any]:
         normalized = dict(prepared)
@@ -397,6 +488,7 @@ class BlockActionSkill(BaseSkill):
                 "type": "text",
                 "required": True,
                 "placeholder": "例如 200.200.1.1，多个可用逗号分隔",
+                "title": "IP 类型只接受 IPv4；域名类型只接受域名；URL 类型需填写完整 URL 或 host/path。",
                 "value": ",".join(prepared.get("views") or []),
             },
             {
@@ -417,6 +509,10 @@ class BlockActionSkill(BaseSkill):
                 "required": False,
                 "value": prepared.get("time_value") or 1,
                 "placeholder": "例如 1、5、24",
+                "min": 1,
+                "max": 21600,
+                "step": 1,
+                "inputmode": "numeric",
             },
             {
                 "key": "time_unit",
@@ -500,17 +596,22 @@ class BlockActionSkill(BaseSkill):
         prepared.setdefault("mode", "in")
 
         if not prepared.get("views"):
+            recent_targets = self.context_manager.get_param(session_id, "last_entity_ips")
+            if _is_multi_ip_followup_text(user_text) and isinstance(recent_targets, list):
+                prepared["views"] = _dedup_text(recent_targets)
             inherited_target = (
                 self.context_manager.get_param(session_id, "last_block_target")
                 or self.context_manager.get_param(session_id, "last_entity_ip")
                 or self.context_manager.get_param(session_id, "keyword")
             )
-            if inherited_target and any(k in user_text for k in ["它", "该IP", "这个IP", "这个地址", "这个实体", "封禁"]):
+            if not prepared.get("views") and inherited_target and any(k in user_text for k in ["它", "该IP", "这个IP", "这个地址", "这个实体", "封禁"]):
                 prepared["views"] = [str(inherited_target)]
 
         device_lookup = self._lookup_linkable_devices()
         linkable_devices = device_lookup.get("devices") or []
         prepared = self._normalize_prepared(prepared, linkable_devices)
+        if prepared.get("views"):
+            self.ensure_safe_gate_targets({"views": prepared.get("views")})
 
         missing: list[str] = []
         if not prepared.get("block_type"):

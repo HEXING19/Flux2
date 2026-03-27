@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
+from app.core.validation import clean_optional_text, validate_incident_uuid_list, validate_ipv4_list
 from app.core.exceptions import MissingParameterException
 from app.core.payload import table_payload, text_payload
 from app.core.threatbook import resolve_threatbook_api_key
@@ -17,6 +18,25 @@ class EntityQueryInput(BaseModel):
     ips: list[str] | None = None
     ref_text: str | None = None
     incident_uuids: list[str] | None = None
+
+    @field_validator("ips")
+    @classmethod
+    def validate_ips(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return validate_ipv4_list(value, field_name="ips", allow_empty=False)
+
+    @field_validator("ref_text", mode="before")
+    @classmethod
+    def normalize_ref_text(cls, value: str | None) -> str | None:
+        return clean_optional_text(value)
+
+    @field_validator("incident_uuids")
+    @classmethod
+    def validate_incident_uuids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return validate_incident_uuid_list(value, field_name="incident_uuids", allow_empty=False)
 
 
 def _remember_entity_ips(context_manager, session_id: str, ips: list[str]) -> None:

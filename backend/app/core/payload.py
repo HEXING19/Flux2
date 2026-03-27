@@ -55,6 +55,22 @@ def approval_payload(*, title: str, summary: str, token: str, details: dict[str,
     }
 
 
+def quick_action_payload(
+    *,
+    title: str,
+    text: str,
+    actions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "type": "quick_actions",
+        "data": {
+            "title": title,
+            "text": text,
+            "actions": actions,
+        },
+    }
+
+
 def form_payload(
     *,
     title: str,

@@ -3,10 +3,13 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from sqlmodel import Session
+from sqlmodel import Session, delete
 
+from app.core.context import context_manager
 from app.core.db import engine, init_db
+from app.models.db_models import SafetyGateRule, SemanticRule, SessionState
 from app.services.chat_service import ChatService
+from app.services.config_service import ConfigService
 
 
 class FakeRequester:
@@ -113,7 +116,7 @@ class FakeRequesterEntityHistory(FakeRequester):
 
     def request(self, method, path, *, json_body=None, params=None, timeout=15):
         if path.endswith("/entities/ip"):
-            uid = path.split("/")[-2]
+            uid = path.split("/")[-3]
             return {"code": "Success", "message": "成功", "data": {"item": self.entity_map.get(uid, [])}}
         if path == "/api/xdr/v1/responses/blockiprule/list":
             keyword = ""
@@ -142,10 +145,62 @@ class FakeRequesterEntityHistoryPartial(FakeRequesterEntityHistory):
         ]
 
 
+class FakeRequesterSingleUnblocked(FakeRequesterEntityHistory):
+    def __init__(self) -> None:
+        super().__init__()
+        self.block_rules = []
+
+
+class FakeRequesterSeveritySemantic(FakeRequester):
+    def __init__(self) -> None:
+        super().__init__()
+        self.incidents = [
+            {
+                "uuId": "incident-low-001",
+                "name": "低危事件",
+                "incidentSeverity": 1,
+                "dealStatus": 0,
+                "hostIp": "10.10.1.1",
+                "endTime": 1739999700,
+            },
+            {
+                "uuId": "incident-medium-001",
+                "name": "中危事件",
+                "incidentSeverity": 2,
+                "dealStatus": 0,
+                "hostIp": "10.10.1.2",
+                "endTime": 1739999600,
+            },
+            {
+                "uuId": "incident-high-001",
+                "name": "高危事件",
+                "incidentSeverity": 3,
+                "dealStatus": 0,
+                "hostIp": "10.10.1.3",
+                "endTime": 1739999500,
+            },
+            {
+                "uuId": "incident-critical-001",
+                "name": "严重事件",
+                "incidentSeverity": 4,
+                "dealStatus": 0,
+                "hostIp": "10.10.1.4",
+                "endTime": 1739999400,
+            },
+        ]
+
+
 class ChatConfirmFlowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         init_db()
+
+    def setUp(self):
+        context_manager._sessions.clear()
+        with Session(engine) as session:
+            session.exec(delete(SessionState))
+            session.exec(delete(SemanticRule))
+            session.commit()
 
     def test_confirmable_dangerous_action(self):
         with Session(engine) as session:
@@ -156,6 +211,43 @@ class ChatConfirmFlowTest(unittest.TestCase):
                 self.assertEqual(result[0]["type"], "approval_card")
                 done = chat.handle("t1", "确认")
                 self.assertEqual(done[0]["type"], "text")
+
+    def test_event_action_missing_status_should_return_form_card(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                chat.handle("t1a", "查询最近三天高危事件")
+                result = chat.handle("t1a", "处置第1个事件")
+                self.assertEqual(result[0]["type"], "table")
+                self.assertEqual(result[1]["type"], "form_card")
+                field_keys = {field["key"] for field in result[1]["data"]["fields"]}
+                self.assertIn("deal_status", field_keys)
+                status_field = next(field for field in result[1]["data"]["fields"] if field["key"] == "deal_status")
+                self.assertEqual(status_field["type"], "select")
+
+    def test_event_action_missing_target_should_return_table_then_form(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t1b", "标记为已处置")
+                self.assertEqual(result[0]["type"], "table")
+                self.assertEqual(result[1]["type"], "form_card")
+                target_field = next(field for field in result[1]["data"]["fields"] if field["key"] == "ref_text")
+                self.assertEqual(target_field["type"], "select")
+                self.assertTrue(target_field["options"])
+
+    def test_event_action_form_submit_should_continue_to_approval(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t1c", "标记为已处置")
+                form = result[1]
+                token = form["data"]["token"]
+                submit = chat.handle(
+                    "t1c",
+                    f'__FORM_SUBMIT__:{{"token":"{token}","intent":"event_action","params":{{"ref_text":"第1个事件","deal_status":"40"}}}}',
+                )
+                self.assertEqual(submit[0]["type"], "approval_card")
 
     def test_entity_query_can_inherit_first_event_reference(self):
         with Session(engine) as session:
@@ -252,6 +344,69 @@ class ChatConfirmFlowTest(unittest.TestCase):
                 self.assertEqual(views, ["1.1.10.110", "3.3.1.1"])
                 unmatched_row = next(row for row in rows if row["view"] == "3.3.1.1")
                 self.assertEqual(unmatched_row["status"], "未封禁")
+
+    def test_single_block_query_should_return_status_then_quick_action(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequesterSingleUnblocked()):
+                chat = ChatService(session)
+                result = chat.handle("t10", "查看100.24.53.234这个IP地址的封禁状态")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertIn("100.24.53.234", result[0]["data"]["text"])
+                self.assertEqual(result[1]["type"], "quick_actions")
+                self.assertEqual(result[1]["data"]["actions"][0]["message"], "封禁 100.24.53.234")
+
+                followup = chat.handle("t10", "封禁 100.24.53.234")
+                self.assertEqual(followup[0]["type"], "form_card")
+                view_field = next(f for f in followup[0]["data"]["fields"] if f["key"] == "views")
+                self.assertEqual(view_field["value"], "100.24.53.234")
+
+    def test_block_action_can_use_all_recent_entity_ips(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequesterEntityHistory()):
+                chat = ChatService(session)
+                chat.handle("t11", "查看近7天安全事件")
+                chat.handle("t11", "查看序号2安全事件的外网实体")
+                chat.handle("t11", "查看序号4安全事件的外网实体")
+
+                result = chat.handle("t11", "封禁上述所有IP地址")
+                self.assertEqual(result[0]["type"], "form_card")
+                view_field = next(f for f in result[0]["data"]["fields"] if f["key"] == "views")
+                self.assertEqual(view_field["value"], "3.3.1.1,1.1.10.110")
+
+    def test_event_query_should_apply_configured_semantic_rule(self):
+        with Session(engine) as session:
+            ConfigService(session).upsert_semantic_rule(
+                {
+                    "domain": "event_query",
+                    "slot_name": "severities",
+                    "phrase": "高等级",
+                    "action_type": "append",
+                    "rule_value": [3, 4],
+                    "description": "高等级=高危+严重",
+                    "enabled": True,
+                    "priority": 100,
+                    "match_mode": "contains",
+                }
+            )
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequesterSeveritySemantic()):
+                chat = ChatService(session)
+                result = chat.handle("t12", "查询昨日的高等级安全事件")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertEqual(result[1]["type"], "table")
+                rows = result[1]["data"]["rows"]
+                self.assertEqual(len(rows), 2)
+                severities = {row["incidentSeverity"] for row in rows}
+                self.assertEqual(severities, {"高危", "严重"})
+
+    def test_block_action_should_be_blocked_by_safety_rule_before_form(self):
+        with Session(engine) as session:
+            session.add(SafetyGateRule(rule_type="ip", target="20.1.1.1", description="protected"))
+            session.commit()
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t13", "封禁20.1.1.1这个IP地址")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertIn("Safety Gate 拦截", result[0]["data"]["text"])
 
 
 if __name__ == "__main__":

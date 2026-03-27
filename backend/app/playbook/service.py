@@ -25,6 +25,7 @@ from app.skills.registry import SkillRegistry
 from app.workflow.engine import PipelineNode, WorkflowEngine
 
 from .registry import PlaybookRegistry
+from .schemas import validate_playbook_params
 
 
 SEVERITY_LABEL = {0: "信息", 1: "低危", 2: "中危", 3: "高危", 4: "严重"}
@@ -61,6 +62,8 @@ BUILTIN_PROTECTED_IPS = {
     "127.0.0.1",
     "0.0.0.0",
 }
+PLAYBOOK_REQUEST_TIMEOUT = 8
+PLAYBOOK_REQUEST_RETRIES = 1
 BUILTIN_PROTECTED_CIDRS = {
     "10.0.0.0/8",
     "172.16.0.0/12",
@@ -171,7 +174,7 @@ class PlaybookService:
 
         normalized_params = self._normalize_params(template_id, params or {})
         runtime_session_id = session_id or f"playbook-{int(datetime.now().timestamp() * 1000)}"
-        self._validate_input(template_id, normalized_params, runtime_session_id)
+        normalized_params = self._validate_input(template_id, normalized_params, runtime_session_id)
 
         initial_context = {
             "template_id": template_id,
@@ -637,11 +640,19 @@ class PlaybookService:
             mode = str(normalized.get("mode") or "analyze").strip().lower()
             normalized["mode"] = mode if mode in {"analyze", "block_ip"} else "analyze"
             normalized["window_days"] = max(1, min(30, _to_int(normalized.get("window_days"), 7)))
+            if "incident_uuid" in normalized:
+                normalized["incident_uuid"] = str(normalized.get("incident_uuid") or "").strip() or None
             if "event_index" in normalized:
                 normalized["event_index"] = _to_int(normalized.get("event_index"), 0)
             if "event_indexes" in normalized and isinstance(normalized["event_indexes"], list):
                 normalized["event_indexes"] = [
                     _to_int(item, 0) for item in normalized["event_indexes"] if _to_int(item, 0) > 0
+                ]
+            if isinstance(normalized.get("event_indexes"), str):
+                normalized["event_indexes"] = [
+                    _to_int(item, 0)
+                    for item in re.split(r"[,\s，]+", normalized["event_indexes"])
+                    if _to_int(item, 0) > 0
                 ]
             if isinstance(normalized.get("incident_uuids"), str):
                 normalized["incident_uuids"] = [
@@ -649,6 +660,8 @@ class PlaybookService:
                     for token in normalized["incident_uuids"].split(",")
                     if token and token.strip()
                 ]
+            if "ip" in normalized:
+                normalized["ip"] = str(normalized.get("ip") or "").strip() or None
             if isinstance(normalized.get("ips"), str):
                 normalized["ips"] = [
                     token.strip()
@@ -659,9 +672,16 @@ class PlaybookService:
                 normalized["ips"] = _dedup_keep_order(
                     [str(token).strip() for token in normalized["ips"] if str(token).strip()]
                 )
+            if "session_id" in normalized:
+                normalized["session_id"] = str(normalized.get("session_id") or "").strip() or None
 
         if template_id == "threat_hunting":
-            normalized["window_days"] = 30
+            normalized["ip"] = str(normalized.get("ip") or "").strip()
+            normalized["window_days"] = max(1, min(365, _to_int(normalized.get("window_days"), 30)))
+            start_ts = normalized.get("startTimestamp")
+            end_ts = normalized.get("endTimestamp")
+            normalized["startTimestamp"] = _to_int(start_ts, None) if start_ts not in (None, "") else None
+            normalized["endTimestamp"] = _to_int(end_ts, None) if end_ts not in (None, "") else None
             normalized["max_scan"] = max(200, min(10000, _to_int(normalized.get("max_scan"), 10000)))
             normalized["evidence_limit"] = max(1, min(20, _to_int(normalized.get("evidence_limit"), 20)))
             normalized["adaptive_port_topn"] = max(1, min(20, _to_int(normalized.get("adaptive_port_topn"), 5)))
@@ -694,31 +714,13 @@ class PlaybookService:
                         normalized["asset_name"] = row.asset_name
         return normalized
 
-    def _validate_input(self, template_id: str, params: dict[str, Any], runtime_session_id: str) -> None:
-        _ = runtime_session_id
-        if template_id == "alert_triage":
-            has_uuid = bool(params.get("incident_uuid"))
-            has_uuid_list = bool(params.get("incident_uuids"))
-            has_index = bool(params.get("event_index")) or bool(params.get("event_indexes"))
-            has_ip = bool(params.get("ip"))
-            has_ips = bool(params.get("ips"))
-            mode = params.get("mode", "analyze")
-            if mode == "analyze" and not (has_uuid or has_uuid_list or has_index):
-                raise ValueError("alert_triage 缺少 incident_uuid 或 event_index 参数。")
-            if mode == "block_ip" and not (has_ip or has_ips or has_uuid or has_uuid_list or has_index):
-                raise ValueError("alert_triage(block_ip) 缺少 ip/ips 或事件定位参数。")
-            return
-
-        if template_id == "threat_hunting" and not params.get("ip"):
-            raise ValueError("threat_hunting 缺少必填参数 ip。")
-        if template_id == "asset_guard":
-            asset_ip = str(params.get("asset_ip") or "").strip()
-            if not asset_ip:
-                raise ValueError("asset_guard 缺少必填参数 asset_ip。")
-            try:
-                ipaddress.ip_address(asset_ip)
-            except ValueError as exc:
-                raise ValueError("asset_guard 参数 asset_ip 格式不合法。") from exc
+    def _validate_input(self, template_id: str, params: dict[str, Any], runtime_session_id: str) -> dict[str, Any]:
+        if not runtime_session_id or not str(runtime_session_id).strip():
+            raise ValueError("session_id 不能为空。")
+        try:
+            return validate_playbook_params(template_id, params)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
     def _initial_node_status(self, template_id: str, mode: str | None) -> dict[str, Any]:
         if template_id == "routine_check":
@@ -1002,7 +1004,13 @@ class PlaybookService:
             "endTimestamp": end_ts,
         }
         payload.update(extra_filters or {})
-        resp = requester.request("POST", "/api/xdr/v1/analysislog/networksecurity/count", json_body=payload)
+        resp = requester.request(
+            "POST",
+            "/api/xdr/v1/analysislog/networksecurity/count",
+            json_body=payload,
+            timeout=PLAYBOOK_REQUEST_TIMEOUT,
+            max_retries=PLAYBOOK_REQUEST_RETRIES,
+        )
         if resp.get("code") != "Success":
             return {
                 "total": 0,
@@ -1119,7 +1127,7 @@ class PlaybookService:
         *,
         days: int = 7,
         end_ts: int | None = None,
-    ) -> tuple[list[str], list[int]]:
+    ) -> tuple[list[str], list[int | None], list[str]]:
         day_count = max(2, min(30, _to_int(days, 7)))
         end_timestamp = _to_int(end_ts, to_ts(utc_now()))
         end_dt = datetime.fromtimestamp(end_timestamp)
@@ -1134,7 +1142,8 @@ class PlaybookService:
             labels.append(day_start.strftime("%m-%d"))
             ranges.append((day_start_ts, day_end_ts))
 
-        values: list[int] = [0 for _ in ranges]
+        values: list[int | None] = [None for _ in ranges]
+        errors: list[str] = []
         worker_count = max(1, min(6, len(ranges)))
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             fut_map = {
@@ -1145,10 +1154,15 @@ class PlaybookService:
                 idx = fut_map[fut]
                 try:
                     counted = fut.result()
-                    values[idx] = max(0, _to_int(counted.get("total"), 0))
-                except Exception:
-                    values[idx] = 0
-        return labels, values
+                    if counted.get("ok"):
+                        values[idx] = max(0, _to_int(counted.get("total"), 0))
+                    else:
+                        errors.append(
+                            f"{labels[idx]} 日志趋势统计失败: {counted.get('error') or '日志计数失败'}"
+                        )
+                except Exception as exc:
+                    errors.append(f"{labels[idx]} 日志趋势统计异常: {exc}")
+        return labels, values, errors
 
     @staticmethod
     def _normalize_event_row(item: dict[str, Any], index: int = 0) -> dict[str, Any]:
@@ -1640,11 +1654,16 @@ class PlaybookService:
             end_ts = to_ts(utc_now())
             start_ts = end_ts - params.get("window_hours", 24) * 3600
             counted = self._count_logs(requester, start_ts=start_ts, end_ts=end_ts)
+            warnings: list[str] = []
+            if not counted.get("ok"):
+                warnings.append(f"安全早报日志统计失败，已跳过日志总量统计：{counted.get('error')}")
             return {
-                "log_total_24h": counted["total"],
+                "log_total_24h": counted["total"] if counted.get("ok") else None,
                 "startTimestamp": start_ts,
                 "endTimestamp": end_ts,
                 "error": counted["error"],
+                "available": bool(counted.get("ok")),
+                "warnings": warnings,
                 "source": "POST /api/xdr/v1/analysislog/networksecurity/count",
             }
 
@@ -1660,11 +1679,20 @@ class PlaybookService:
                 "sort": "endTime:desc,severity:desc",
                 "timeField": "endTime",
             }
-            resp = requester.request("POST", "/api/xdr/v1/incidents/list", json_body=req)
+            resp = requester.request(
+                "POST",
+                "/api/xdr/v1/incidents/list",
+                json_body=req,
+                timeout=PLAYBOOK_REQUEST_TIMEOUT,
+                max_retries=PLAYBOOK_REQUEST_RETRIES,
+            )
+            warnings: list[str] = []
+            if resp.get("code") != "Success":
+                warnings.append(f"安全早报高危事件查询失败，已跳过事件列表：{resp.get('message') or '事件查询失败'}")
             data = resp.get("data", {}) if resp.get("code") == "Success" else {}
             items = data.get("item", []) or []
             rows = [self._normalize_event_row(item, idx) for idx, item in enumerate(items, start=1)]
-            total_count = _to_int(_pick(data, "total", "count", "totalCount"), len(rows))
+            total_count = _to_int(_pick(data, "total", "count", "totalCount"), len(rows)) if resp.get("code") == "Success" else None
             uuids = [row["uuId"] for row in rows if row.get("uuId")]
             if uuids:
                 context_manager.store_index_mapping(runtime_context["session_id"], "events", uuids)
@@ -1676,6 +1704,8 @@ class PlaybookService:
                 "high_events": rows,
                 "high_events_total": total_count,
                 "error": None if resp.get("code") == "Success" else str(resp.get("message") or "事件查询失败"),
+                "available": resp.get("code") == "Success",
+                "warnings": warnings,
                 "source": "POST /api/xdr/v1/incidents/list",
                 "request": req,
             }
@@ -1689,12 +1719,22 @@ class PlaybookService:
                 uid = row.get("uuId")
                 if not uid:
                     return {}
-                proof_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/proof")
+                proof_resp = requester.request(
+                    "GET",
+                    f"/api/xdr/v1/incidents/{uid}/proof",
+                    timeout=PLAYBOOK_REQUEST_TIMEOUT,
+                    max_retries=PLAYBOOK_REQUEST_RETRIES,
+                )
                 proof_data = {}
                 if proof_resp.get("code") == "Success":
                     proof_data = _pick_first_dict(proof_resp.get("data"))
 
-                entity_resp = requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
+                entity_resp = requester.request(
+                    "GET",
+                    f"/api/xdr/v1/incidents/{uid}/entities/ip",
+                    timeout=PLAYBOOK_REQUEST_TIMEOUT,
+                    max_retries=PLAYBOOK_REQUEST_RETRIES,
+                )
                 entities, _ = extract_entity_items_from_response(entity_resp)
                 entity_ips = [item.get("ip") for item in entities if item.get("ip")]
                 entity_ips = _dedup_keep_order(entity_ips)
@@ -1738,17 +1778,30 @@ class PlaybookService:
             node1 = ctx["nodes"]["node_1_log_count_24h"]
             node2 = ctx["nodes"]["node_2_unhandled_high_events_24h"]
             node3 = ctx["nodes"]["node_3_sample_detail_parallel"]
-            high_total = _to_int(node2.get("high_events_total"), len(node2.get("high_events", [])))
+            log_total = node1.get("log_total_24h")
+            high_total = node2.get("high_events_total")
+            log_total_text = str(log_total) if log_total is not None else "暂不可用"
+            high_total_text = str(high_total) if high_total is not None else "暂不可用"
+            if not node1.get("available") or not node2.get("available"):
+                briefing = (
+                    "今日安全早报存在数据源降级，已基于当前可用信息生成结果。"
+                    "请优先检查 XDR 连接状态、网关连通性和接口权限后重试。"
+                )
+                accurate_overview = (
+                    f"总体态势：今日安全日志总量 {log_total_text}，"
+                    f"未处置高危及严重级别安全事件 {high_total_text}。"
+                )
+                return {"briefing": briefing, "accurate_overview": accurate_overview}
             fallback = (
-                f"总体态势：过去24小时网络安全日志总量 {node1.get('log_total_24h', 0)}，"
-                f"未处置高危事件 {high_total} 条。\n"
+                f"总体态势：过去24小时网络安全日志总量 {log_total_text}，"
+                f"未处置高危事件 {high_total_text} 条。\n"
                 "关键风险：已抽样高危事件证据，存在外部实体关联，需优先处理前3条告警。\n"
                 "建议动作：先执行“深度研判前3条事件”，再对首个高风险IP进行90天活动轨迹分析。"
             )
             prompt = (
                 "你是企业SOC值班专家，请根据输入生成“今日安全早报”，要求三段结构：总体态势、关键风险、建议动作。"
-                f"\n日志总量: {node1.get('log_total_24h', 0)}"
-                f"\n未处置高危事件总数: {high_total}"
+                f"\n日志总量: {log_total_text}"
+                f"\n未处置高危事件总数: {high_total_text}"
                 f"\n未处置高危事件样本: {json.dumps(node2.get('high_events', [])[:5], ensure_ascii=False)}"
                 f"\n样本举证: {json.dumps(node3.get('sample_evidence', [])[:3], ensure_ascii=False)}"
             )
@@ -1758,8 +1811,8 @@ class PlaybookService:
                 fallback=fallback,
             )
             accurate_overview = (
-                f"总体态势：今日共产生安全日志 {node1.get('log_total_24h', 0)} 条，"
-                f"未处置高危及严重级别安全事件 {high_total} 起。"
+                f"总体态势：今日共产生安全日志 {log_total_text}，"
+                f"未处置高危及严重级别安全事件 {high_total_text}。"
             )
             return {"briefing": briefing, "accurate_overview": accurate_overview}
 
@@ -1797,7 +1850,15 @@ class PlaybookService:
                 f"{accurate_overview}\n{llm_summary}".strip() if accurate_overview else llm_summary
             )
             rows = node2.get("high_events", [])
-            high_total = _to_int(node2.get("high_events_total"), len(rows))
+            high_total = node2.get("high_events_total")
+            high_total_text = str(high_total) if high_total is not None else "暂不可用"
+            log_total = node1.get("log_total_24h")
+            log_total_text = f"{log_total} 条" if log_total is not None else "暂不可用"
+            warnings = [
+                str(item).strip()
+                for item in (node1.get("warnings", []) + node2.get("warnings", []) + node3.get("errors", []))
+                if str(item).strip()
+            ]
             protected_ips, protected_cidrs = self._load_protected_ip_filters()
             block_targets = self._build_routine_block_targets(
                 requester,
@@ -1805,11 +1866,12 @@ class PlaybookService:
                 protected_ips=protected_ips,
                 protected_cidrs=protected_cidrs,
             )
-            labels, points = self._build_daily_log_trend_series(
+            labels, points, trend_errors = self._build_daily_log_trend_series(
                 requester,
                 days=7,
                 end_ts=_to_int(node1.get("endTimestamp"), to_ts(utc_now())),
             )
+            warnings.extend(trend_errors)
             chart_option = {
                 "tooltip": {"trigger": "axis"},
                 "xAxis": {"type": "category", "data": labels},
@@ -1819,11 +1881,6 @@ class PlaybookService:
 
             cards = [
                 text_payload(summary, title="今日安全早报"),
-                echarts_payload(
-                    title="近7天日志总量趋势（按天统计）",
-                    option=chart_option,
-                    summary=f"过去24小时日志总量：{node1.get('log_total_24h', 0)}",
-                ),
                 table_payload(
                     title="未处置高危事件（24h）",
                     columns=[
@@ -1839,10 +1896,36 @@ class PlaybookService:
                     namespace="events",
                 ),
                 text_payload(
-                    f"24小时未处置高危/严重事件总数：**{high_total}**。表格展示最新样本明细。",
+                    f"24小时未处置高危/严重事件总数：**{high_total_text}**。表格展示最新样本明细。",
                     title="统计口径说明",
                 ),
             ]
+            if any(point is not None for point in points):
+                cards.insert(
+                    1,
+                    echarts_payload(
+                        title="近7天日志总量趋势（按天统计）",
+                        option=chart_option,
+                        summary=f"过去24小时日志总量：{log_total_text}",
+                    ),
+                )
+            else:
+                cards.insert(
+                    1,
+                    text_payload(
+                        "近7天日志趋势暂不可用，本次未从 XDR 成功获取到趋势统计数据。",
+                        title="日志趋势说明",
+                    ),
+                )
+            if warnings:
+                cards.insert(
+                    1,
+                    text_payload(
+                        "以下数据在本次执行中获取失败，报告已基于可用信息降级生成：\n"
+                        + "\n".join(f"- {item}" for item in warnings[:8]),
+                        title="数据源提醒",
+                    ),
+                )
 
             top_uuids = [row.get("uuId") for row in rows[:3] if row.get("uuId")]
             first_ip = None
@@ -2913,7 +2996,13 @@ class PlaybookService:
             "endTimestamp": end_ts,
         }
         req.update(extra_filters or {})
-        resp = requester.request("POST", "/api/xdr/v1/incidents/list", json_body=req)
+        resp = requester.request(
+            "POST",
+            "/api/xdr/v1/incidents/list",
+            json_body=req,
+            timeout=PLAYBOOK_REQUEST_TIMEOUT,
+            max_retries=PLAYBOOK_REQUEST_RETRIES,
+        )
         if resp.get("code") != "Success":
             return {
                 "rows": [],
@@ -3603,7 +3692,11 @@ class PlaybookService:
         def _window() -> tuple[int, int]:
             now_ts = to_ts(utc_now())
             end_ts = _to_int(params.get("endTimestamp"), now_ts)
-            start_ts = end_ts - _to_int(params.get("window_days"), 30) * 86400
+            explicit_start = params.get("startTimestamp")
+            if explicit_start is not None:
+                start_ts = _to_int(explicit_start, end_ts - _to_int(params.get("window_days"), 30) * 86400)
+            else:
+                start_ts = end_ts - _to_int(params.get("window_days"), 30) * 86400
             return start_ts, end_ts
 
         def _merge_alert_rows(rows_by_side: list[tuple[str, list[dict[str, Any]]]]) -> list[dict[str, Any]]:

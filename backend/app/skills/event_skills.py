@@ -4,17 +4,23 @@ from datetime import datetime
 import re
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.core.validation import (
+    clean_optional_text,
+    validate_incident_uuid,
+    validate_incident_uuid_list,
+    validate_time_range,
+)
 from app.core.exceptions import ConfirmationRequiredException, MissingParameterException, ValidationGuardException
-from app.core.payload import table_payload, text_payload
+from app.core.payload import form_payload, table_payload, text_payload
 
 from .base import BaseSkill
 
 
 SEVERITY_LABEL = {0: "信息", 1: "低危", 2: "中危", 3: "高危", 4: "严重"}
 DEAL_STATUS_LABEL = {0: "待处置", 10: "处置中", 40: "已处置", 50: "已挂起", 60: "接受风险", 70: "已遏制"}
-EVENT_UUID_PATTERN = re.compile(r"incident-[A-Za-z0-9-]{6,}")
+EVENT_UUID_SEARCH_PATTERN = re.compile(r"incident-[A-Za-z0-9-]{6,}")
 
 
 def _pick(item: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -42,7 +48,7 @@ def _to_int(value: Any) -> int | None:
 def extract_event_uuids_from_text(text: str) -> list[str]:
     if not text:
         return []
-    matches = EVENT_UUID_PATTERN.findall(text)
+    matches = EVENT_UUID_SEARCH_PATTERN.findall(text)
     if not matches:
         return []
     # keep order, remove duplicates
@@ -104,12 +110,19 @@ def _looks_like_event_reference(text: str) -> bool:
 def _bootstrap_event_indices(skill: BaseSkill, session_id: str, utterance: str) -> list[str]:
     if not _looks_like_event_reference(utterance):
         return []
+    items = _load_recent_event_candidates(skill, session_id)
+    uuids = [_pick(item, "uuId", "uuid", "incidentId") for item in items]
+    uuids = [uid for uid in uuids if uid]
+    return skill.context_manager.resolve_indices(session_id, "events", utterance) if uuids else []
+
+
+def _load_recent_event_candidates(skill: BaseSkill, session_id: str, limit: int = 10) -> list[dict[str, Any]]:
     response = skill.requester.request(
         "POST",
         "/api/xdr/v1/incidents/list",
         json_body={
             "page": 1,
-            "pageSize": 50,
+            "pageSize": max(5, min(limit, 50)),
             "sort": "endTime:desc,severity:desc",
             "timeField": "endTime",
         },
@@ -121,24 +134,118 @@ def _bootstrap_event_indices(skill: BaseSkill, session_id: str, utterance: str) 
         return []
     skill.context_manager.store_index_mapping(session_id, "events", uuids)
     skill.context_manager.update_params(session_id, {"last_event_uuid": uuids[0], "last_event_uuids": uuids})
-    return skill.context_manager.resolve_indices(session_id, "events", utterance)
+    return items
+
+
+def _build_event_candidate_rows(items: list[dict[str, Any]], *, limit: int = 10) -> list[dict[str, Any]]:
+    rows = []
+    for idx, item in enumerate(items[:limit], start=1):
+        severity = _to_int(_pick(item, "incidentSeverity", "severity"))
+        status = _to_int(_pick(item, "dealStatus", "status"))
+        rows.append(
+            {
+                "index": idx,
+                "uuId": _pick(item, "uuId", "uuid", "incidentId"),
+                "name": _pick(item, "name", "incidentName", "title", default="未知事件"),
+                "incidentSeverity": SEVERITY_LABEL.get(severity, "未知"),
+                "dealStatus": DEAL_STATUS_LABEL.get(status, "未知"),
+                "hostIp": _pick(item, "hostIp", "srcIp", "assetIp", default="-"),
+                "endTime": _format_ts(_pick(item, "endTime", "latestTime", "occurTime", default=0)),
+            }
+        )
+    return rows
 
 
 class EventQueryInput(BaseModel):
     startTimestamp: int | None = None
     endTimestamp: int | None = None
     time_text: str | None = None
-    page: int = 1
+    page: int = Field(default=1, ge=1)
     page_size: int = Field(default=10, ge=5, le=200)
     severities: list[int] | None = None
     deal_status: list[int] | None = None
     host_branch_ids: list[int] | None = None
     platform_host_branch_ids: list[str] | None = None
 
+    @field_validator("severities")
+    @classmethod
+    def validate_severities(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        normalized: list[int] = []
+        for item in value:
+            if item not in SEVERITY_LABEL:
+                raise ValueError("severities 仅支持 0-4。")
+            if item not in normalized:
+                normalized.append(item)
+        return normalized
+
+    @field_validator("deal_status")
+    @classmethod
+    def validate_deal_status(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        normalized: list[int] = []
+        for item in value:
+            if item not in DEAL_STATUS_LABEL:
+                raise ValueError("deal_status 存在非法状态。")
+            if item not in normalized:
+                normalized.append(item)
+        return normalized
+
+    @field_validator("host_branch_ids")
+    @classmethod
+    def validate_host_branch_ids(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return None
+        normalized: list[int] = []
+        for item in value:
+            if item <= 0:
+                raise ValueError("host_branch_ids 必须大于 0。")
+            if item not in normalized:
+                normalized.append(item)
+        return normalized
+
+    @field_validator("platform_host_branch_ids")
+    @classmethod
+    def validate_platform_host_branch_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized: list[str] = []
+        for item in value:
+            text = str(item).strip()
+            if not text:
+                continue
+            if text not in normalized:
+                normalized.append(text)
+        return normalized or None
+
+    @field_validator("time_text", mode="before")
+    @classmethod
+    def normalize_time_text(cls, value: str | None) -> str | None:
+        return clean_optional_text(value)
+
+    @model_validator(mode="after")
+    def validate_query_time_range(self) -> "EventQueryInput":
+        validate_time_range(self.startTimestamp, self.endTimestamp)
+        return self
+
 
 class EventDetailInput(BaseModel):
     uuids: list[str] | None = None
     ref_text: str | None = None
+
+    @field_validator("uuids")
+    @classmethod
+    def validate_uuids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return validate_incident_uuid_list(value, field_name="uuids", allow_empty=False)
+
+    @field_validator("ref_text", mode="before")
+    @classmethod
+    def normalize_ref_text(cls, value: str | None) -> str | None:
+        return clean_optional_text(value)
 
 
 class EventActionInput(BaseModel):
@@ -147,6 +254,26 @@ class EventActionInput(BaseModel):
     deal_status: int
     deal_comment: str = "由Flux自动处置"
     confirm: bool = False
+
+    @field_validator("uuids")
+    @classmethod
+    def validate_action_uuids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return validate_incident_uuid_list(value, field_name="uuids", allow_empty=False)
+
+    @field_validator("ref_text", mode="before")
+    @classmethod
+    def normalize_action_ref_text(cls, value: str | None) -> str | None:
+        return clean_optional_text(value)
+
+    @field_validator("deal_comment")
+    @classmethod
+    def validate_comment(cls, value: str) -> str:
+        text = str(value).strip()
+        if not text:
+            raise ValueError("deal_comment 不能为空。")
+        return text
 
     @field_validator("deal_status")
     @classmethod
@@ -316,9 +443,120 @@ class EventDetailSkill(BaseSkill):
 class EventActionSkill(BaseSkill):
     name = "EventActionSkill"
     __init_schema__ = EventActionInput
-    required_fields = ["deal_status"]
     requires_confirmation = True
     apply_safety_gate = True
+
+    def _build_param_form(
+        self,
+        session_id: str,
+        prepared: dict[str, Any],
+        *,
+        missing_fields: list[str],
+    ) -> list[dict[str, Any]]:
+        token = f"event-action-form-{session_id}"
+        self.context_manager.save_pending_form(
+            session_id,
+            {
+                "token": token,
+                "intent": "event_action",
+                "params": {k: v for k, v in prepared.items() if k != "confirm"},
+            },
+        )
+
+        items = _load_recent_event_candidates(self, session_id, limit=10)
+        payloads: list[dict[str, Any]] = []
+        reason = f"请先补充参数后再执行事件处置，当前缺少：{'、'.join(missing_fields)}。"
+
+        event_options = [
+            {
+                "label": f"序号{row['index']} · {row['name']} · {row['hostIp']}",
+                "value": f"第{row['index']}个事件",
+            }
+            for row in _build_event_candidate_rows(items)
+        ]
+        if event_options:
+            payloads.append(
+                table_payload(
+                    title="可选事件列表",
+                    columns=[
+                        {"key": "index", "label": "序号"},
+                        {"key": "uuId", "label": "事件ID"},
+                        {"key": "name", "label": "事件名称"},
+                        {"key": "incidentSeverity", "label": "等级"},
+                        {"key": "dealStatus", "label": "状态"},
+                        {"key": "hostIp", "label": "主机IP"},
+                        {"key": "endTime", "label": "最近发生"},
+                    ],
+                    rows=_build_event_candidate_rows(items),
+                    namespace="events",
+                )
+            )
+
+        fields: list[dict[str, Any]] = []
+        if "事件" in missing_fields:
+            if event_options:
+                fields.append(
+                    {
+                        "key": "ref_text",
+                        "label": "选择目标事件",
+                        "type": "select",
+                        "required": True,
+                        "value": prepared.get("ref_text") or event_options[0]["value"],
+                        "options": event_options,
+                    }
+                )
+                reason += " 已为你列出最近事件，可直接按序号选择。"
+            else:
+                fields.append(
+                    {
+                        "key": "ref_text",
+                        "label": "目标事件",
+                        "type": "text",
+                        "required": True,
+                        "value": prepared.get("ref_text") or "",
+                        "placeholder": "例如 第1个事件 或 incident-xxx",
+                    }
+                )
+        if "处置状态" in missing_fields:
+            fields.append(
+                {
+                    "key": "deal_status",
+                    "label": "处置状态",
+                    "type": "select",
+                    "required": True,
+                    "value": str(prepared.get("deal_status") or 40),
+                    "options": [
+                        {"label": "待处置", "value": "0"},
+                        {"label": "处置中", "value": "10"},
+                        {"label": "已处置", "value": "40"},
+                        {"label": "已挂起", "value": "50"},
+                        {"label": "接受风险", "value": "60"},
+                        {"label": "已遏制", "value": "70"},
+                    ],
+                }
+            )
+        fields.append(
+            {
+                "key": "deal_comment",
+                "label": "备注",
+                "type": "text",
+                "required": False,
+                "value": prepared.get("deal_comment") or "由Flux自动处置",
+                "placeholder": "可留空使用默认备注",
+            }
+        )
+
+        payloads.append(
+            form_payload(
+                title="事件处置参数确认",
+                description=reason,
+                token=token,
+                intent="event_action",
+                fields=fields,
+                submit_label="确认并继续",
+            )
+        )
+        return payloads
 
     def execute(self, session_id: str, params: dict[str, Any], user_text: str) -> list[dict[str, Any]]:
         prepared = dict(params)
@@ -333,6 +571,19 @@ class EventActionSkill(BaseSkill):
                 refs = _bootstrap_event_indices(self, session_id, ref_text)
             if refs:
                 prepared["uuids"] = refs
+
+        missing_fields: list[str] = []
+        if not prepared.get("uuids"):
+            missing_fields.append("事件")
+        if prepared.get("deal_status") in (None, ""):
+            missing_fields.append("处置状态")
+        if missing_fields:
+            raise MissingParameterException(
+                skill_name=self.name,
+                missing_fields=missing_fields,
+                question=f"为了执行 {self.name}，还缺少参数：{'、'.join(missing_fields)}。请补充后我继续执行。",
+                payloads=self._build_param_form(session_id, prepared, missing_fields=missing_fields),
+            )
 
         model = self.validate_and_prepare(session_id, prepared)
         if not model.uuids:

@@ -7,6 +7,17 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _default_db_path() -> str:
+    project_root = Path(__file__).resolve().parents[3]
+    preferred = project_root / "data" / "flux.db"
+    legacy = project_root / "flux.db"
+    if preferred.exists():
+        return str(preferred)
+    if legacy.exists():
+        return str(legacy)
+    return str(preferred)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -16,7 +27,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_reload: bool = False
 
-    db_path: str = "flux.db"
+    db_path: str = Field(default_factory=_default_db_path)
 
     default_llm_provider: str = "openai"
     default_llm_model: str = "gpt-4o-mini"

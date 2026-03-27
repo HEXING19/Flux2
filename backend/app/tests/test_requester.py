@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
+import requests
+
 from app.core.requester import APIRequester
 from app.core.signature import Signature
 
@@ -31,6 +33,16 @@ class FakeSession:
         if not self._responses:
             raise RuntimeError("no fake response configured")
         return self._responses.pop(0)
+
+
+class ErrorSession:
+    def __init__(self, exc: Exception):
+        self.exc = exc
+        self.verify = False
+
+    def send(self, prepared, timeout=15):
+        _ = (prepared, timeout)
+        raise self.exc
 
 
 class RequesterTest(unittest.TestCase):
@@ -94,6 +106,22 @@ class RequesterTest(unittest.TestCase):
 
         self.assertEqual(result.get("code"), "Failed")
         self.assertIn("认证失败或权限不足", result.get("message", ""))
+        self.assertIn("request_id=", result.get("message", ""))
+
+    def test_ssl_error_should_return_actionable_transport_message(self):
+        requester = APIRequester(
+            base_url="https://example.local",
+            auth_code=None,
+            access_key=None,
+            secret_key=None,
+            verify_ssl=False,
+        )
+        requester.session = ErrorSession(requests.exceptions.SSLError("EOF occurred in violation of protocol"))
+
+        result = requester.request("GET", "/api/xdr/v1/device/blockdevice/list", max_retries=1)
+
+        self.assertEqual(result.get("code"), "Failed")
+        self.assertIn("建立安全连接失败", result.get("message", ""))
         self.assertIn("request_id=", result.get("message", ""))
 
 if __name__ == "__main__":

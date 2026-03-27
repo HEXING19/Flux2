@@ -107,14 +107,27 @@ class APIRequester:
                 }
             except Exception as exc:
                 if attempt == max_retries:
+                    detail = _format_transport_exception(exc)
                     return {
                         "code": "Failed",
-                        "message": f"请求失败: {exc} (request_id={request_id})",
+                        "message": f"请求失败: {detail} (request_id={request_id})",
                         "data": {},
                     }
                 time.sleep(min(1.5 * attempt, 4.0))
 
         return {"code": "Failed", "message": "未知请求错误", "data": {}}
+
+
+def _format_transport_exception(exc: Exception) -> str:
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "与 XDR 服务建立安全连接失败，请检查目标地址、证书配置或网关 TLS 设置。"
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return "连接 XDR 服务超时，请检查服务地址和网络连通性。"
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        return "XDR 服务响应超时，请稍后重试。"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "连接 XDR 服务失败，请检查服务地址、端口和网络连通性。"
+    return str(exc)
 
 
 requester_singleton: APIRequester | None = None
