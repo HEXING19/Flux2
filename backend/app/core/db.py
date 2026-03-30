@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 from sqlmodel import Session, SQLModel, create_engine
 
 from .settings import settings
 
+
+def ensure_sqlite_parent_dir() -> None:
+    db_path = Path(settings.db_path).expanduser()
+    if str(db_path) == ":memory:":
+        return
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+ensure_sqlite_parent_dir()
 
 engine = create_engine(
     settings.sqlite_url,
@@ -16,6 +26,7 @@ engine = create_engine(
 
 
 def init_db() -> None:
+    ensure_sqlite_parent_dir()
     SQLModel.metadata.create_all(engine)
 
 
