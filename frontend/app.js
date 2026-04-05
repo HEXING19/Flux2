@@ -254,6 +254,215 @@ async function api(path, options = {}) {
   return data;
 }
 
+const CHART_TEXT_PRIMARY = '#e7eefc';
+const CHART_TEXT_SECONDARY = '#b7c6df';
+const CHART_GRID_LINE = 'rgba(151, 172, 211, 0.24)';
+const CHART_AXIS_LINE = 'rgba(143, 164, 201, 0.38)';
+const CHART_TOOLTIP_BG = 'rgba(9, 16, 34, 0.94)';
+
+function cloneChartOption(option) {
+  if (!option || typeof option !== 'object') return {};
+  if (typeof structuredClone === 'function') return structuredClone(option);
+  return JSON.parse(JSON.stringify(option));
+}
+
+function themeChartTitle(title) {
+  if (Array.isArray(title)) return title.map((item) => themeChartTitle(item));
+  if (!title || typeof title !== 'object') return title;
+  return {
+    ...title,
+    textStyle: {
+      color: CHART_TEXT_PRIMARY,
+      fontWeight: 700,
+      ...(title.textStyle || {}),
+    },
+    subtextStyle: {
+      color: CHART_TEXT_SECONDARY,
+      ...(title.subtextStyle || {}),
+    },
+  };
+}
+
+function themeChartLegend(legend) {
+  if (Array.isArray(legend)) return legend.map((item) => themeChartLegend(item));
+  if (!legend || typeof legend !== 'object') return legend;
+  return {
+    ...legend,
+    textStyle: {
+      color: CHART_TEXT_SECONDARY,
+      ...(legend.textStyle || {}),
+    },
+  };
+}
+
+function themeChartAxis(axis, axisType = 'value') {
+  if (Array.isArray(axis)) return axis.map((item) => themeChartAxis(item, axisType));
+  if (!axis || typeof axis !== 'object') return axis;
+  const themed = {
+    ...axis,
+    axisLabel: {
+      color: CHART_TEXT_SECONDARY,
+      ...(axis.axisLabel || {}),
+    },
+    axisLine: {
+      ...(axis.axisLine || {}),
+      lineStyle: {
+        color: CHART_AXIS_LINE,
+        ...((axis.axisLine && axis.axisLine.lineStyle) || {}),
+      },
+    },
+    nameTextStyle: {
+      color: CHART_TEXT_SECONDARY,
+      ...(axis.nameTextStyle || {}),
+    },
+    axisPointer: {
+      ...((axis.axisPointer && typeof axis.axisPointer === 'object') ? axis.axisPointer : {}),
+      label: {
+        color: CHART_TEXT_PRIMARY,
+        backgroundColor: 'rgba(33, 60, 112, 0.92)',
+        ...(((axis.axisPointer && axis.axisPointer.label) || {})),
+      },
+    },
+  };
+  if (axisType === 'category') return themed;
+  return {
+    ...themed,
+    splitLine: {
+      ...(axis.splitLine || {}),
+      lineStyle: {
+        color: CHART_GRID_LINE,
+        ...((axis.splitLine && axis.splitLine.lineStyle) || {}),
+      },
+    },
+  };
+}
+
+function themeChartSeries(series) {
+  if (!Array.isArray(series)) return [];
+  return series.map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    if (String(item.type || '').toLowerCase() === 'pie') {
+      return {
+        ...item,
+        label: {
+          show: true,
+          color: '#f8fbff',
+          fontWeight: 700,
+          backgroundColor: 'rgba(7, 14, 30, 0.88)',
+          borderColor: 'rgba(125, 160, 226, 0.26)',
+          borderWidth: 1,
+          borderRadius: 999,
+          padding: [4, 8],
+          textBorderColor: 'rgba(3, 8, 22, 0.9)',
+          textBorderWidth: 3,
+          ...((item.label && typeof item.label === 'object') ? item.label : {}),
+        },
+        labelLine: {
+          show: true,
+          length: 16,
+          length2: 10,
+          ...((item.labelLine && typeof item.labelLine === 'object') ? item.labelLine : {}),
+          lineStyle: {
+            color: '#93b5ee',
+            width: 1.5,
+            ...(((item.labelLine || {}).lineStyle) || {}),
+          },
+        },
+        emphasis: {
+          ...((item.emphasis && typeof item.emphasis === 'object') ? item.emphasis : {}),
+          label: {
+            color: '#ffffff',
+            fontWeight: 800,
+            backgroundColor: 'rgba(16, 29, 58, 0.96)',
+            borderRadius: 999,
+            padding: [5, 9],
+            ...(((item.emphasis && item.emphasis.label) || {})),
+          },
+        },
+      };
+    }
+    return {
+      ...item,
+      label: {
+        color: CHART_TEXT_PRIMARY,
+        ...((item.label && typeof item.label === 'object') ? item.label : {}),
+      },
+      emphasis: {
+        ...((item.emphasis && typeof item.emphasis === 'object') ? item.emphasis : {}),
+        label: {
+          color: CHART_TEXT_PRIMARY,
+          ...(((item.emphasis && item.emphasis.label) || {})),
+        },
+      },
+    };
+  });
+}
+
+function inferAxisKind(axis, fallback = 'value') {
+  if (Array.isArray(axis)) return axis.map((item) => inferAxisKind(item, fallback));
+  if (!axis || typeof axis !== 'object') return fallback;
+  const axisType = String(axis.type || '').trim().toLowerCase();
+  return axisType || fallback;
+}
+
+function buildReadableChartOption(option) {
+  const themed = cloneChartOption(option);
+  return {
+    ...themed,
+    backgroundColor: 'transparent',
+    textStyle: {
+      color: CHART_TEXT_PRIMARY,
+      ...(themed.textStyle || {}),
+    },
+    title: themeChartTitle(themed.title),
+    legend: themeChartLegend(themed.legend),
+    tooltip: {
+      ...((themed.tooltip && typeof themed.tooltip === 'object') ? themed.tooltip : {}),
+      backgroundColor: CHART_TOOLTIP_BG,
+      borderColor: 'rgba(94, 132, 211, 0.46)',
+      textStyle: {
+        color: CHART_TEXT_PRIMARY,
+        ...(themed.tooltip && themed.tooltip.textStyle ? themed.tooltip.textStyle : {}),
+      },
+    },
+    xAxis: Array.isArray(themed.xAxis)
+      ? themed.xAxis.map((axis, index) => themeChartAxis(axis, inferAxisKind(axis, index === 0 ? 'category' : 'value')))
+      : themeChartAxis(themed.xAxis, inferAxisKind(themed.xAxis, 'category')),
+    yAxis: Array.isArray(themed.yAxis)
+      ? themed.yAxis.map((axis, index) => themeChartAxis(axis, inferAxisKind(axis, index === 0 ? 'value' : 'category')))
+      : themeChartAxis(themed.yAxis, inferAxisKind(themed.yAxis, 'value')),
+    radar: themed.radar ? {
+      ...themed.radar,
+      axisName: {
+        color: CHART_TEXT_SECONDARY,
+        ...((themed.radar.axisName && typeof themed.radar.axisName === 'object') ? themed.radar.axisName : {}),
+      },
+      splitLine: {
+        ...(themed.radar.splitLine || {}),
+        lineStyle: {
+          color: CHART_GRID_LINE,
+          ...(((themed.radar.splitLine || {}).lineStyle || {})),
+        },
+      },
+      axisLine: {
+        ...(themed.radar.axisLine || {}),
+        lineStyle: {
+          color: CHART_AXIS_LINE,
+          ...(((themed.radar.axisLine || {}).lineStyle || {})),
+        },
+      },
+      splitArea: {
+        ...(themed.radar.splitArea || {}),
+        areaStyle: {
+          color: ['rgba(13, 23, 48, 0.22)', 'rgba(13, 23, 48, 0.08)'],
+          ...(((themed.radar.splitArea || {}).areaStyle || {})),
+        },
+      },
+    } : themed.radar,
+    series: themeChartSeries(themed.series),
+  };
+}
+
 function setHint(target, message, type = '') {
   target.textContent = message || '';
   target.classList.remove('success', 'error');
@@ -569,14 +778,16 @@ function renderPayload(payload) {
   if (payload.type === 'echarts_graph') {
     const card = cardTemplate(payload.data.title || '图表结果');
     const chart = document.createElement('div');
+    chart.className = 'chart-canvas';
     chart.style.height = '260px';
     card.appendChild(chart);
     const summary = document.createElement('p');
+    summary.className = 'chart-summary';
     summary.textContent = payload.data.summary || '';
     card.appendChild(summary);
     appendCard(card);
     const instance = echarts.init(chart);
-    instance.setOption(payload.data.option || {});
+    instance.setOption(buildReadableChartOption(payload.data.option || {}));
     window.addEventListener('resize', () => instance.resize());
     return;
   }
@@ -1110,7 +1321,7 @@ function mountDeferredCharts(container) {
   charts.forEach((chart) => {
     if (chart.__echartsInstance) return;
     const instance = echarts.init(chart);
-    instance.setOption(chart.__echartsOption || {});
+    instance.setOption(buildReadableChartOption(chart.__echartsOption || {}));
     chart.__echartsInstance = instance;
     window.addEventListener('resize', () => instance.resize());
   });
@@ -3662,9 +3873,10 @@ function createUnifiedPayloadSection(payload, index) {
   }
   if (payload?.type === 'echarts_graph') {
     const chart = document.createElement('div');
+    chart.className = 'chart-canvas';
     chart.style.height = '260px';
     chart.dataset.echartsDeferred = '1';
-    chart.__echartsOption = payload?.data?.option || {};
+    chart.__echartsOption = buildReadableChartOption(payload?.data?.option || {});
     section.appendChild(chart);
     if (payload?.data?.summary) {
       const p = document.createElement('p');

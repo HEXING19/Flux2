@@ -20,7 +20,13 @@ class FakeRequester:
                 "name": "异常横向移动告警",
                 "incidentSeverity": 3,
                 "dealStatus": 0,
+                "dealAction": "未处理",
                 "hostIp": "10.10.0.2",
+                "threatDefineName": "横向移动",
+                "gptResults": [110],
+                "incidentThreatClass": "主机风险",
+                "incidentThreatType": "SMB探测",
+                "gptResultDescription": "存在横向移动迹象。",
                 "endTime": 1739999900,
             },
             {
@@ -28,8 +34,38 @@ class FakeRequester:
                 "name": "疑似C2通信活动",
                 "incidentSeverity": 3,
                 "dealStatus": 10,
+                "dealAction": "人工研判",
                 "hostIp": "10.10.0.3",
+                "threatDefineName": "恶意外联",
+                "gptResults": [150],
+                "incidentThreatClass": "网络风险",
+                "incidentThreatType": "C2通信",
+                "gptResultDescription": "怀疑与外部控制端通信。",
                 "endTime": 1739999800,
+            },
+        ]
+        self.alerts = [
+            {
+                "uuId": "alert-real-001",
+                "name": "高危Web攻击",
+                "severity": 80,
+                "alertDealStatus": 1,
+                "direction": 2,
+                "threatClassDesc": "Web攻击",
+                "threatTypeDesc": "漏洞利用",
+                "threatSubTypeDesc": "命令执行",
+                "lastTime": 1739999700,
+            },
+            {
+                "uuId": "alert-real-002",
+                "name": "异常外联",
+                "severity": 65,
+                "alertDealStatus": 2,
+                "direction": 1,
+                "threatClassDesc": "主机风险",
+                "threatTypeDesc": "恶意外联",
+                "threatSubTypeDesc": "C2通信",
+                "lastTime": 1739999600,
             },
         ]
 
@@ -40,6 +76,8 @@ class FakeRequester:
             severity = set(payload.get("severities") or [])
             items = [row for row in self.incidents if not severity or row["incidentSeverity"] in severity]
             return {"code": "Success", "message": "成功", "data": {"item": items, "total": len(items), "page": 1, "pageSize": 10}}
+        if path == "/api/xdr/v1/alerts/list":
+            return {"code": "Success", "message": "成功", "data": {"item": list(self.alerts), "total": len(self.alerts), "page": 1, "pageSize": 10}}
         if path == "/api/xdr/v1/incidents/dealstatus":
             return {"code": "Success", "message": "成功", "data": {"total": len(payload.get("uuIds", [])), "succeededNum": 1}}
         if path.endswith("/proof"):
@@ -52,7 +90,14 @@ class FakeRequester:
                         "name": f"{uid}-detail",
                         "gptResultDescription": "测试研判",
                         "riskTag": ["测试标签"],
-                        "alertTimeLine": [],
+                        "alertTimeLine": [
+                            {
+                                "name": "突破利用",
+                                "severity": 90,
+                                "stage": "遭受攻击",
+                                "lastTime": 1739999000,
+                            }
+                        ],
                     }
                 ],
             }
@@ -200,6 +245,7 @@ class ChatConfirmFlowTest(unittest.TestCase):
         with Session(engine) as session:
             session.exec(delete(SessionState))
             session.exec(delete(SemanticRule))
+            session.exec(delete(SafetyGateRule))
             session.commit()
 
     def test_confirmable_dangerous_action(self):
@@ -407,6 +453,50 @@ class ChatConfirmFlowTest(unittest.TestCase):
                 result = chat.handle("t13", "封禁20.1.1.1这个IP地址")
                 self.assertEqual(result[0]["type"], "text")
                 self.assertIn("Safety Gate 拦截", result[0]["data"]["text"])
+
+    def test_chat_should_return_event_trend_payloads(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t14", "最近7天安全事件发生趋势")
+                self.assertEqual([payload["type"] for payload in result], ["text", "echarts_graph", "echarts_graph", "table"])
+
+    def test_chat_should_return_event_type_distribution_payloads(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t15", "最近7天安全事件类型分布")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertEqual(result[-1]["type"], "table")
+                self.assertEqual(sum(1 for payload in result if payload["type"] == "echarts_graph"), 2)
+                self.assertEqual(result[1]["data"]["title"], "事件研判结论 TopN")
+
+    def test_chat_should_return_event_disposition_summary_payloads(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t16", "最近7天安全事件处置成果")
+                self.assertEqual([payload["type"] for payload in result], ["text", "echarts_graph", "echarts_graph", "table", "table"])
+                self.assertIn("状态快照", result[0]["data"]["text"])
+
+    def test_chat_should_return_key_event_insight_payloads(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t17", "重点安全事件解读")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertEqual(result[1]["type"], "table")
+                detail_texts = [payload["data"]["text"] for payload in result if payload["type"] == "text"][1:]
+                self.assertTrue(any("GPT研判结论" in text for text in detail_texts))
+
+    def test_chat_should_return_alert_classification_summary_payloads(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t18", "最近7天安全告警分类情况")
+                self.assertEqual(result[0]["type"], "text")
+                self.assertEqual(result[-1]["type"], "table")
+                self.assertEqual(sum(1 for payload in result if payload["type"] == "echarts_graph"), 6)
 
 
 if __name__ == "__main__":

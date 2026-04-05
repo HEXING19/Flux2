@@ -20,12 +20,18 @@ def get_threatbook_key_snapshot() -> dict[str, str | bool | None]:
         row = session.exec(
             select(ThreatIntelConfig).where(ThreatIntelConfig.provider == "threatbook")
         ).first()
+        if row:
+            enabled = bool(row.enabled)
+            api_key = row.api_key
+        else:
+            enabled = None
+            api_key = None
 
-    if row:
-        if not row.enabled:
+    if enabled is not None:
+        if not enabled:
             return {"api_key": None, "source": "db", "enabled": False}
-        if row.api_key:
-            return {"api_key": row.api_key, "source": "db", "enabled": True}
+        if api_key:
+            return {"api_key": api_key, "source": "db", "enabled": True}
     if settings.threatbook_api_key:
         return {"api_key": settings.threatbook_api_key, "source": "env", "enabled": True}
     return {"api_key": None, "source": "none", "enabled": False}

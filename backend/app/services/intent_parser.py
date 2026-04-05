@@ -65,6 +65,42 @@ class IntentParser:
         if any(k in normalized for k in ["日志统计", "日志数量", "日志趋势", "网络安全日志", "日志总数", "安全日志"]):
             return ParsedIntent(intent="log_stats", params=self._parse_common_filters(normalized, intent="log_stats", semantic_rules=semantic_rules))
 
+        if self._looks_like_event_trend(normalized):
+            return ParsedIntent(
+                intent="event_trend",
+                params=self._parse_security_analytics_filters(normalized, intent="event_trend", semantic_rules=semantic_rules),
+            )
+
+        if self._looks_like_event_type_distribution(normalized):
+            return ParsedIntent(
+                intent="event_type_distribution",
+                params=self._parse_security_analytics_filters(
+                    normalized, intent="event_type_distribution", semantic_rules=semantic_rules
+                ),
+            )
+
+        if self._looks_like_event_disposition_summary(normalized):
+            return ParsedIntent(
+                intent="event_disposition_summary",
+                params=self._parse_security_analytics_filters(
+                    normalized, intent="event_disposition_summary", semantic_rules=semantic_rules
+                ),
+            )
+
+        if self._looks_like_key_event_insight(normalized):
+            return ParsedIntent(
+                intent="key_event_insight",
+                params=self._parse_security_analytics_filters(normalized, intent="key_event_insight", semantic_rules=semantic_rules),
+            )
+
+        if self._looks_like_alert_classification_summary(normalized):
+            return ParsedIntent(
+                intent="alert_classification_summary",
+                params=self._parse_security_analytics_filters(
+                    normalized, intent="alert_classification_summary", semantic_rules=semantic_rules
+                ),
+            )
+
         if self._looks_like_block_query(normalized):
             params = self._parse_common_filters(normalized, intent="block_query", semantic_rules=semantic_rules)
             keyword = self._extract_keyword(normalized)
@@ -156,21 +192,90 @@ class IntentParser:
         if statuses:
             params["deal_status"] = sorted(set(statuses))
 
-        time_match = re.search(
-            r"(最近\d+[天小时分钟]|近\d+[天小时分钟]|最近[一二两三四五六七八九十]+天|近[一二两三四五六七八九十]+天|昨天|今天|本周|本月|近一周|最近三天)",
-            text,
-        )
-        if time_match:
-            params["time_text"] = time_match.group(1)
+        time_text = self._extract_time_text(text)
+        if time_text:
+            params["time_text"] = time_text
 
-        page_match = re.search(r"前(\d+|[一二两三四五六七八九十]+)条", text)
-        if page_match:
-            count = parse_cn_number(page_match.group(1))
-            if count:
-                params["page_size"] = min(200, max(5, count))
+        page_size = self._extract_page_size(text)
+        if page_size:
+            params["page_size"] = page_size
 
         self._apply_semantic_rules(text, intent=intent, params=params, semantic_rules=semantic_rules)
         return params
+
+    def _parse_security_analytics_filters(
+        self,
+        text: str,
+        *,
+        intent: str,
+        semantic_rules: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        params = self._parse_common_filters(text, intent=intent, semantic_rules=semantic_rules)
+        top_n = self._extract_top_n(text)
+        if top_n:
+            params["top_n"] = top_n
+        return params
+
+    @staticmethod
+    def _extract_time_text(text: str) -> str | None:
+        time_match = re.search(
+            r"(最近\s*(?:\d+|[一二两三四五六七八九十]+)\s*(?:天|小时|分钟)|近\s*(?:\d+|[一二两三四五六七八九十]+)\s*(?:天|小时|分钟)|昨天|今天|本周|本月|近一周|最近三天)",
+            text,
+        )
+        if not time_match:
+            return None
+        return re.sub(r"\s+", "", time_match.group(1))
+
+    @staticmethod
+    def _extract_page_size(text: str) -> int | None:
+        page_match = re.search(r"前\s*(\d+|[一二两三四五六七八九十]+)\s*条", text)
+        if not page_match:
+            return None
+        count = parse_cn_number(page_match.group(1))
+        if not count:
+            return None
+        return min(200, max(5, count))
+
+    @staticmethod
+    def _extract_top_n(text: str) -> int | None:
+        patterns = [
+            r"[Tt][Oo][Pp]\s*(\d+|[一二两三四五六七八九十]+)",
+            r"前\s*(\d+|[一二两三四五六七八九十]+)\s*(?:类|种|项)",
+            r"重点事件(?:解读|分析)?\s*(\d+|[一二两三四五六七八九十]+)\s*(?:条|个)",
+        ]
+        for pattern in patterns:
+            matched = re.search(pattern, text)
+            if not matched:
+                continue
+            count = parse_cn_number(matched.group(1))
+            if count:
+                return min(20, max(1, count))
+        return None
+
+    @staticmethod
+    def _looks_like_event_trend(text: str) -> bool:
+        keywords = ("趋势", "发生趋势", "态势趋势", "每天多少事件")
+        return "事件" in text and any(keyword in text for keyword in keywords)
+
+    @staticmethod
+    def _looks_like_event_type_distribution(text: str) -> bool:
+        keywords = ("类型分布", "事件分布", "威胁类型分布", "事件分类分布")
+        return "事件" in text and any(keyword in text for keyword in keywords)
+
+    @staticmethod
+    def _looks_like_event_disposition_summary(text: str) -> bool:
+        keywords = ("处置成果", "处置情况", "处置效果", "处置统计")
+        return "事件" in text and any(keyword in text for keyword in keywords)
+
+    @staticmethod
+    def _looks_like_key_event_insight(text: str) -> bool:
+        keywords = ("重点事件解读", "重点安全事件", "重点事件分析", "帮我解读重点事件")
+        return any(keyword in text for keyword in keywords)
+
+    @staticmethod
+    def _looks_like_alert_classification_summary(text: str) -> bool:
+        keywords = ("告警分类情况", "告警分类分布", "告警一级分类", "告警二级分类", "告警三级分类")
+        return "告警" in text and any(keyword in text for keyword in keywords)
 
     def _extract_keyword(self, text: str) -> str | None:
         m = re.search(r"(?:包含|关键词|匹配)([\w\u4e00-\u9fa5.:_-]{1,32})", text)

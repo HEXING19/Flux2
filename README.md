@@ -5,6 +5,7 @@ Flux 是一个基于 LLM 的智能安全运营平台，支持：
 - 多模型连接池（OpenAI/智谱/DeepSeek/自定义）
 - OOP Skills + 缺参追问 + 上下文序号映射
 - SSE 流式对话与多模态 payload 渲染
+- 支持安全事件 / 安全告警统计分析问答
 - Workflow DAG + Cron + 人工审批闭环
 
 ## 运行

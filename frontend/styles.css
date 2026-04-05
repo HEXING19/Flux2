@@ -923,9 +923,10 @@ body.booting .app-boot-screen {
 }
 
 .report-chart-summary {
-  color: var(--text-muted);
+  color: #c0d0e7;
   font-size: 12px;
   margin-top: 8px;
+  line-height: 1.7;
 }
 
 .report-collapsible {
@@ -937,7 +938,7 @@ body.booting .app-boot-screen {
 
 .report-collapsible summary {
   cursor: pointer;
-  color: var(--text-muted);
+  color: #bfd0ea;
   font-size: 12px;
   margin-bottom: 8px;
 }
@@ -3362,7 +3363,7 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 10px;
   padding: 20px;
-  color: var(--text-muted);
+  color: #cdd9eb;
   box-shadow: var(--shadow-sm);
   max-width: 90%;
   transition: border-color 0.2s;
@@ -3386,6 +3387,27 @@ button {
   font-family: "JetBrains Mono", "Fira Code", monospace;
   font-size: 13px;
   color: #f1f5f9;
+}
+
+.chat-card > p,
+.chat-card label,
+.chat-card li,
+.chat-card details,
+.chat-card summary {
+  color: #d6e2f4;
+}
+
+.chat-card .table-wrap td {
+  color: #e3eefc;
+}
+
+.chart-summary {
+  color: #c5d5eb;
+  line-height: 1.7;
+}
+
+.chart-canvas {
+  width: 100%;
 }
 
 .chat-card.user {
@@ -3490,7 +3512,7 @@ button {
 
 .quick-action-card p {
   margin: 0;
-  color: #c6d5ef;
+  color: #d9e6f8;
   line-height: 1.7;
 }
 
@@ -3525,8 +3547,12 @@ td {
 
 th {
   background: rgba(15, 23, 42, 0.6);
-  color: var(--text-muted);
+  color: #c7d5ea;
   font-weight: 500;
+}
+
+td {
+  color: #deebfb;
 }
 
 tr:hover td {

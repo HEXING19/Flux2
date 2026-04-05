@@ -81,6 +81,45 @@ class IntentParserTest(unittest.TestCase):
         self.assertEqual(parsed.intent, "block_action")
         self.assertEqual(parsed.params.get("block_type"), "DNS")
 
+    def test_event_trend_question_should_route_to_event_trend(self):
+        parsed = self.parser.parse("最近 7 天安全事件发生趋势")
+        self.assertEqual(parsed.intent, "event_trend")
+        self.assertEqual(parsed.params.get("time_text"), "最近7天")
+
+    def test_event_type_distribution_question_should_route_to_event_type_distribution(self):
+        parsed = self.parser.parse("最近7天安全事件类型分布")
+        self.assertEqual(parsed.intent, "event_type_distribution")
+
+    def test_event_disposition_summary_question_should_route_to_event_disposition_summary(self):
+        parsed = self.parser.parse("最近7天安全事件处置成果")
+        self.assertEqual(parsed.intent, "event_disposition_summary")
+
+    def test_key_event_insight_question_should_route_to_key_event_insight(self):
+        parsed = self.parser.parse("重点安全事件解读")
+        self.assertEqual(parsed.intent, "key_event_insight")
+
+    def test_alert_classification_question_should_route_to_alert_classification_summary(self):
+        parsed = self.parser.parse("最近7天安全告警分类情况")
+        self.assertEqual(parsed.intent, "alert_classification_summary")
+
+    def test_semantic_rule_should_fill_new_analytics_slot(self):
+        parsed = self.parser.parse(
+            "请帮我看重点安全事件",
+            semantic_rules=[
+                {
+                    "domain": "key_event_insight",
+                    "slot_name": "time_text",
+                    "phrase": "重点安全事件",
+                    "match_mode": "contains",
+                    "action_type": "set_if_missing",
+                    "rule_value": "最近三天",
+                    "priority": 100,
+                }
+            ],
+        )
+        self.assertEqual(parsed.intent, "key_event_insight")
+        self.assertEqual(parsed.params.get("time_text"), "最近三天")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,6 +21,11 @@ Referenced API docs are under `docs/api-ref/`.
 | EventDetailSkill | `event_detail` | `GET /api/xdr/v1/incidents/{uuid}/proof` | `uuids` (direct or resolved from index) | text detail + timeline table |
 | EntityQuerySkill | `entity_query` | `GET /api/xdr/v1/incidents/{uuid}/entities/ip` | `uuid` or resolvable event reference | text summary + entity table |
 | EventActionSkill | `event_action` | `POST /api/xdr/v1/incidents/dealstatus` | `uuids`, `deal_status` | dangerous text result |
+| EventTrendSkill | `event_trend` | `POST /api/xdr/v1/incidents/list` | none (defaults to recent 7 days when omitted) | text summary + 2 charts + trend table |
+| EventTypeDistributionSkill | `event_type_distribution` | `POST /api/xdr/v1/incidents/list` | none (defaults to recent 7 days when omitted) | text summary + 3 charts + distribution table |
+| EventDispositionSummarySkill | `event_disposition_summary` | `POST /api/xdr/v1/incidents/list` | none (defaults to recent 7 days when omitted) | text summary + 2 charts + 2 tables |
+| KeyEventInsightSkill | `key_event_insight` | `POST /api/xdr/v1/incidents/list` + `GET /api/xdr/v1/incidents/{uuid}/proof` + `GET /api/xdr/v1/incidents/{uuid}/entities/ip` | none (defaults to recent 7 days when omitted) | text summary + key-event table + per-event insight text/table |
+| AlertClassificationSummarySkill | `alert_classification_summary` | `POST /api/xdr/v1/alerts/list` | none (defaults to recent 7 days when omitted) | text summary + multi-chart classification view + table |
 | BlockQuerySkill | `block_query` | `POST /api/xdr/v1/responses/blockiprule/list` | `page`, `page_size` | text summary + block-rule table + `block_rules` index mapping |
 | BlockActionSkill | `block_action` | `POST /api/xdr/v1/device/blockdevice/list` + `POST /api/xdr/v1/responses/blockiprule/network` | `block_type`, `views`, `time_type`, `devices` (and temporary duration fields) | dangerous text result |
 | LogStatsSkill | `log_stats` | `POST /api/xdr/v1/analysislog/networksecurity/count` | none | chart payload (`echarts_graph`) |
@@ -84,6 +89,57 @@ Referenced API docs are under `docs/api-ref/`.
 - Slots:
   - `time_text`, `severities`, `product_types`
 
+### 3.8 Event Trend
+
+- Examples:
+  - `帮我统计最近7天的安全事件发生趋势`
+  - `最近24小时安全事件趋势`
+- Slots:
+  - `time_text`, `severities`, optional `group_by`
+- Notes:
+  - Default aggregation is by day; automatically switches to hourly when the window is within 48 hours.
+
+### 3.9 Event Type Distribution
+
+- Examples:
+  - `最近7天安全事件类型分布`
+  - `最近7天高危事件威胁类型分布 Top5`
+- Slots:
+  - `time_text`, `severities`, optional `top_n`
+- Missing params:
+  - When omitted, defaults to recent 7 days and built-in TopN.
+
+### 3.10 Event Disposition Summary
+
+- Examples:
+  - `最近7天安全事件处置成果`
+  - `最近三天高危事件处置统计`
+- Slots:
+  - `time_text`, `severities`, optional `top_n`
+- Delivery limit:
+  - Current version is a snapshot of current `dealStatus` / `dealAction`.
+  - Historical completion trend, average handling time, and status transition history are not available from current APIs.
+
+### 3.11 Key Event Insight
+
+- Examples:
+  - `重点安全事件解读`
+  - `帮我解读重点事件 Top3`
+- Slots:
+  - `time_text`, `severities`, optional `page_size`, optional `top_n`
+- Notes:
+  - Default ranking is `severity desc -> unresolved first -> latest event time desc`.
+
+### 3.12 Alert Classification Summary
+
+- Examples:
+  - `最近7天安全告警分类情况`
+  - `最近24小时告警三级分类分布`
+- Slots:
+  - `time_text`, `severities`, optional `top_n`
+- Missing params:
+  - When omitted, defaults to recent 7 days and returns TopN for class/type/subtype.
+
 ## 4. Ask-Back Rules for Missing Parameters
 
 ### 4.1 EventActionSkill
@@ -135,4 +191,3 @@ Referenced API docs are under `docs/api-ref/`.
 - Unblock/rollback API action (pending API contract)
 - Distributed lock and queue-backed scheduler
 - Centralized metrics and tracing export
-
