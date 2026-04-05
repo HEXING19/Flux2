@@ -140,6 +140,10 @@ body.booting .app-boot-screen {
   .app-boot-spinner {
     animation: none;
   }
+  .chat-status-spinner,
+  .assistant-pending-spinner {
+    animation: none;
+  }
 }
 
 /* Visibility of System Status (Navbar) */
@@ -3160,6 +3164,11 @@ body.booting .app-boot-screen {
   background: rgba(24, 34, 62, 0.78);
 }
 
+.chat-input-form.busy {
+  border-color: rgba(110, 166, 255, 0.62);
+  box-shadow: 0 0 0 1px rgba(110, 166, 255, 0.1), 0 0 18px rgba(28, 97, 231, 0.12);
+}
+
 #chatMessage {
   flex: 1;
   border: 1px solid rgba(92, 132, 212, 0.5);
@@ -3168,6 +3177,12 @@ body.booting .app-boot-screen {
   padding: 12px 14px;
   min-height: 44px;
   color: #d9e7ff;
+}
+
+#chatMessage:disabled {
+  cursor: not-allowed;
+  color: rgba(217, 231, 255, 0.72);
+  background: rgba(14, 23, 44, 0.82);
 }
 
 #chatMessage:focus {
@@ -3183,6 +3198,42 @@ body.booting .app-boot-screen {
   background: linear-gradient(180deg, #2e6af1 0%, #1c52d1 100%);
   color: #edf4ff;
   font-weight: 700;
+}
+
+.chat-input-form .primary-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.78;
+  background: linear-gradient(180deg, rgba(58, 95, 173, 0.92) 0%, rgba(41, 73, 138, 0.92) 100%);
+  border-color: rgba(93, 128, 202, 0.72);
+}
+
+.chat-status-bar {
+  margin-top: 10px;
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a9c0e8;
+  font-size: 12px;
+}
+
+.chat-status-bar.is-generating {
+  color: #cbe0ff;
+}
+
+.chat-status-spinner,
+.assistant-pending-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(113, 152, 230, 0.24);
+  border-top-color: #7db1ff;
+  animation: app-boot-spin 0.8s linear infinite;
+}
+
+.chat-status-bar.is-generating .chat-status-spinner,
+.assistant-pending-status--generating .assistant-pending-spinner {
+  border-top-color: #94d9ff;
 }
 
 .slash-command-menu {
@@ -3420,6 +3471,52 @@ button {
 
 .chat-card.user strong {
   color: var(--brand-blue-l10);
+}
+
+.assistant-pending-card {
+  position: relative;
+  border-color: rgba(104, 150, 245, 0.28);
+  background:
+    radial-gradient(circle at top right, rgba(35, 88, 188, 0.18), transparent 40%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.assistant-pending-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(88, 135, 228, 0.3);
+  background: rgba(16, 35, 76, 0.56);
+  color: #b9cff4;
+  font-size: 12px;
+}
+
+.assistant-pending-status--generating {
+  border-color: rgba(109, 204, 244, 0.3);
+  background: rgba(12, 45, 76, 0.58);
+  color: #d6ecff;
+}
+
+.assistant-pending-preview {
+  min-height: 22px;
+  color: #eef5ff;
+}
+
+.assistant-pending-card::after {
+  content: '';
+  position: absolute;
+  inset: auto 18px 14px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(90, 138, 230, 0), rgba(90, 138, 230, 0.4), rgba(90, 138, 230, 0));
+  opacity: 0.45;
+}
+
+.error-card {
+  border-left: 4px solid var(--status-fault);
+  background: linear-gradient(90deg, rgba(211, 47, 47, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%);
 }
 
 .playbook-trigger-card {

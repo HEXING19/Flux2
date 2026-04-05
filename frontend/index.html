@@ -99,7 +99,7 @@
         <div class="panel-header">
           <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
         </div>
-        <div id="chatStream" class="chat-stream">
+        <div id="chatStream" class="chat-stream" aria-live="polite" aria-busy="false">
           <div class="chat-card">
             <strong>系统向导</strong>
             <pre>协议握手完成。Flux 智能安全助手已就绪。
@@ -121,8 +121,12 @@
           <div id="slashCommandMenu" class="slash-command-menu hidden" role="listbox" aria-label="快捷指令"></div>
           <form id="chatForm" class="chat-input-form">
             <input type="text" id="chatMessage" placeholder="输入自然语言指令进行意图捕获与执行..." autocomplete="off" />
-            <button type="submit" class="primary-btn">执行</button>
+            <button id="chatSubmitBtn" type="submit" class="primary-btn">执行</button>
           </form>
+          <div id="chatStatusBar" class="chat-status-bar hidden" role="status" aria-live="polite" aria-atomic="true">
+            <span class="chat-status-spinner" aria-hidden="true"></span>
+            <span id="chatStatusText">正在思考中，正在查询相关数据...</span>
+          </div>
         </div>
       </div>
       <aside id="playbookWorkspacePanel" class="playbook-workspace hidden">

@@ -14,7 +14,19 @@ const state = {
   slashFiltered: [],
   semanticRuleMeta: null,
   semanticRules: [],
+  chatRequest: createIdleChatRequestState(),
 };
+
+const CHAT_PHASE_META = {
+  thinking: {
+    text: '正在思考中，正在查询相关数据...',
+  },
+  generating: {
+    text: '正在生成回复中...',
+  },
+};
+
+const CHAT_BUSY_NOTICE = '上一条回复仍在处理中，请稍候...';
 
 const DEFAULT_PLAYBOOK_SCENES = [
   {
@@ -210,7 +222,10 @@ const el = {
 
   chatForm: document.getElementById('chatForm'),
   chatMessage: document.getElementById('chatMessage'),
+  chatSubmitBtn: document.getElementById('chatSubmitBtn'),
   chatStream: document.getElementById('chatStream'),
+  chatStatusBar: document.getElementById('chatStatusBar'),
+  chatStatusText: document.getElementById('chatStatusText'),
   slashCommandMenu: document.getElementById('slashCommandMenu'),
   playbookWorkspacePanel: document.getElementById('playbookWorkspacePanel'),
   playbookWorkspaceBody: document.getElementById('playbookWorkspaceBody'),
@@ -483,6 +498,7 @@ function setAuthState(authenticated, statusText = '', isConnected = true) {
   el.landingView.classList.toggle('hidden', authenticated);
   el.workspaceView.classList.toggle('hidden', !authenticated);
   if (!authenticated) {
+    resetChatRequestState();
     setPlaybookWorkspaceOpen(false);
     clearPlaybookWorkspace();
     state.activePlaybookRunId = null;
@@ -592,7 +608,305 @@ function getProviderPayload() {
 
 function appendCard(node) {
   el.chatStream.appendChild(node);
+  scrollChatToBottom();
+}
+
+function scrollChatToBottom() {
+  if (!el.chatStream) return;
   el.chatStream.scrollTop = el.chatStream.scrollHeight;
+}
+
+function createIdleChatRequestState() {
+  return {
+    inFlight: false,
+    phase: 'idle',
+    startedAt: null,
+    placeholderCard: null,
+    placeholderTitleNode: null,
+    placeholderStatusRow: null,
+    placeholderStatusNode: null,
+    previewNode: null,
+    previewText: '',
+    previewFrame: null,
+    statusRestoreTimer: null,
+    statusOverride: '',
+  };
+}
+
+function getChatPhaseText(phase) {
+  return CHAT_PHASE_META[phase]?.text || '';
+}
+
+function isChatRequestInFlight() {
+  return !!state.chatRequest?.inFlight;
+}
+
+function isActiveChatRequest(requestState) {
+  return !!requestState && state.chatRequest === requestState && !!requestState.inFlight;
+}
+
+function clearChatStatusRestoreTimer(requestState) {
+  if (!requestState?.statusRestoreTimer) return;
+  clearTimeout(requestState.statusRestoreTimer);
+  requestState.statusRestoreTimer = null;
+}
+
+function cancelChatPreviewFrame(requestState) {
+  if (requestState?.previewFrame == null) return;
+  cancelAnimationFrame(requestState.previewFrame);
+  requestState.previewFrame = null;
+}
+
+function syncChatRequestUi() {
+  const requestState = state.chatRequest;
+  const inFlight = !!requestState?.inFlight;
+  const phase = requestState?.phase || 'idle';
+  const statusText = requestState?.statusOverride || getChatPhaseText(phase);
+
+  if (el.chatStream) {
+    el.chatStream.setAttribute('aria-busy', inFlight ? 'true' : 'false');
+  }
+  if (el.chatForm) {
+    el.chatForm.classList.toggle('busy', inFlight);
+  }
+  if (el.chatMessage) {
+    el.chatMessage.disabled = inFlight;
+  }
+  if (el.chatSubmitBtn) {
+    el.chatSubmitBtn.disabled = inFlight;
+    el.chatSubmitBtn.textContent = inFlight ? '处理中...' : '执行';
+  }
+  if (el.chatStatusBar) {
+    el.chatStatusBar.classList.toggle('hidden', !inFlight);
+    el.chatStatusBar.classList.toggle('is-thinking', inFlight && phase === 'thinking');
+    el.chatStatusBar.classList.toggle('is-generating', inFlight && phase === 'generating');
+  }
+  if (el.chatStatusText) {
+    el.chatStatusText.textContent = statusText;
+  }
+}
+
+function createChatPendingCard(phase = 'thinking') {
+  const card = cardTemplate('助手', 'assistant-pending-card');
+  card.dataset.pendingAssistant = 'true';
+
+  const statusRow = document.createElement('div');
+  statusRow.className = `assistant-pending-status assistant-pending-status--${phase}`;
+
+  const spinner = document.createElement('span');
+  spinner.className = 'assistant-pending-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  statusRow.appendChild(spinner);
+
+  const statusNode = document.createElement('span');
+  statusNode.className = 'assistant-pending-status-text';
+  statusNode.textContent = getChatPhaseText(phase);
+  statusRow.appendChild(statusNode);
+  card.appendChild(statusRow);
+
+  const preview = document.createElement('pre');
+  preview.className = 'assistant-pending-preview';
+  preview.textContent = getChatPhaseText(phase);
+  card.appendChild(preview);
+
+  return {
+    card,
+    titleNode: card.querySelector('strong'),
+    statusRow,
+    statusNode,
+    preview,
+  };
+}
+
+function mountChatPendingCard(requestState) {
+  if (!isActiveChatRequest(requestState)) return;
+  const pendingUi = createChatPendingCard(requestState.phase);
+  requestState.placeholderCard = pendingUi.card;
+  requestState.placeholderTitleNode = pendingUi.titleNode;
+  requestState.placeholderStatusRow = pendingUi.statusRow;
+  requestState.placeholderStatusNode = pendingUi.statusNode;
+  requestState.previewNode = pendingUi.preview;
+  appendCard(pendingUi.card);
+}
+
+function updateChatPendingTitle(requestState, title) {
+  if (!isActiveChatRequest(requestState) || !requestState.placeholderTitleNode) return;
+  requestState.placeholderTitleNode.textContent = title || '系统消息';
+}
+
+function updateChatPendingPhase(requestState, phase) {
+  if (!isActiveChatRequest(requestState)) return;
+  clearChatStatusRestoreTimer(requestState);
+  requestState.statusOverride = '';
+  requestState.phase = phase;
+  const phaseText = getChatPhaseText(phase);
+  if (requestState.placeholderStatusRow) {
+    requestState.placeholderStatusRow.classList.toggle('assistant-pending-status--thinking', phase === 'thinking');
+    requestState.placeholderStatusRow.classList.toggle('assistant-pending-status--generating', phase === 'generating');
+  }
+  if (requestState.placeholderStatusNode) {
+    requestState.placeholderStatusNode.textContent = phaseText;
+  }
+  if (requestState.previewNode && !requestState.previewText) {
+    requestState.previewNode.textContent = phaseText;
+  }
+  syncChatRequestUi();
+}
+
+function scheduleChatPreviewRender(requestState) {
+  if (!isActiveChatRequest(requestState) || !requestState.previewNode || requestState.previewFrame != null) return;
+  requestState.previewFrame = requestAnimationFrame(() => {
+    requestState.previewFrame = null;
+    if (!isActiveChatRequest(requestState) || !requestState.previewNode) return;
+    requestState.previewNode.textContent = requestState.previewText || getChatPhaseText(requestState.phase);
+    scrollChatToBottom();
+  });
+}
+
+function setChatPreviewText(requestState, text) {
+  if (!isActiveChatRequest(requestState)) return;
+  requestState.previewText = text || '';
+  scheduleChatPreviewRender(requestState);
+}
+
+function removeChatPendingCard(requestState) {
+  cancelChatPreviewFrame(requestState);
+  if (requestState?.placeholderCard?.isConnected) {
+    requestState.placeholderCard.remove();
+  }
+  requestState.placeholderCard = null;
+  requestState.placeholderTitleNode = null;
+  requestState.placeholderStatusRow = null;
+  requestState.placeholderStatusNode = null;
+  requestState.previewNode = null;
+  requestState.previewText = '';
+}
+
+function replacePendingCardWithText(requestState, payload) {
+  const textPayload = payload || { type: 'text', data: {} };
+  if (!isActiveChatRequest(requestState) && !requestState?.placeholderCard?.isConnected) return;
+  if (!requestState?.placeholderCard || !requestState.placeholderCard.isConnected) {
+    renderPayload(textPayload);
+    return;
+  }
+
+  cancelChatPreviewFrame(requestState);
+  const card = requestState.placeholderCard;
+  card.className = 'chat-card';
+  card.removeAttribute('data-pending-assistant');
+  if (textPayload.data?.dangerous) {
+    card.classList.add('approval-card');
+  }
+  card.innerHTML = '';
+
+  const title = document.createElement('strong');
+  title.textContent = textPayload.data?.title || '系统消息';
+  card.appendChild(title);
+  card.appendChild(createMarkdownBlock(textPayload.data?.text || ''));
+
+  requestState.placeholderCard = null;
+  requestState.placeholderTitleNode = null;
+  requestState.placeholderStatusRow = null;
+  requestState.placeholderStatusNode = null;
+  requestState.previewNode = null;
+  requestState.previewText = '';
+  scrollChatToBottom();
+}
+
+function renderChatRequestError(requestState, message) {
+  if (!isActiveChatRequest(requestState) && !requestState?.placeholderCard?.isConnected) return;
+  const safeMessage = message || '请求失败，请稍后重试。';
+  if (!requestState?.placeholderCard || !requestState.placeholderCard.isConnected) {
+    const card = cardTemplate('错误', 'error-card');
+    const pre = document.createElement('pre');
+    pre.textContent = safeMessage;
+    card.appendChild(pre);
+    appendCard(card);
+    return;
+  }
+
+  cancelChatPreviewFrame(requestState);
+  const card = requestState.placeholderCard;
+  card.className = 'chat-card error-card';
+  card.removeAttribute('data-pending-assistant');
+  card.innerHTML = '';
+
+  const title = document.createElement('strong');
+  title.textContent = '错误';
+  card.appendChild(title);
+  const pre = document.createElement('pre');
+  pre.textContent = safeMessage;
+  card.appendChild(pre);
+
+  requestState.placeholderCard = null;
+  requestState.placeholderTitleNode = null;
+  requestState.placeholderStatusRow = null;
+  requestState.placeholderStatusNode = null;
+  requestState.previewNode = null;
+  requestState.previewText = '';
+  scrollChatToBottom();
+}
+
+function finalizeChatPayloadBatch(payloads, requestState) {
+  if (!isActiveChatRequest(requestState) && !requestState?.placeholderCard?.isConnected) return;
+  const normalizedPayloads = Array.isArray(payloads) ? payloads.filter(Boolean) : [];
+  if (!normalizedPayloads.length) {
+    removeChatPendingCard(requestState);
+    return;
+  }
+
+  if (normalizedPayloads.length === 1 && normalizedPayloads[0].type === 'text') {
+    replacePendingCardWithText(requestState, normalizedPayloads[0]);
+    return;
+  }
+
+  removeChatPendingCard(requestState);
+  if (normalizedPayloads.length > 1) {
+    const primaryTitle = normalizedPayloads[0]?.data?.title || '任务执行结果';
+    renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, normalizedPayloads);
+    return;
+  }
+  renderPayload(normalizedPayloads[0]);
+}
+
+function flashChatBusyNotice(message = CHAT_BUSY_NOTICE) {
+  const requestState = state.chatRequest;
+  if (!requestState?.inFlight) return;
+  clearChatStatusRestoreTimer(requestState);
+  requestState.statusOverride = message;
+  syncChatRequestUi();
+  requestState.statusRestoreTimer = window.setTimeout(() => {
+    if (!isActiveChatRequest(requestState)) return;
+    requestState.statusOverride = '';
+    requestState.statusRestoreTimer = null;
+    syncChatRequestUi();
+  }, 2200);
+}
+
+function beginChatRequest() {
+  const requestState = createIdleChatRequestState();
+  requestState.inFlight = true;
+  requestState.phase = 'thinking';
+  requestState.startedAt = Date.now();
+  state.chatRequest = requestState;
+  mountChatPendingCard(requestState);
+  syncChatRequestUi();
+  return requestState;
+}
+
+function finishChatRequest(requestState) {
+  if (!isActiveChatRequest(requestState)) return;
+  clearChatStatusRestoreTimer(requestState);
+  cancelChatPreviewFrame(requestState);
+  state.chatRequest = createIdleChatRequestState();
+  syncChatRequestUi();
+}
+
+function resetChatRequestState() {
+  clearChatStatusRestoreTimer(state.chatRequest);
+  removeChatPendingCard(state.chatRequest);
+  state.chatRequest = createIdleChatRequestState();
+  syncChatRequestUi();
 }
 
 function setPlaybookWorkspaceOpen(open) {
@@ -4672,12 +4986,13 @@ async function runPlaybook(templateId, params = {}, triggerLabel = '') {
   await openPlaybookRunById(runInfo.run_id, templateId, { resetWorkspace: true });
 }
 
-async function readSSEStream(response) {
+async function readSSEStream(response, requestState) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = '';
   let currentTextPayload = null;
   const batchPayloads = [];
+  let doneReceived = false;
 
   while (true) {
     const { value, done } = await reader.read();
@@ -4690,22 +5005,20 @@ async function readSSEStream(response) {
       if (!part.startsWith('data: ')) continue;
       const raw = part.slice(6).trim();
       if (raw === '[DONE]') {
+        doneReceived = true;
         if (currentTextPayload) {
           batchPayloads.push(currentTextPayload);
           currentTextPayload = null;
         }
-        if (batchPayloads.length > 1) {
-          const primaryTitle = batchPayloads[0]?.data?.title || '任务执行结果';
-          renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads);
-        } else if (batchPayloads.length === 1) {
-          renderPayload(batchPayloads[0]);
-        }
+        finalizeChatPayloadBatch(batchPayloads, requestState);
         return;
       }
       const event = JSON.parse(raw);
 
       if (event.type === 'text_start') {
         const p = event.payload || {};
+        updateChatPendingPhase(requestState, 'generating');
+        updateChatPendingTitle(requestState, p.data?.title || '系统消息');
         currentTextPayload = {
           ...p,
           data: {
@@ -4713,15 +5026,18 @@ async function readSSEStream(response) {
             text: '',
           },
         };
+        setChatPreviewText(requestState, '');
       } else if (event.type === 'text_delta') {
         if (currentTextPayload) {
           currentTextPayload.data.text += event.delta || '';
+          setChatPreviewText(requestState, currentTextPayload.data.text);
         }
       } else if (event.type === 'text_end') {
         if (currentTextPayload) {
           if (!currentTextPayload.data.text) {
             currentTextPayload.data.text = event.text || '';
           }
+          setChatPreviewText(requestState, currentTextPayload.data.text);
           batchPayloads.push(currentTextPayload);
           currentTextPayload = null;
         }
@@ -4736,12 +5052,11 @@ async function readSSEStream(response) {
   if (currentTextPayload) {
     batchPayloads.push(currentTextPayload);
   }
-  if (batchPayloads.length > 1) {
-    const primaryTitle = batchPayloads[0]?.data?.title || '任务执行结果';
-    renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, batchPayloads);
-  } else if (batchPayloads.length === 1) {
-    renderPayload(batchPayloads[0]);
+  if (doneReceived || batchPayloads.length) {
+    finalizeChatPayloadBatch(batchPayloads, requestState);
+    return;
   }
+  throw new Error('响应流意外结束，请稍后重试。');
 }
 
 function openDangerConfirm(text, onConfirm) {
@@ -5171,29 +5486,39 @@ async function sendChat(message) {
   if (!state.isAuthenticated) {
     setHint(el.loginResult, '请先登录成功后再进入对话。', 'error');
     setAuthState(false);
-    return;
+    return false;
   }
 
+  if (isChatRequestInFlight()) {
+    flashChatBusyNotice();
+    return false;
+  }
+
+  const requestState = beginChatRequest();
   const req = {
     session_id: state.sessionId,
     message,
     active_playbook_run_id: state.activePlaybookRunId || null,
   };
-  const response = await fetch('/api/chat/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    const card = cardTemplate('错误');
-    const pre = document.createElement('pre');
-    pre.textContent = text;
-    card.appendChild(pre);
-    appendCard(card);
-    return;
+  try {
+    const response = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      renderChatRequestError(requestState, text || '请求失败');
+      return false;
+    }
+    await readSSEStream(response, requestState);
+    return true;
+  } catch (err) {
+    renderChatRequestError(requestState, err.message || '请求失败，请稍后重试。');
+    return false;
+  } finally {
+    finishChatRequest(requestState);
   }
-  await readSSEStream(response);
 }
 
 async function bootWorkspace() {
