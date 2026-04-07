@@ -408,18 +408,3 @@ docs/
 
 - `README` 负责高密度总览、接口/统计口径和研发落地入口
 - `User_Manual.md` 继续承担详细操作步骤和场景化使用说明
-
-## 10. Git 忽略与仓库整理建议
-
-当前 `.gitignore` 已覆盖运行数据库、打包产物、本地环境文件与缓存规则。本仓库已同步停止跟踪以下运行/交付产物，后续默认依赖 `.gitignore` 维持本地工作流：
-
-- `flux.db`
-- `data/flux.db`
-- `data/test_flux.db`
-- `flux2-flux.tar`
-
-补充说明：
-
-- 本地文件可继续保留，`git rm --cached` 只会把它们从 Git 索引中移除
-- `data/.gitkeep` 用于保留 `data/` 目录结构
-- 测试默认仍会使用 `data/test_flux.db`，首次缺失时请先执行迁移或初始化测试库
