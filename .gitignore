@@ -24,3 +24,14 @@ build/
 # Runtime DBs and packaged artifacts are intentionally ignored.
 # If similar files were tracked in older history, remove them from the index once
 # and keep relying on these rules afterwards.
+
+# Process / scratch documents
+/Plan.md
+/Todo.md
+/action.md
+/action2.md
+/action3.md
+/dev-chat.md
+/codex-playbook.md
+/codex-task.md
+/plan-gemini3.1.md
