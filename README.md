@@ -403,7 +403,6 @@ docs/
 - [User_Manual.md](User_Manual.md)：面向使用者的详细操作手册
 - [docs/api-ref](docs/api-ref)：上游 XDR 接口原始资料
 - [docs/skill-api-matrix-spec.md](docs/skill-api-matrix-spec.md)：Skill 与 API 对照、缺参追问、安全策略
-- [PRD.md](PRD.md)：需求背景与产品定位
 
 说明：
 

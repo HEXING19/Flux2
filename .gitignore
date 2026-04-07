@@ -26,6 +26,7 @@ build/
 # and keep relying on these rules afterwards.
 
 # Process / scratch documents
+/PRD.md
 /Plan.md
 /Todo.md
 /action.md
@@ -35,3 +36,7 @@ build/
 /codex-playbook.md
 /codex-task.md
 /plan-gemini3.1.md
+/一键深度研判.jsx
+/安全早报优化原型.jsx
+/攻击者活动轨迹生成优化原型.html
+/核心资产防线透视.jsx
