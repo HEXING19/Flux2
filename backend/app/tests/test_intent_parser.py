@@ -86,6 +86,16 @@ class IntentParserTest(unittest.TestCase):
         self.assertEqual(parsed.intent, "event_trend")
         self.assertEqual(parsed.params.get("time_text"), "最近7天")
 
+    def test_alert_trend_question_should_route_to_alert_trend(self):
+        parsed = self.parser.parse("总结最近7天的告警趋势")
+        self.assertEqual(parsed.intent, "alert_trend")
+        self.assertEqual(parsed.params.get("time_text"), "最近7天")
+
+    def test_alert_trend_synonym_should_route_to_alert_trend(self):
+        parsed = self.parser.parse("帮我总结一下最近7天的安全告警发生趋势")
+        self.assertEqual(parsed.intent, "alert_trend")
+        self.assertEqual(parsed.params.get("time_text"), "最近7天")
+
     def test_event_type_distribution_question_should_route_to_event_type_distribution(self):
         parsed = self.parser.parse("最近7天安全事件类型分布")
         self.assertEqual(parsed.intent, "event_type_distribution")
@@ -101,6 +111,23 @@ class IntentParserTest(unittest.TestCase):
     def test_alert_classification_question_should_route_to_alert_classification_summary(self):
         parsed = self.parser.parse("最近7天安全告警分类情况")
         self.assertEqual(parsed.intent, "alert_classification_summary")
+
+    def test_alert_query_with_raw_hour_window_should_route_to_alert_query(self):
+        parsed = self.parser.parse("查看24小时的告警信息")
+        self.assertEqual(parsed.intent, "alert_query")
+        self.assertEqual(parsed.params.get("time_text"), "24小时")
+        self.assertNotIn("severities", parsed.params)
+
+    def test_event_query_with_raw_hour_window_should_route_to_event_query(self):
+        parsed = self.parser.parse("查看24小时的事件信息")
+        self.assertEqual(parsed.intent, "event_query")
+        self.assertEqual(parsed.params.get("time_text"), "24小时")
+        self.assertNotIn("severities", parsed.params)
+
+    def test_event_query_with_raw_day_window_should_extract_time_text(self):
+        parsed = self.parser.parse("查看7天的事件信息")
+        self.assertEqual(parsed.intent, "event_query")
+        self.assertEqual(parsed.params.get("time_text"), "7天")
 
     def test_semantic_rule_should_fill_new_analytics_slot(self):
         parsed = self.parser.parse(

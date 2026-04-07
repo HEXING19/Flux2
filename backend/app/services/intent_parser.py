@@ -71,6 +71,12 @@ class IntentParser:
                 params=self._parse_security_analytics_filters(normalized, intent="event_trend", semantic_rules=semantic_rules),
             )
 
+        if self._looks_like_alert_trend(normalized):
+            return ParsedIntent(
+                intent="alert_trend",
+                params=self._parse_security_analytics_filters(normalized, intent="alert_trend", semantic_rules=semantic_rules),
+            )
+
         if self._looks_like_event_type_distribution(normalized):
             return ParsedIntent(
                 intent="event_type_distribution",
@@ -124,7 +130,11 @@ class IntentParser:
             params = self._parse_event_action(normalized)
             return ParsedIntent(intent="event_action", params=params)
 
-        if any(k in normalized for k in ["事件", "告警", "incident", "查询"]):
+        if self._looks_like_alert_query(normalized):
+            params = self._parse_common_filters(normalized, intent="alert_query", semantic_rules=semantic_rules)
+            return ParsedIntent(intent="alert_query", params=params)
+
+        if self._looks_like_event_query(normalized):
             params = self._parse_common_filters(normalized, intent="event_query", semantic_rules=semantic_rules)
             return ParsedIntent(intent="event_query", params=params)
 
@@ -184,7 +194,7 @@ class IntentParser:
     ) -> dict[str, Any]:
         params: dict[str, Any] = {}
 
-        severities = [v for k, v in SEVERITY_MAP.items() if k in text]
+        severities = self._extract_severities(text)
         if severities:
             params["severities"] = sorted(set(severities))
 
@@ -219,7 +229,7 @@ class IntentParser:
     @staticmethod
     def _extract_time_text(text: str) -> str | None:
         time_match = re.search(
-            r"(最近\s*(?:\d+|[一二两三四五六七八九十]+)\s*(?:天|小时|分钟)|近\s*(?:\d+|[一二两三四五六七八九十]+)\s*(?:天|小时|分钟)|昨天|今天|本周|本月|近一周|最近三天)",
+            r"((?:最近|近|过去)?\s*(?:\d+|[一二两三四五六七八九十]+)\s*(?:天|小时|分钟)|昨天|今天|本周|本月|近一周|最近三天)",
             text,
         )
         if not time_match:
@@ -258,6 +268,12 @@ class IntentParser:
         return "事件" in text and any(keyword in text for keyword in keywords)
 
     @staticmethod
+    def _looks_like_alert_trend(text: str) -> bool:
+        keywords = ("趋势", "发生趋势", "态势趋势", "每天多少告警")
+        exclusions = ("分类", "分布")
+        return "告警" in text and any(keyword in text for keyword in keywords) and not any(token in text for token in exclusions)
+
+    @staticmethod
     def _looks_like_event_type_distribution(text: str) -> bool:
         keywords = ("类型分布", "事件分布", "威胁类型分布", "事件分类分布")
         return "事件" in text and any(keyword in text for keyword in keywords)
@@ -276,6 +292,24 @@ class IntentParser:
     def _looks_like_alert_classification_summary(text: str) -> bool:
         keywords = ("告警分类情况", "告警分类分布", "告警一级分类", "告警二级分类", "告警三级分类")
         return "告警" in text and any(keyword in text for keyword in keywords)
+
+    @staticmethod
+    def _looks_like_alert_query(text: str) -> bool:
+        query_tokens = ("查询", "查看", "看下", "看看", "查下", "查一下", "列出", "列表", "清单", "信息", "有哪些", "有什么")
+        exclusions = ("趋势", "分类", "分布", "处置成果", "处置情况", "重点事件", "解读")
+        return "告警" in text and any(token in text for token in query_tokens) and not any(token in text for token in exclusions)
+
+    @staticmethod
+    def _looks_like_event_query(text: str) -> bool:
+        query_tokens = ("事件", "incident", "查询", "查看", "看下", "看看", "查下", "查一下", "列出", "列表", "清单", "信息", "有哪些", "有什么")
+        return any(token in text for token in query_tokens)
+
+    @staticmethod
+    def _extract_severities(text: str) -> list[int]:
+        severities = [value for label, value in SEVERITY_MAP.items() if label != "信息" and label in text]
+        if re.search(r"信息(?:级|级别|类|告警|事件)", text):
+            severities.append(SEVERITY_MAP["信息"])
+        return severities
 
     def _extract_keyword(self, text: str) -> str | None:
         m = re.search(r"(?:包含|关键词|匹配)([\w\u4e00-\u9fa5.:_-]{1,32})", text)

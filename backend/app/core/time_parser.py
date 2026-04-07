@@ -68,7 +68,7 @@ def parse_time_range(text: str | None) -> tuple[int, int]:
         end_dt = datetime.strptime(explicit.group(2), "%Y-%m-%d").replace(hour=23, minute=59, second=59)
         return int(start_dt.timestamp()), int(end_dt.timestamp())
 
-    m = re.search(r"(?:最近|过去|近)(\d+|[一二两三四五六七八九十]+)(天|小时|分钟)", raw)
+    m = re.search(r"(?:(?:最近|过去|近)\s*)?(\d+|[一二两三四五六七八九十]+)\s*(天|小时|分钟)", raw)
     if m:
         n = parse_cn_number(m.group(1))
         unit = m.group(2)

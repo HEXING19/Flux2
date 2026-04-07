@@ -15,6 +15,16 @@ class TimeParserTest(unittest.TestCase):
         start, end = parse_time_range("昨天")
         self.assertEqual(end - start, 86399)
 
+    def test_raw_hours_without_prefix(self):
+        start, end = parse_time_range("24小时")
+        self.assertLess(start, end)
+        self.assertGreaterEqual(end - start, 24 * 3600 - 2)
+
+    def test_raw_days_without_prefix(self):
+        start, end = parse_time_range("7天")
+        self.assertLess(start, end)
+        self.assertGreaterEqual(end - start, 7 * 86400 - 2)
+
     def test_default(self):
         start, end = parse_time_range(None)
         self.assertLess(start, end)

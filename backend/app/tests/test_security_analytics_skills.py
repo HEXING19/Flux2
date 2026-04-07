@@ -4,7 +4,9 @@ import unittest
 from datetime import datetime
 
 from app.core.context import SkillContextManager
+from app.skills.alert_skills import AlertQuerySkill
 from app.skills.security_analytics_skills import (
+    AlertTrendSkill,
     AlertClassificationSummarySkill,
     EventDispositionSummarySkill,
     EventTrendSkill,
@@ -140,6 +142,23 @@ class SecurityAnalyticsSkillsTest(unittest.TestCase):
         self.assertIn("峰值", result[0]["data"]["text"])
         self.assertTrue(result[1]["data"]["option"]["series"])
         self.assertEqual(result[3]["data"]["columns"][0]["key"], "bucket")
+
+    def test_alert_query_skill_should_return_text_and_table(self):
+        skill = AlertQuerySkill(self.requester, self.context)
+        result = skill.execute("s0", {"time_text": "24小时"}, "查看24小时的告警信息")
+        self.assertEqual([payload["type"] for payload in result], ["text", "table"])
+        self.assertEqual(result[1]["data"]["title"], "安全告警列表")
+        self.assertTrue(result[1]["data"]["rows"])
+        column_keys = [column["key"] for column in result[1]["data"]["columns"]]
+        self.assertNotIn("srcIp", column_keys)
+        self.assertIn("dstIp", column_keys)
+
+    def test_alert_trend_skill_should_return_text_charts_and_table(self):
+        skill = AlertTrendSkill(self.requester, self.context)
+        result = skill.execute("s0t", {"time_text": "最近7天"}, "总结最近7天的告警趋势")
+        self.assertEqual([payload["type"] for payload in result], ["text", "echarts_graph", "echarts_graph", "table"])
+        self.assertIn("峰值", result[0]["data"]["text"])
+        self.assertEqual(result[3]["data"]["title"], "安全告警趋势明细")
 
     def test_event_type_distribution_skill_should_return_expected_payloads(self):
         skill = EventTypeDistributionSkill(self.requester, self.context)

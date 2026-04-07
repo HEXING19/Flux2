@@ -461,6 +461,32 @@ class ChatConfirmFlowTest(unittest.TestCase):
                 result = chat.handle("t14", "最近7天安全事件发生趋势")
                 self.assertEqual([payload["type"] for payload in result], ["text", "echarts_graph", "echarts_graph", "table"])
 
+    def test_chat_should_return_alert_query_payloads_for_alert_info(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t14a", "查看24小时的告警信息")
+                self.assertEqual([payload["type"] for payload in result], ["text", "table"])
+                self.assertEqual(result[0]["data"]["title"], "告警查询结果")
+                self.assertEqual(result[1]["data"]["title"], "安全告警列表")
+
+    def test_chat_should_keep_event_query_payloads_for_event_info(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t14b", "查看24小时的事件信息")
+                self.assertEqual([payload["type"] for payload in result], ["text", "table"])
+                self.assertEqual(result[0]["data"]["title"], "事件查询结果")
+                self.assertEqual(result[1]["data"]["title"], "安全事件列表")
+
+    def test_chat_should_return_alert_trend_payloads(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("t14c", "总结最近7天的告警趋势")
+                self.assertEqual([payload["type"] for payload in result], ["text", "echarts_graph", "echarts_graph", "table"])
+                self.assertEqual(result[0]["data"]["title"], "安全告警发生趋势")
+
     def test_chat_should_return_event_type_distribution_payloads(self):
         with Session(engine) as session:
             with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):

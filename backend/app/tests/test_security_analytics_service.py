@@ -166,6 +166,16 @@ class SecurityAnalyticsServiceTest(unittest.TestCase):
         self.assertEqual(sum(aggregated["overall"]), 2)
         self.assertEqual(len(aggregated["labels"]), 24)
 
+    def test_alert_trend_should_aggregate_by_hour(self):
+        aggregated = self.service.aggregate_alert_trend(
+            self.alert_rows,
+            start_ts=to_ts("2025-02-21 00:00:00"),
+            end_ts=to_ts("2025-02-21 23:59:59"),
+        )
+        self.assertEqual(aggregated["granularity"], "hour")
+        self.assertEqual(sum(aggregated["overall"]), 3)
+        self.assertEqual(aggregated["peak_count"], 1)
+
     def test_event_type_distribution_should_merge_other_bucket(self):
         aggregated = self.service.aggregate_event_type_distribution(self.event_rows, top_n=2)
         top_rows = aggregated["gpt_result_top"]

@@ -603,6 +603,64 @@ class SecurityAnalyticsService:
             "peak_count": peak_count,
         }
 
+    def aggregate_alert_trend(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        start_ts: int,
+        end_ts: int,
+        granularity: str | None = None,
+    ) -> dict[str, Any]:
+        bucket_info = self.build_time_buckets(start_ts=start_ts, end_ts=end_ts, granularity=granularity)
+        buckets = bucket_info["buckets"]
+        bucket_index = {bucket["bucket_ts"]: idx for idx, bucket in enumerate(buckets)}
+        overall = [0 for _ in buckets]
+        severity_counter = {label: [0 for _ in buckets] for label in SEVERITY_ORDER}
+
+        for row in rows:
+            ts = _to_int(row.get("lastTimeTs"), 0)
+            if ts <= 0:
+                continue
+            key = int(self._bucket_start(ts, bucket_info["granularity"]).timestamp())
+            idx = bucket_index.get(key)
+            if idx is None:
+                continue
+            overall[idx] += 1
+            severity = str(row.get("incidentSeverity") or "信息")
+            if severity not in severity_counter:
+                severity_counter[severity] = [0 for _ in buckets]
+            severity_counter[severity][idx] += 1
+
+        detail_rows = []
+        for idx, bucket in enumerate(buckets):
+            row = {"bucket": bucket["label"], "total": overall[idx]}
+            for severity in SEVERITY_ORDER:
+                row[severity] = severity_counter.get(severity, [0 for _ in buckets])[idx]
+            detail_rows.append(row)
+
+        peak_count = max(overall, default=0)
+        peak_label = "-"
+        if peak_count > 0:
+            peak_idx = overall.index(peak_count)
+            peak_label = buckets[peak_idx]["label"]
+
+        severity_series = [
+            {"name": severity, "data": severity_counter.get(severity, [0 for _ in buckets])}
+            for severity in SEVERITY_ORDER
+            if any(severity_counter.get(severity, []))
+        ]
+
+        return {
+            "granularity": bucket_info["granularity"],
+            "labels": bucket_info["labels"],
+            "overall": overall,
+            "severity_series": severity_series,
+            "detail_rows": detail_rows,
+            "total": len(rows),
+            "peak_label": peak_label,
+            "peak_count": peak_count,
+        }
+
     def aggregate_event_type_distribution(self, rows: list[dict[str, Any]], *, top_n: int = 6) -> dict[str, Any]:
         gpt_counter: dict[str, int] = {}
         type_counter: dict[str, int] = {}

@@ -20,8 +20,8 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
 当前主能力包括：
 - XDR 凭证登录与连通性探测，支持联动码或 AK/SK
 - 多 LLM 供应商接入：OpenAI、智谱、DeepSeek、自定义兼容端点
-- 多轮对话 Copilot：事件查询、详情、实体情报、处置、封禁、日志统计
-- 安全分析：事件趋势、类型分布、处置成果、重点事件解读、告警分类
+- 多轮对话 Copilot：事件查询、告警查询、详情、实体情报、处置、封禁、日志统计
+- 安全分析：事件趋势、告警趋势、类型分布、处置成果、重点事件解读、告警分类
 - Playbook Hub：今日安全早报、单点告警深度研判、攻击者活动轨迹、核心资产防线透视
 - Workflow 闭环：按 CRON 定时拉取高危事件、生成建议、审批、自动处置
 - Safety Gate：内置和自定义防误封规则，拦截高危批量模糊操作
@@ -167,13 +167,14 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
 | --- | --- | --- | --- |
 | `/api/auth/probe` `/api/auth/login` `/api/auth/status` | `APIRequester` + `ConfigService` | `POST /api/xdr/v1/incidents/list` | 认证探测结果、登录状态 |
 | `/api/chat` `/api/chat/stream` | `EventQuerySkill` | `POST /api/xdr/v1/incidents/list` | 事件列表表格、上下文索引 |
+| `/api/chat` `/api/chat/stream` | `AlertQuerySkill` | `POST /api/xdr/v1/alerts/list` | 告警列表表格、上下文索引 |
 | `/api/chat` `/api/chat/stream` | `EventDetailSkill` | `GET /api/xdr/v1/incidents/{uuid}/proof` + `GET /api/xdr/v1/incidents/{uuid}/entities/ip` | 详情文本、时间线、证据/实体信息 |
 | `/api/chat` `/api/chat/stream` | `EntityQuerySkill` | `GET /api/xdr/v1/incidents/{uuid}/entities/ip` | 外网实体情报表 |
 | `/api/chat` `/api/chat/stream` | `EventActionSkill` | `POST /api/xdr/v1/incidents/dealstatus` | 审批卡、处置结果文本 |
 | `/api/chat` `/api/chat/stream` | `BlockQuerySkill` | `POST /api/xdr/v1/responses/blockiprule/list` | 封禁策略表、未封禁提示、快捷动作 |
 | `/api/chat` `/api/chat/stream` | `BlockActionSkill` | `POST /api/xdr/v1/device/blockdevice/list` + `POST /api/xdr/v1/responses/blockiprule/network` | 参数表单、审批卡、封禁执行结果 |
 | `/api/chat` `/api/chat/stream` | `LogStatsSkill` | `POST /api/xdr/v1/analysislog/networksecurity/count` | 日志总数图表 |
-| `/api/chat` `/api/chat/stream` | `EventTrendSkill` `EventTypeDistributionSkill` `EventDispositionSummarySkill` | `POST /api/xdr/v1/incidents/list` | 统计文本、图表、明细表 |
+| `/api/chat` `/api/chat/stream` | `EventTrendSkill` `AlertTrendSkill` `EventTypeDistributionSkill` `EventDispositionSummarySkill` | `POST /api/xdr/v1/incidents/list` / `POST /api/xdr/v1/alerts/list` | 统计文本、图表、明细表 |
 | `/api/chat` `/api/chat/stream` | `KeyEventInsightSkill` | `POST /api/xdr/v1/incidents/list` + `GET /api/xdr/v1/incidents/{uuid}/proof` + `GET /api/xdr/v1/incidents/{uuid}/entities/ip` | 重点事件总表、逐条深入解读 |
 | `/api/chat` `/api/chat/stream` | `AlertClassificationSummarySkill` | `POST /api/xdr/v1/alerts/list` | 告警分类图表与明细表 |
 | `/api/playbooks/run` `/api/playbooks/runs/{run_id}` | `PlaybookService` | `POST /api/xdr/v1/incidents/list` + `POST /api/xdr/v1/alerts/list` + `GET /api/xdr/v1/incidents/{uuid}/proof` + `GET /api/xdr/v1/incidents/{uuid}/entities/ip` + `POST /api/xdr/v1/analysislog/networksecurity/count` + `POST /api/xdr/v1/assets/list` + `POST /api/xdr/v1/device/blockdevice/list` + `POST /api/xdr/v1/responses/blockiprule/network` | 异步运行上下文、阶段性结果、建议报告 |
@@ -208,7 +209,19 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
   - 如果接口总量大于扫描上限，结果会被截断，响应文本会提示
   - 趋势结果以扫描到的快照为准，不代表全量离线仓指标
 
-### 5.3 事件类型分布
+### 5.3 安全告警趋势
+
+- 数据来源：`SecurityAnalyticsService.scan_alerts()`，分页调用 `POST /api/xdr/v1/alerts/list`
+- 扫描上限：默认最多扫描 `10000` 条告警
+- 聚合逻辑：
+  - 当时间窗小于等于 48 小时时按小时分桶，否则按天分桶
+  - 计算每个时间桶的总数和等级拆分
+  - 计算峰值时间桶和峰值数量
+- 当前限制：
+  - 如果接口总量大于扫描上限，结果会被截断，响应文本会提示
+  - 趋势结果以扫描到的快照为准，不代表全量离线仓指标
+
+### 5.4 事件类型分布
 
 - 数据来源：分页扫描 `incidents/list`
 - 聚合字段：
@@ -220,7 +233,7 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
   - 高危/严重事件研判 TopN
   - 结论/一级分类/二级分类明细表
 
-### 5.4 事件处置成果
+### 5.5 事件处置成果
 
 - 数据来源：分页扫描 `incidents/list`
 - 聚合字段：`dealStatus` 与 `dealAction`
@@ -230,7 +243,7 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
   - 这是当前状态快照，不代表历史处置流水
   - 不能从当前接口推出平均处置时长、状态迁移链路等时序指标
 
-### 5.5 重点事件解读
+### 5.6 重点事件解读
 
 - 数据来源：
   - 先扫描 `incidents/list`
@@ -247,7 +260,7 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
 - 当前限制：
   - proof 或 entity 接口失败时会回退到列表字段，并在说明里标注异常
 
-### 5.6 安全告警分类
+### 5.7 安全告警分类
 
 - 数据来源：`SecurityAnalyticsService.scan_alerts()`，分页调用 `POST /api/xdr/v1/alerts/list`
 - 扫描上限：默认最多扫描 `10000` 条告警

@@ -1061,12 +1061,13 @@ function renderPayload(payload) {
     const card = cardTemplate(payload.data.title || '表格结果');
     const wrap = document.createElement('div');
     wrap.className = 'table-wrap';
-    const table = document.createElement('table');
+    const table = createConfiguredTable(payload.data.columns || []);
     const thead = document.createElement('thead');
     const trh = document.createElement('tr');
     (payload.data.columns || []).forEach((c) => {
       const th = document.createElement('th');
       th.textContent = c.label;
+      applyColumnCellStyle(th, c);
       trh.appendChild(th);
     });
     thead.appendChild(trh);
@@ -1078,6 +1079,8 @@ function renderPayload(payload) {
         const td = document.createElement('td');
         const value = row[c.key];
         td.textContent = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+        td.title = td.textContent;
+        applyColumnCellStyle(td, c);
         tr.appendChild(td);
       });
       tbody.appendChild(tr);
@@ -1602,12 +1605,14 @@ function createMarkdownBlock(text) {
 function createUnifiedTable(payload, customRows = null) {
   const wrap = document.createElement('div');
   wrap.className = 'table-wrap';
-  const table = document.createElement('table');
+  const columns = payload.data.columns || [];
+  const table = createConfiguredTable(columns);
   const thead = document.createElement('thead');
   const trh = document.createElement('tr');
-  (payload.data.columns || []).forEach((c) => {
+  columns.forEach((c) => {
     const th = document.createElement('th');
     th.textContent = c.label;
+    applyColumnCellStyle(th, c);
     trh.appendChild(th);
   });
   thead.appendChild(trh);
@@ -1617,10 +1622,12 @@ function createUnifiedTable(payload, customRows = null) {
   const rows = Array.isArray(customRows) ? customRows : (payload.data.rows || []);
   rows.forEach((row) => {
     const tr = document.createElement('tr');
-    (payload.data.columns || []).forEach((c) => {
+    columns.forEach((c) => {
       const td = document.createElement('td');
       const value = row[c.key];
       td.textContent = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+      td.title = td.textContent;
+      applyColumnCellStyle(td, c);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -1628,6 +1635,32 @@ function createUnifiedTable(payload, customRows = null) {
   table.appendChild(tbody);
   wrap.appendChild(table);
   return wrap;
+}
+
+function createConfiguredTable(columns) {
+  const table = document.createElement('table');
+  const hasColumnWidth = columns.some((column) => column && (column.width || column.minWidth));
+  if (hasColumnWidth) {
+    table.classList.add('table-fixed-layout');
+    const colgroup = document.createElement('colgroup');
+    columns.forEach((column) => {
+      const col = document.createElement('col');
+      if (column.width) col.style.width = column.width;
+      if (column.minWidth) col.style.minWidth = column.minWidth;
+      colgroup.appendChild(col);
+    });
+    table.appendChild(colgroup);
+  }
+  return table;
+}
+
+function applyColumnCellStyle(node, column) {
+  if (!node || !column) return;
+  if (column.width) node.style.width = column.width;
+  if (column.minWidth) node.style.minWidth = column.minWidth;
+  if (column.nowrap) {
+    node.style.whiteSpace = 'nowrap';
+  }
 }
 
 function mountDeferredCharts(container) {

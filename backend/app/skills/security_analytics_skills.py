@@ -35,6 +35,14 @@ def _remember_incidents(skill: BaseSkill, session_id: str, rows: list[dict[str, 
     skill.context_manager.update_params(session_id, {"last_event_uuid": uuids[0], "last_event_uuids": uuids[:50]})
 
 
+def _remember_alerts(skill: BaseSkill, session_id: str, rows: list[dict[str, Any]]) -> None:
+    uuids = [str(row.get("uuId") or "").strip() for row in rows if str(row.get("uuId") or "").strip()]
+    if not uuids:
+        return
+    skill.context_manager.store_index_mapping(session_id, "alerts", uuids[:50])
+    skill.context_manager.update_params(session_id, {"last_alert_uuid": uuids[0], "last_alert_uuids": uuids[:50]})
+
+
 def _bar_chart_option(*, title: str, rows: list[dict[str, Any]], series_name: str) -> dict[str, Any]:
     max_label_length = max((len(str(row["name"])) for row in rows), default=0)
     return {
@@ -261,6 +269,78 @@ class EventTypeDistributionSkill(BaseSkill):
         ]
 
 
+class AlertTrendSkill(BaseSkill):
+    name = "AlertTrendSkill"
+    __init_schema__ = SecurityAnalyticsBaseInput
+
+    def execute(self, session_id: str, params: dict[str, Any], user_text: str) -> list[dict[str, Any]]:
+        _ = user_text
+        model = self.validate_and_prepare(session_id, params)
+        analytics = SecurityAnalyticsService(self.requester)
+        scan_result = analytics.scan_alerts(
+            start_ts=int(model.startTimestamp or 0),
+            end_ts=int(model.endTimestamp or 0),
+            max_scan=model.max_scan,
+        )
+        if scan_result.get("error") and not scan_result.get("rows"):
+            return [text_payload(f"安全告警趋势分析失败：{scan_result['error']}", title="安全告警发生趋势")]
+
+        rows = scan_result["rows"]
+        _remember_alerts(self, session_id, rows)
+        aggregated = analytics.aggregate_alert_trend(
+            rows,
+            start_ts=int(model.startTimestamp or 0),
+            end_ts=int(model.endTimestamp or 0),
+            granularity=model.group_by if model.group_by in {"hour", "day"} else None,
+        )
+        summary = (
+            f"统计时间范围：{_format_window(int(model.startTimestamp or 0), int(model.endTimestamp or 0))}。"
+            f" 共扫描并纳入统计 {aggregated['total']} 条告警，按{('小时' if aggregated['granularity'] == 'hour' else '天')}聚合。"
+            f" 峰值出现在 {aggregated['peak_label']}，峰值数量 {aggregated['peak_count']} 条。"
+            f"{_build_scan_notice(scan_result)}"
+        )
+
+        trend_option = {
+            "title": {"text": "安全告警总体趋势"},
+            "tooltip": {"trigger": "axis"},
+            "xAxis": {"type": "category", "data": aggregated["labels"]},
+            "yAxis": {"type": "value"},
+            "series": [{"name": "告警总数", "type": "line", "smooth": True, "data": aggregated["overall"]}],
+        }
+        severity_option = {
+            "title": {"text": "安全告警等级拆分趋势"},
+            "tooltip": {"trigger": "axis"},
+            "legend": {"data": [series["name"] for series in aggregated["severity_series"]]},
+            "xAxis": {"type": "category", "data": aggregated["labels"]},
+            "yAxis": {"type": "value"},
+            "series": [
+                {
+                    "name": series["name"],
+                    "type": "bar",
+                    "stack": "total",
+                    "data": series["data"],
+                }
+                for series in aggregated["severity_series"]
+            ],
+        }
+
+        table_columns = [
+            {"key": "bucket", "label": "时间桶"},
+            {"key": "total", "label": "总数"},
+            {"key": "严重", "label": "严重"},
+            {"key": "高危", "label": "高危"},
+            {"key": "中危", "label": "中危"},
+            {"key": "低危", "label": "低危"},
+            {"key": "信息", "label": "信息"},
+        ]
+        return [
+            text_payload(summary, title="安全告警发生趋势"),
+            echarts_payload(title="安全告警总体趋势", option=trend_option, summary=summary),
+            echarts_payload(title="安全告警等级拆分趋势", option=severity_option, summary="按告警等级拆分的堆叠趋势图。"),
+            table_payload(title="安全告警趋势明细", columns=table_columns, rows=aggregated["detail_rows"], namespace="alert_trend"),
+        ]
+
+
 class EventDispositionSummarySkill(BaseSkill):
     name = "EventDispositionSummarySkill"
     __init_schema__ = SecurityAnalyticsBaseInput
@@ -433,6 +513,7 @@ class AlertClassificationSummarySkill(BaseSkill):
             return [text_payload(f"安全告警分类分析失败：{scan_result['error']}", title="安全告警分类情况")]
 
         rows = scan_result["rows"]
+        _remember_alerts(self, session_id, rows)
         aggregated = analytics.aggregate_alert_classification_summary(rows, top_n=model.effective_top_n)
         top_class = aggregated["class_top"][0]["name"] if aggregated["class_top"] else "无"
         top_direction = aggregated["direction_rows"][0]["name"] if aggregated["direction_rows"] else "无"

@@ -104,12 +104,15 @@
             <strong>系统向导</strong>
             <pre>协议握手完成。Flux 智能安全助手已就绪。
 
-您可以通过自然语言与我交互，我支持以下核心能力：
-1. 💡 事件查询与研判：例如“查询昨日的高等级安全事件”、“查看第2个事件的详细举证”
-2. 🛡️ 实体阻断管理：例如“查询 192.168.1.10 的封禁状态”、“把刚刚的攻击源 IP 在外网防火墙上封禁 24 小时”
-3. 📊 数据统计分析：例如“统计最近一周的网络安全日志趋势”
+推荐这样提问，更容易命中系统能力：
+1. 💡 事件查询：例如“查看近24小时的安全事件”、“查询最近7天高危事件”
+2. 🔎 事件详情：例如“查看第2个事件的详细举证”
+3. 🚨 告警查询：例如“查看近7天的安全告警信息”
+4. 📊 统计分析：例如“总结最近7天的告警趋势”、“最近7天安全告警分类情况”
+5. 🛡️ 封禁管理：例如“查看 1.2.3.4 的封禁状态”、“封禁 1.2.3.4 24小时”
 
-针对特权操作，系统将会触发安全红线校验与二次人工确认。请描述您的安全运营需求...</pre>
+推荐模板：时间范围 + 对象 + 动作，例如“近24小时 + 告警 + 查看”。
+针对封禁等高危操作，系统将会触发安全红线校验与二次人工确认。请描述您的安全运营需求...</pre>
           </div>
         </div>
         <div class="chat-input-area">
@@ -120,7 +123,7 @@
           </div>
           <div id="slashCommandMenu" class="slash-command-menu hidden" role="listbox" aria-label="快捷指令"></div>
           <form id="chatForm" class="chat-input-form">
-            <input type="text" id="chatMessage" placeholder="输入自然语言指令进行意图捕获与执行..." autocomplete="off" />
+            <input type="text" id="chatMessage" placeholder="例如：查看近24小时的安全事件 / 查看近7天的安全告警信息 / 总结最近7天的告警趋势" autocomplete="off" />
             <button id="chatSubmitBtn" type="submit" class="primary-btn">执行</button>
           </form>
           <div id="chatStatusBar" class="chat-status-bar hidden" role="status" aria-live="polite" aria-atomic="true">
