@@ -21,9 +21,6 @@ build/
 *.log
 .DS_Store
 
-# Note: ignore rules do not affect files that are already tracked by Git.
-# Current tracked runtime/artifact candidates to clean up later:
-# - flux.db
-# - data/flux.db
-# - data/test_flux.db
-# - flux2-flux.tar
+# Runtime DBs and packaged artifacts are intentionally ignored.
+# If similar files were tracked in older history, remove them from the index once
+# and keep relying on these rules afterwards.
