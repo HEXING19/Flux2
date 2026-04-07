@@ -2,6 +2,28 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.venv/
 .pytest_cache/
 .mypy_cache/
+.coverage*
 
+.env
+.env.*
+
+/flux.db
+data/*.db
+
+dist/
+build/
+*.spec
+*.tar
+
+*.log
+.DS_Store
+
+# Note: ignore rules do not affect files that are already tracked by Git.
+# Current tracked runtime/artifact candidates to clean up later:
+# - flux.db
+# - data/flux.db
+# - data/test_flux.db
+# - flux2-flux.tar
