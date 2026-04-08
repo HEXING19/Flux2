@@ -96,39 +96,37 @@
     <!-- Main Workspace -->
     <section id="workspaceView" class="workspace-grid hidden">
       <div class="chat-panel">
-        <div class="panel-header">
-          <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
-        </div>
-        <div id="chatStream" class="chat-stream" aria-live="polite" aria-busy="false">
-          <div class="chat-card">
-            <strong>系统向导</strong>
-            <pre>协议握手完成。Flux 智能安全助手已就绪。
-
-推荐这样提问，更容易命中系统能力：
-1. 💡 事件查询：例如“查看近24小时的安全事件”、“查询最近7天高危事件”
-2. 🔎 事件详情：例如“查看第2个事件的详细举证”
-3. 🚨 告警查询：例如“查看近7天的安全告警信息”
-4. 📊 统计分析：例如“总结最近7天的告警趋势”、“最近7天安全告警分类情况”
-5. 🛡️ 封禁管理：例如“查看 1.2.3.4 的封禁状态”、“封禁 1.2.3.4 24小时”
-
-推荐模板：时间范围 + 对象 + 动作，例如“近24小时 + 告警 + 查看”。
-针对封禁等高危操作，系统将会触发安全红线校验与二次人工确认。请描述您的安全运营需求...</pre>
+        <aside class="conversation-sidebar">
+          <div class="conversation-sidebar-header">
+            <div>
+              <div class="conversation-sidebar-eyebrow">Context Space</div>
+              <h3>会话列表</h3>
+            </div>
+            <button id="newConversationBtn" type="button" class="primary-btn">新建会话</button>
           </div>
-        </div>
-        <div class="chat-input-area">
-          <div class="playbook-hub">
-            <div class="playbook-hub-title">场景百宝箱 (Playbook Hub)</div>
-            <div id="playbookCards" class="playbook-cards"></div>
-            <p id="playbookHint" class="hint"></p>
+          <div id="conversationList" class="conversation-list" aria-label="会话列表"></div>
+        </aside>
+        <div class="chat-main">
+          <div class="panel-header">
+            <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
+            <span id="activeConversationLabel" class="panel-chip"></span>
           </div>
-          <div id="slashCommandMenu" class="slash-command-menu hidden" role="listbox" aria-label="快捷指令"></div>
-          <form id="chatForm" class="chat-input-form">
-            <input type="text" id="chatMessage" placeholder="例如：查看近24小时的安全事件 / 查看近7天的安全告警信息 / 总结最近7天的告警趋势" autocomplete="off" />
-            <button id="chatSubmitBtn" type="submit" class="primary-btn">执行</button>
-          </form>
-          <div id="chatStatusBar" class="chat-status-bar hidden" role="status" aria-live="polite" aria-atomic="true">
-            <span class="chat-status-spinner" aria-hidden="true"></span>
-            <span id="chatStatusText">正在思考中，正在查询相关数据...</span>
+          <div id="chatStream" class="chat-stream" aria-live="polite" aria-busy="false"></div>
+          <div class="chat-input-area">
+            <div class="playbook-hub">
+              <div class="playbook-hub-title">场景百宝箱 (Playbook Hub)</div>
+              <div id="playbookCards" class="playbook-cards"></div>
+              <p id="playbookHint" class="hint"></p>
+            </div>
+            <div id="slashCommandMenu" class="slash-command-menu hidden" role="listbox" aria-label="快捷指令"></div>
+            <form id="chatForm" class="chat-input-form">
+              <input type="text" id="chatMessage" placeholder="例如：查看近24小时的安全事件 / 查看近7天的安全告警信息 / 总结最近7天的告警趋势" autocomplete="off" />
+              <button id="chatSubmitBtn" type="submit" class="primary-btn">执行</button>
+            </form>
+            <div id="chatStatusBar" class="chat-status-bar hidden" role="status" aria-live="polite" aria-atomic="true">
+              <span class="chat-status-spinner" aria-hidden="true"></span>
+              <span id="chatStatusText">正在思考中，正在查询相关数据...</span>
+            </div>
           </div>
         </div>
       </div>

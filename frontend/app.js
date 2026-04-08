@@ -1,5 +1,8 @@
 const state = {
-  sessionId: `session-${Date.now()}`,
+  sessionId: '',
+  conversationScopeKey: '',
+  conversations: [],
+  activeConversationId: null,
   isAuthenticated: false,
   xdrBaseUrl: '',
   playbookTemplates: [],
@@ -16,6 +19,22 @@ const state = {
   semanticRules: [],
   chatRequest: createIdleChatRequestState(),
 };
+
+const CONVERSATION_STORAGE_KEY = 'flux_conversations_v1';
+const CONVERSATION_STORAGE_VERSION = 1;
+const FORM_SUBMIT_PREFIX = '__FORM_SUBMIT__:';
+const CHAT_WELCOME_TITLE = '系统向导';
+const CHAT_WELCOME_TEXT = `协议握手完成。Flux 智能安全助手已就绪。
+
+推荐这样提问，更容易命中系统能力：
+1. 💡 事件查询：例如“查看近24小时的安全事件”、“查询最近7天高危事件”
+2. 🔎 事件详情：例如“查看第2个事件的详细举证”
+3. 🚨 告警查询：例如“查看近7天的安全告警信息”
+4. 📊 统计分析：例如“总结最近7天的告警趋势”、“最近7天安全告警分类情况”
+5. 🛡️ 封禁管理：例如“查看 1.2.3.4 的封禁状态”、“封禁 1.2.3.4 24小时”
+
+推荐模板：时间范围 + 对象 + 动作，例如“近24小时 + 告警 + 查看”。
+针对封禁等高危操作，系统将会触发安全红线校验与二次人工确认。请描述您的安全运营需求...`;
 
 const CHAT_PHASE_META = {
   thinking: {
@@ -220,6 +239,9 @@ const el = {
   resetSemanticRuleFormBtn: document.getElementById('resetSemanticRuleForm'),
   saveSemanticRuleBtn: document.getElementById('saveSemanticRule'),
 
+  newConversationBtn: document.getElementById('newConversationBtn'),
+  conversationList: document.getElementById('conversationList'),
+  activeConversationLabel: document.getElementById('activeConversationLabel'),
   chatForm: document.getElementById('chatForm'),
   chatMessage: document.getElementById('chatMessage'),
   chatSubmitBtn: document.getElementById('chatSubmitBtn'),
@@ -267,6 +289,576 @@ async function api(path, options = {}) {
     throw new Error(data.detail || data.message || text || '请求失败');
   }
   return data;
+}
+
+function createRuntimeId(prefix = 'id') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function safeIsoTimestamp(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return new Date().toISOString();
+  }
+  return date.toISOString();
+}
+
+function padTimePart(value) {
+  return String(value).padStart(2, '0');
+}
+
+function formatTimeLabel(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) return '--:--';
+  return `${padTimePart(date.getHours())}:${padTimePart(date.getMinutes())}`;
+}
+
+function normalizeConversationScope(baseUrl) {
+  const normalized = String(baseUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+  return normalized || 'default';
+}
+
+function truncateConversationText(text, maxLength = 22) {
+  const normalized = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength).trimEnd()}...`;
+}
+
+function summarizePayloadBatch(payloads) {
+  const normalizedPayloads = Array.isArray(payloads) ? payloads.filter(Boolean) : [];
+  if (!normalizedPayloads.length) return '系统返回了空结果。';
+  if (normalizedPayloads.length === 1) {
+    const payload = normalizedPayloads[0];
+    if (payload?.type === 'text') {
+      const text = truncateConversationText(payload?.data?.text || '', 40);
+      if (text) return text;
+    }
+    return truncateConversationText(payload?.data?.title || '系统消息', 40) || '系统消息';
+  }
+  const firstTitle = truncateConversationText(normalizedPayloads[0]?.data?.title || '任务执行结果', 22);
+  return `${firstTitle} 等 ${normalizedPayloads.length} 项结果`;
+}
+
+function normalizeConversationEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const type = String(entry.type || '').trim();
+  const createdAt = safeIsoTimestamp(entry.createdAt);
+
+  if (type === 'user_message') {
+    const message = String(entry.message || '').trim();
+    if (!message) return null;
+    return { type, message, createdAt };
+  }
+
+  if (type === 'assistant_payload_batch') {
+    const payloads = Array.isArray(entry.payloads) ? entry.payloads.filter(Boolean) : [];
+    if (!payloads.length) return null;
+    return { type, payloads, createdAt };
+  }
+
+  if (type === 'playbook_trigger') {
+    const templateId = String(entry.templateId || '').trim();
+    const triggerLabel = String(entry.triggerLabel || '').trim();
+    const params = entry.params && typeof entry.params === 'object' ? entry.params : {};
+    const runId = Number(entry.runId);
+    if (!templateId && !triggerLabel) return null;
+    return {
+      type,
+      templateId,
+      triggerLabel,
+      params,
+      runId: Number.isFinite(runId) && runId > 0 ? runId : null,
+      createdAt,
+    };
+  }
+
+  if (type === 'error') {
+    const message = String(entry.message || '').trim();
+    if (!message) return null;
+    return {
+      type,
+      title: String(entry.title || '错误').trim() || '错误',
+      message,
+      createdAt,
+    };
+  }
+
+  return null;
+}
+
+function deriveConversationTitle(entries, createdAt) {
+  const firstUserMessage = (entries || []).find((entry) => entry?.type === 'user_message' && entry?.message);
+  if (firstUserMessage?.message) {
+    return truncateConversationText(firstUserMessage.message, 24);
+  }
+  return `新会话 ${formatTimeLabel(createdAt)}`;
+}
+
+function deriveConversationPreview(entries) {
+  const lastEntry = Array.isArray(entries) && entries.length ? entries[entries.length - 1] : null;
+  if (!lastEntry) return '等待新的安全运营指令';
+  if (lastEntry.type === 'user_message') return truncateConversationText(lastEntry.message, 42);
+  if (lastEntry.type === 'assistant_payload_batch') return summarizePayloadBatch(lastEntry.payloads);
+  if (lastEntry.type === 'playbook_trigger') {
+    const displayName = getPlaybookDisplayName(lastEntry.templateId, lastEntry.triggerLabel);
+    return `已启动 ${displayName}`;
+  }
+  if (lastEntry.type === 'error') return `错误：${truncateConversationText(lastEntry.message, 34)}`;
+  return '等待新的安全运营指令';
+}
+
+function normalizeConversationRecord(record) {
+  if (!record || typeof record !== 'object') return null;
+  const entries = Array.isArray(record.entries)
+    ? record.entries.map(normalizeConversationEntry).filter(Boolean)
+    : [];
+  const createdAt = safeIsoTimestamp(record.createdAt);
+  const updatedAt = safeIsoTimestamp(record.updatedAt || createdAt);
+  const activePlaybookRunId = Number(record.activePlaybookRunId);
+  return {
+    id: String(record.id || createRuntimeId('conv')).trim(),
+    sessionId: String(record.sessionId || createRuntimeId('session')).trim(),
+    entries,
+    createdAt,
+    updatedAt,
+    activePlaybookRunId: Number.isFinite(activePlaybookRunId) && activePlaybookRunId > 0 ? activePlaybookRunId : null,
+    title: deriveConversationTitle(entries, createdAt),
+    preview: deriveConversationPreview(entries),
+  };
+}
+
+function createConversationRecord(seed = {}) {
+  return normalizeConversationRecord({
+    id: seed.id || createRuntimeId('conv'),
+    sessionId: seed.sessionId || createRuntimeId('session'),
+    entries: Array.isArray(seed.entries) ? seed.entries : [],
+    createdAt: seed.createdAt || new Date().toISOString(),
+    updatedAt: seed.updatedAt || seed.createdAt || new Date().toISOString(),
+    activePlaybookRunId: seed.activePlaybookRunId || null,
+  });
+}
+
+function sortConversations(conversations) {
+  return [...(conversations || [])].sort((left, right) => {
+    const leftTs = new Date(left?.updatedAt || 0).getTime();
+    const rightTs = new Date(right?.updatedAt || 0).getTime();
+    return rightTs - leftTs;
+  });
+}
+
+function readConversationStore() {
+  try {
+    const raw = window.localStorage.getItem(CONVERSATION_STORAGE_KEY);
+    if (!raw) {
+      return { version: CONVERSATION_STORAGE_VERSION, scopes: {} };
+    }
+    const parsed = JSON.parse(raw);
+    const scopes = parsed?.scopes && typeof parsed.scopes === 'object' ? parsed.scopes : {};
+    return {
+      version: CONVERSATION_STORAGE_VERSION,
+      scopes,
+    };
+  } catch {
+    return { version: CONVERSATION_STORAGE_VERSION, scopes: {} };
+  }
+}
+
+function writeConversationStore(store) {
+  try {
+    window.localStorage.setItem(
+      CONVERSATION_STORAGE_KEY,
+      JSON.stringify({
+        version: CONVERSATION_STORAGE_VERSION,
+        scopes: store?.scopes && typeof store.scopes === 'object' ? store.scopes : {},
+      }),
+    );
+  } catch {
+    // Ignore localStorage failures and keep the UI usable.
+  }
+}
+
+function getConversationById(conversationId) {
+  return state.conversations.find((conversation) => conversation.id === conversationId) || null;
+}
+
+function getActiveConversation() {
+  return getConversationById(state.activeConversationId);
+}
+
+function persistConversationScope() {
+  if (!state.conversationScopeKey) return;
+  const store = readConversationStore();
+  store.scopes[state.conversationScopeKey] = {
+    activeConversationId: state.activeConversationId,
+    conversations: state.conversations.map((conversation) => ({
+      id: conversation.id,
+      sessionId: conversation.sessionId,
+      title: conversation.title,
+      preview: conversation.preview,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+      entries: conversation.entries,
+      activePlaybookRunId: conversation.activePlaybookRunId,
+    })),
+  };
+  writeConversationStore(store);
+}
+
+function syncActiveConversationRuntime(conversation) {
+  state.activeConversationId = conversation?.id || null;
+  state.sessionId = conversation?.sessionId || '';
+  state.activePlaybookRunId = conversation?.activePlaybookRunId || null;
+  if (el.activeConversationLabel) {
+    el.activeConversationLabel.textContent = conversation?.title || '未选择会话';
+  }
+}
+
+function upsertConversationRecord(conversation) {
+  const normalized = normalizeConversationRecord(conversation);
+  if (!normalized) return null;
+  const nextList = state.conversations.filter((item) => item.id !== normalized.id);
+  nextList.push(normalized);
+  state.conversations = sortConversations(nextList);
+  if (!state.activeConversationId) {
+    state.activeConversationId = normalized.id;
+  }
+  if (state.activeConversationId === normalized.id) {
+    syncActiveConversationRuntime(normalized);
+  }
+  persistConversationScope();
+  renderConversationList();
+  return normalized;
+}
+
+function updateConversationRecord(conversationId, updater) {
+  const current = getConversationById(conversationId);
+  if (!current) return null;
+  const patch = typeof updater === 'function' ? updater(current) : updater;
+  const next = normalizeConversationRecord({
+    ...current,
+    ...(patch || {}),
+    id: current.id,
+    sessionId: current.sessionId,
+  });
+  return upsertConversationRecord(next);
+}
+
+function addConversationEntry(entry, conversationId = state.activeConversationId) {
+  const normalizedEntry = normalizeConversationEntry(entry);
+  if (!normalizedEntry || !conversationId) return null;
+  return updateConversationRecord(conversationId, (conversation) => ({
+    entries: [...conversation.entries, normalizedEntry],
+    updatedAt: normalizedEntry.createdAt,
+  }));
+}
+
+function setConversationPlaybookRun(conversationId, runId, opts = {}) {
+  if (!conversationId) return null;
+  return updateConversationRecord(conversationId, (conversation) => ({
+    activePlaybookRunId: runId || null,
+    updatedAt: opts.touch === true ? new Date().toISOString() : conversation.updatedAt,
+  }));
+}
+
+function buildConversationItem(conversation) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'conversation-item';
+  button.dataset.conversationId = conversation.id;
+  if (conversation.id === state.activeConversationId) {
+    button.classList.add('active');
+  }
+  button.disabled = isChatRequestInFlight() || !state.isAuthenticated;
+
+  const title = document.createElement('span');
+  title.className = 'conversation-item-title';
+  title.textContent = conversation.title;
+  button.appendChild(title);
+
+  const preview = document.createElement('span');
+  preview.className = 'conversation-item-preview';
+  preview.textContent = conversation.preview || '等待新的安全运营指令';
+  button.appendChild(preview);
+
+  const meta = document.createElement('div');
+  meta.className = 'conversation-item-meta';
+  const updatedAt = document.createElement('span');
+  updatedAt.textContent = formatTimeLabel(conversation.updatedAt);
+  meta.appendChild(updatedAt);
+  const badge = document.createElement('span');
+  badge.className = 'conversation-item-badge';
+  badge.textContent = conversation.entries.length ? `${conversation.entries.length} 条记录` : '空会话';
+  meta.appendChild(badge);
+  button.appendChild(meta);
+
+  button.onclick = async () => {
+    if (conversation.id === state.activeConversationId) return;
+    if (isChatRequestInFlight()) {
+      flashChatBusyNotice();
+      return;
+    }
+    await activateConversation(conversation.id);
+  };
+
+  return button;
+}
+
+function renderConversationList() {
+  if (!el.conversationList) return;
+  el.conversationList.innerHTML = '';
+  state.conversations.forEach((conversation) => {
+    el.conversationList.appendChild(buildConversationItem(conversation));
+  });
+  if (el.newConversationBtn) {
+    el.newConversationBtn.disabled = isChatRequestInFlight() || !state.isAuthenticated;
+  }
+}
+
+function createWelcomeCard() {
+  const card = cardTemplate(CHAT_WELCOME_TITLE);
+  const pre = document.createElement('pre');
+  pre.textContent = CHAT_WELCOME_TEXT;
+  card.appendChild(pre);
+  return card;
+}
+
+function createUserMessageCard(message) {
+  const userCard = cardTemplate('你', 'user');
+  const pre = document.createElement('pre');
+  pre.textContent = message;
+  userCard.appendChild(pre);
+  return userCard;
+}
+
+function createErrorMessageCard(message, title = '错误') {
+  const card = cardTemplate(title, 'error-card');
+  const pre = document.createElement('pre');
+  pre.textContent = message || '请求失败，请稍后重试。';
+  card.appendChild(pre);
+  return card;
+}
+
+function renderConversationEmptyState() {
+  if (!el.chatStream) return;
+  el.chatStream.innerHTML = '';
+  appendCard(createWelcomeCard());
+}
+
+function clearWelcomePlaceholder(conversationId = state.activeConversationId) {
+  const conversation = getConversationById(conversationId);
+  if (!conversation || conversation.entries.length || !el.chatStream) return;
+  el.chatStream.innerHTML = '';
+}
+
+function renderStoredErrorEntry(entry) {
+  appendCard(createErrorMessageCard(entry.message, entry.title || '错误'));
+}
+
+function renderPayloadBatch(payloads, opts = {}) {
+  const requestState = opts.requestState || null;
+  const normalizedPayloads = Array.isArray(payloads) ? payloads.filter(Boolean) : [];
+  if (!normalizedPayloads.length) {
+    if (requestState) {
+      removeChatPendingCard(requestState);
+    }
+    return;
+  }
+
+  if (requestState && (!isActiveChatRequest(requestState) && !requestState?.placeholderCard?.isConnected)) {
+    return;
+  }
+
+  if (normalizedPayloads.length === 1 && normalizedPayloads[0].type === 'text') {
+    if (requestState) {
+      replacePendingCardWithText(requestState, normalizedPayloads[0]);
+    } else {
+      renderPayload(normalizedPayloads[0]);
+    }
+    return;
+  }
+
+  if (requestState) {
+    removeChatPendingCard(requestState);
+  }
+  if (normalizedPayloads.length > 1) {
+    const primaryTitle = normalizedPayloads[0]?.data?.title || '任务执行结果';
+    renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, normalizedPayloads);
+    return;
+  }
+  renderPayload(normalizedPayloads[0]);
+}
+
+function createPlaybookTriggerCard(templateId, triggerLabel, params, runId = null) {
+  const introCard = cardTemplate('', 'user playbook-trigger-card');
+  if (runId != null) {
+    introCard.dataset.playbookRunId = String(runId);
+    introCard.onclick = async () => {
+      try {
+        await openPlaybookRunById(runId, templateId, { resetWorkspace: true });
+      } catch (err) {
+        setHint(el.playbookHint, err.message || '加载 Playbook 运行状态失败', 'error');
+      }
+    };
+  }
+  const introBubble = document.createElement('div');
+  introBubble.className = 'playbook-trigger-pill';
+  introBubble.textContent = formatTriggerLabel(templateId, triggerLabel, params);
+  const introAvatar = document.createElement('div');
+  introAvatar.className = 'playbook-trigger-avatar';
+  introAvatar.textContent = '👤';
+  introCard.appendChild(introBubble);
+  introCard.appendChild(introAvatar);
+  return introCard;
+}
+
+function replayConversationEntry(entry) {
+  if (!entry) return;
+  if (entry.type === 'user_message') {
+    appendCard(createUserMessageCard(entry.message));
+    return;
+  }
+  if (entry.type === 'assistant_payload_batch') {
+    renderPayloadBatch(entry.payloads);
+    return;
+  }
+  if (entry.type === 'playbook_trigger') {
+    appendCard(createPlaybookTriggerCard(entry.templateId, entry.triggerLabel, entry.params, entry.runId));
+    renderPlaybookLaunchFeedback(entry.templateId, entry.triggerLabel, entry.runId);
+    return;
+  }
+  if (entry.type === 'error') {
+    renderStoredErrorEntry(entry);
+  }
+}
+
+function renderConversationEntries(entries) {
+  if (!el.chatStream) return;
+  el.chatStream.innerHTML = '';
+  const normalizedEntries = Array.isArray(entries) ? entries : [];
+  if (!normalizedEntries.length) {
+    renderConversationEmptyState();
+    return;
+  }
+  normalizedEntries.forEach(replayConversationEntry);
+  scrollChatToBottom();
+}
+
+async function restoreConversation(conversation, opts = {}) {
+  syncActiveConversationRuntime(conversation);
+  persistConversationScope();
+  renderConversationList();
+  renderConversationEntries(conversation?.entries || []);
+  hideSlashCommandMenu();
+
+  if (conversation?.activePlaybookRunId) {
+    try {
+      await openPlaybookRunById(conversation.activePlaybookRunId, '', { resetWorkspace: true });
+    } catch (err) {
+      clearPlaybookWorkspace();
+      setPlaybookWorkspaceOpen(false);
+      setHint(el.playbookHint, err.message || '恢复 Playbook 运行状态失败。', 'error');
+    }
+  } else {
+    clearPlaybookWorkspace();
+    setPlaybookWorkspaceOpen(false);
+  }
+
+  if (opts.focusInput !== false && el.chatMessage) {
+    el.chatMessage.focus();
+  }
+}
+
+async function activateConversation(conversationId, opts = {}) {
+  const conversation = getConversationById(conversationId);
+  if (!conversation) return;
+  state.activeConversationId = conversation.id;
+  await restoreConversation(conversation, opts);
+}
+
+async function createNewConversation(opts = {}) {
+  const conversation = createConversationRecord();
+  upsertConversationRecord(conversation);
+  await activateConversation(conversation.id, opts);
+  return conversation;
+}
+
+async function ensureConversationScope(baseUrl) {
+  const scopeKey = normalizeConversationScope(baseUrl);
+  const store = readConversationStore();
+  const rawScope = store.scopes?.[scopeKey];
+  const conversations = sortConversations(
+    (Array.isArray(rawScope?.conversations) ? rawScope.conversations : [])
+      .map(normalizeConversationRecord)
+      .filter(Boolean),
+  );
+
+  state.conversationScopeKey = scopeKey;
+  state.conversations = conversations;
+
+  if (!state.conversations.length) {
+    await createNewConversation({ focusInput: false });
+    return;
+  }
+
+  const requestedId = String(rawScope?.activeConversationId || '').trim();
+  const activeConversation =
+    state.conversations.find((conversation) => conversation.id === requestedId) || state.conversations[0];
+  state.activeConversationId = activeConversation.id;
+  await restoreConversation(activeConversation, { focusInput: false });
+}
+
+function clearConversationRuntimeState() {
+  state.sessionId = '';
+  state.conversationScopeKey = '';
+  state.conversations = [];
+  state.activeConversationId = null;
+  if (el.conversationList) {
+    el.conversationList.innerHTML = '';
+  }
+  if (el.activeConversationLabel) {
+    el.activeConversationLabel.textContent = '';
+  }
+  if (el.chatStream) {
+    el.chatStream.innerHTML = '';
+  }
+}
+
+function createFormSubmitMessage(payload, params) {
+  const labelMap = new Map((payload?.data?.fields || []).map((field) => [field.key, field.label || field.key]));
+  const detail = Object.entries(params || {})
+    .slice(0, 3)
+    .map(([key, value]) => `${labelMap.get(key) || key}=${Array.isArray(value) ? value.join(',') : String(value)}`)
+    .join('，');
+  return detail ? `提交表单：${detail}` : `提交表单：${payload?.data?.title || '参数补充'}`;
+}
+
+async function submitChatMessage(message, opts = {}) {
+  const rawMessage = String(message || '').trim();
+  if (!rawMessage) return false;
+
+  if (!state.isAuthenticated) {
+    return sendChat(rawMessage);
+  }
+  if (isChatRequestInFlight()) {
+    flashChatBusyNotice();
+    return false;
+  }
+
+  const conversationId = opts.conversationId || state.activeConversationId;
+  const displayText = String(opts.displayText || rawMessage).trim();
+  clearWelcomePlaceholder(conversationId);
+  if (opts.recordUser !== false && displayText) {
+    addConversationEntry({ type: 'user_message', message: displayText, createdAt: new Date().toISOString() }, conversationId);
+  }
+  if (opts.renderUserCard !== false && displayText) {
+    appendCard(createUserMessageCard(displayText));
+  }
+
+  if (el.chatMessage && opts.clearInput) {
+    el.chatMessage.value = '';
+  }
+  return sendChat(rawMessage);
 }
 
 const CHART_TEXT_PRIMARY = '#e7eefc';
@@ -505,6 +1097,7 @@ function setAuthState(authenticated, statusText = '', isConnected = true) {
     state.playbookRunCache = {};
     state.playbookOpenTokens = {};
     hideSlashCommandMenu();
+    clearConversationRuntimeState();
   }
   const mainNav = document.getElementById('mainNav');
   if (mainNav) mainNav.classList.toggle('hidden', !authenticated);
@@ -619,6 +1212,8 @@ function scrollChatToBottom() {
 function createIdleChatRequestState() {
   return {
     inFlight: false,
+    conversationId: null,
+    sessionId: '',
     phase: 'idle',
     startedAt: null,
     placeholderCard: null,
@@ -684,6 +1279,7 @@ function syncChatRequestUi() {
   if (el.chatStatusText) {
     el.chatStatusText.textContent = statusText;
   }
+  renderConversationList();
 }
 
 function createChatPendingCard(phase = 'thinking') {
@@ -850,23 +1446,17 @@ function renderChatRequestError(requestState, message) {
 function finalizeChatPayloadBatch(payloads, requestState) {
   if (!isActiveChatRequest(requestState) && !requestState?.placeholderCard?.isConnected) return;
   const normalizedPayloads = Array.isArray(payloads) ? payloads.filter(Boolean) : [];
-  if (!normalizedPayloads.length) {
-    removeChatPendingCard(requestState);
-    return;
+  if (normalizedPayloads.length) {
+    addConversationEntry(
+      {
+        type: 'assistant_payload_batch',
+        payloads: normalizedPayloads,
+        createdAt: new Date().toISOString(),
+      },
+      requestState?.conversationId || state.activeConversationId,
+    );
   }
-
-  if (normalizedPayloads.length === 1 && normalizedPayloads[0].type === 'text') {
-    replacePendingCardWithText(requestState, normalizedPayloads[0]);
-    return;
-  }
-
-  removeChatPendingCard(requestState);
-  if (normalizedPayloads.length > 1) {
-    const primaryTitle = normalizedPayloads[0]?.data?.title || '任务执行结果';
-    renderUnifiedPayloadCard(`${primaryTitle} · 执行详情`, normalizedPayloads);
-    return;
-  }
-  renderPayload(normalizedPayloads[0]);
+  renderPayloadBatch(normalizedPayloads, { requestState });
 }
 
 function flashChatBusyNotice(message = CHAT_BUSY_NOTICE) {
@@ -886,6 +1476,8 @@ function flashChatBusyNotice(message = CHAT_BUSY_NOTICE) {
 function beginChatRequest() {
   const requestState = createIdleChatRequestState();
   requestState.inFlight = true;
+  requestState.conversationId = state.activeConversationId;
+  requestState.sessionId = state.sessionId;
   requestState.phase = 'thinking';
   requestState.startedAt = Date.now();
   state.chatRequest = requestState;
@@ -1002,10 +1594,12 @@ function renderPlaybookLaunchFeedback(templateId, triggerLabel = '', runId = nul
 
 async function openPlaybookRunById(runId, templateId = '', opts = {}) {
   if (!runId) return null;
+  const conversationId = opts.conversationId || state.activeConversationId;
   const runKey = String(runId);
   const openToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   state.playbookOpenTokens[runKey] = openToken;
   state.activePlaybookRunId = runId;
+  setConversationPlaybookRun(conversationId, runId);
   setPlaybookWorkspaceOpen(true);
   if (opts.resetWorkspace !== false && el.playbookWorkspaceBody) {
     el.playbookWorkspaceBody.innerHTML = '';
@@ -1120,14 +1714,14 @@ function renderPayload(payload) {
     ok.textContent = '确认执行';
     ok.onclick = () => {
       openDangerConfirm(payload.data.summary || '', async () => {
-        await sendChat('确认');
+        await submitChatMessage('确认');
       });
     };
 
     const cancel = document.createElement('button');
     cancel.className = 'secondary-btn';
     cancel.textContent = '取消';
-    cancel.onclick = async () => sendChat('取消');
+    cancel.onclick = async () => submitChatMessage('取消');
 
     actions.appendChild(ok);
     actions.appendChild(cancel);
@@ -1153,7 +1747,7 @@ function renderPayload(payload) {
         if (!action.message) return;
         btn.disabled = true;
         try {
-          await sendChat(String(action.message));
+          await submitChatMessage(String(action.message));
         } finally {
           btn.disabled = false;
         }
@@ -1240,12 +1834,15 @@ function renderPayload(payload) {
         params[field.key] = raw;
       });
 
-      await sendChat(
-        `__FORM_SUBMIT__:${JSON.stringify({
+      await submitChatMessage(
+        `${FORM_SUBMIT_PREFIX}${JSON.stringify({
           token: payload.data.token,
           intent: payload.data.intent,
           params,
         })}`,
+        {
+          displayText: createFormSubmitMessage(payload, params),
+        },
       );
     };
 
@@ -4151,12 +4748,15 @@ function createFormNode(payload) {
       params[field.key] = raw;
     });
 
-    await sendChat(
-      `__FORM_SUBMIT__:${JSON.stringify({
+    await submitChatMessage(
+      `${FORM_SUBMIT_PREFIX}${JSON.stringify({
         token: payload.data.token,
         intent: payload.data.intent,
         params,
       })}`,
+      {
+        displayText: createFormSubmitMessage(payload, params),
+      },
     );
   };
 
@@ -4242,13 +4842,13 @@ function createUnifiedPayloadSection(payload, index) {
     ok.textContent = '确认执行';
     ok.onclick = () => {
       openDangerConfirm(payload?.data?.summary || '', async () => {
-        await sendChat('确认');
+        await submitChatMessage('确认');
       });
     };
     const cancel = document.createElement('button');
     cancel.className = 'secondary-btn';
     cancel.textContent = '取消';
-    cancel.onclick = async () => sendChat('取消');
+    cancel.onclick = async () => submitChatMessage('取消');
     actions.appendChild(ok);
     actions.appendChild(cancel);
     section.appendChild(actions);
@@ -4273,7 +4873,7 @@ function createUnifiedPayloadSection(payload, index) {
           if (!action.message) return;
           btn.disabled = true;
           try {
-            await sendChat(String(action.message));
+            await submitChatMessage(String(action.message));
           } finally {
             btn.disabled = false;
           }
@@ -4984,39 +5584,49 @@ async function runPlaybook(templateId, params = {}, triggerLabel = '') {
   }
 
   const safeParams = validatePlaybookParams(templateId, params);
+  const conversationId = state.activeConversationId;
+  const requestSessionId = state.sessionId;
 
   const requestPayload = {
     template_id: templateId,
     params: safeParams,
-    session_id: state.sessionId,
+    session_id: requestSessionId,
   };
 
-  const introCard = cardTemplate('', 'user playbook-trigger-card');
-  const introBubble = document.createElement('div');
-  introBubble.className = 'playbook-trigger-pill';
-  introBubble.textContent = formatTriggerLabel(templateId, triggerLabel, safeParams);
-  const introAvatar = document.createElement('div');
-  introAvatar.className = 'playbook-trigger-avatar';
-  introAvatar.textContent = '👤';
-  introCard.appendChild(introBubble);
-  introCard.appendChild(introAvatar);
+  clearWelcomePlaceholder(conversationId);
+  const introCard = createPlaybookTriggerCard(templateId, triggerLabel, safeParams);
   appendCard(introCard);
 
   const runInfo = await api('/api/playbooks/run', {
     method: 'POST',
     body: JSON.stringify(requestPayload),
   });
+  addConversationEntry(
+    {
+      type: 'playbook_trigger',
+      templateId,
+      triggerLabel,
+      params: safeParams,
+      runId: runInfo.run_id,
+      createdAt: new Date().toISOString(),
+    },
+    conversationId,
+  );
+  setConversationPlaybookRun(conversationId, runInfo.run_id);
   introCard.dataset.playbookRunId = String(runInfo.run_id);
   introCard.onclick = async () => {
     try {
-      await openPlaybookRunById(runInfo.run_id, templateId, { resetWorkspace: true });
+      await openPlaybookRunById(runInfo.run_id, templateId, { resetWorkspace: true, conversationId });
     } catch (err) {
       setHint(el.playbookHint, err.message || '加载 Playbook 运行状态失败', 'error');
     }
   };
+  if (state.activeConversationId !== conversationId) {
+    return;
+  }
   renderPlaybookLaunchFeedback(templateId, triggerLabel, runInfo.run_id);
   state.activePlaybookRunId = runInfo.run_id;
-  await openPlaybookRunById(runInfo.run_id, templateId, { resetWorkspace: true });
+  await openPlaybookRunById(runInfo.run_id, templateId, { resetWorkspace: true, conversationId });
 }
 
 async function readSSEStream(response, requestState) {
@@ -5541,13 +6151,23 @@ async function sendChat(message) {
     });
     if (!response.ok) {
       const text = await response.text();
-      renderChatRequestError(requestState, text || '请求失败');
+      const safeMessage = text || '请求失败';
+      renderChatRequestError(requestState, safeMessage);
+      addConversationEntry(
+        { type: 'error', title: '错误', message: safeMessage, createdAt: new Date().toISOString() },
+        requestState.conversationId,
+      );
       return false;
     }
     await readSSEStream(response, requestState);
     return true;
   } catch (err) {
-    renderChatRequestError(requestState, err.message || '请求失败，请稍后重试。');
+    const safeMessage = err.message || '请求失败，请稍后重试。';
+    renderChatRequestError(requestState, safeMessage);
+    addConversationEntry(
+      { type: 'error', title: '错误', message: safeMessage, createdAt: new Date().toISOString() },
+      requestState.conversationId,
+    );
     return false;
   } finally {
     finishChatRequest(requestState);
@@ -5565,6 +6185,7 @@ async function bootWorkspace() {
     setHint(el.coreAssetResult, err.message || '核心资产列表加载失败，可稍后重试。', 'error');
   });
   await refreshPlaybookTemplates();
+  await ensureConversationScope(state.xdrBaseUrl);
 }
 
 async function checkAuthStatus() {
@@ -5616,17 +6237,14 @@ el.loginForm.addEventListener('submit', async (e) => {
 el.logoutBtn.onclick = async () => {
   try {
     const result = await api('/api/auth/logout', { method: 'POST' });
-    state.sessionId = `session-${Date.now()}`;
     state.xdrBaseUrl = '';
     state.playbookTemplates = [];
     state.activePlaybookRunId = null;
     state.playbookRunCache = {};
     state.playbookOpenTokens = {};
     closeRoutineBlockDialog();
-    el.chatStream.innerHTML = '';
     if (el.playbookCards) el.playbookCards.innerHTML = '';
     if (el.playbookHint) setHint(el.playbookHint, '');
-    clearPlaybookWorkspace();
     setHint(el.loginResult, result.message || '已退出到登录页。', 'success');
     setAuthState(false);
   } catch (err) {
@@ -5970,6 +6588,16 @@ document.addEventListener('click', (event) => {
   hideSlashCommandMenu();
 });
 
+if (el.newConversationBtn) {
+  el.newConversationBtn.onclick = async () => {
+    if (isChatRequestInFlight()) {
+      flashChatBusyNotice();
+      return;
+    }
+    await createNewConversation();
+  };
+}
+
 el.chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = el.chatMessage.value.trim();
@@ -5984,15 +6612,7 @@ el.chatForm.addEventListener('submit', async (e) => {
     return;
   }
   hideSlashCommandMenu();
-  el.chatMessage.value = '';
-
-  const userCard = cardTemplate('你', 'user');
-  const pre = document.createElement('pre');
-  pre.textContent = message;
-  userCard.appendChild(pre);
-  appendCard(userCard);
-
-  await sendChat(message);
+  await submitChatMessage(message, { clearInput: true });
 });
 
 
