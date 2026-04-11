@@ -467,17 +467,27 @@ body.booting .app-boot-screen {
 
 .chat-panel {
   background: rgba(10, 17, 40, 0.5);
+  --conversation-sidebar-width: 280px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border-light);
   border-radius: 12px;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: var(--conversation-sidebar-width) minmax(0, 1fr);
   overflow: hidden;
   box-shadow: var(--shadow-md);
   height: 100%;
   min-height: 0;
   min-height: 78vh;
+  position: relative;
+}
+
+.chat-panel.sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chat-panel.sidebar-collapsed .conversation-sidebar {
+  display: none;
 }
 
 .chat-main {
@@ -502,6 +512,13 @@ body.booting .app-boot-screen {
   border-bottom: 1px solid rgba(125, 152, 210, 0.18);
   display: flex;
   flex-direction: column;
+  gap: 12px;
+}
+
+.conversation-sidebar-header-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
 }
 
@@ -684,6 +701,12 @@ body.booting .app-boot-screen {
   background: rgba(3, 8, 22, 0.4);
 }
 
+.panel-header-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .panel-header h3 {
   margin: 0;
   font-size: 15px;
@@ -700,6 +723,78 @@ body.booting .app-boot-screen {
   height: 14px;
   background: var(--brand-blue);
   border-radius: 2px;
+}
+
+.sidebar-toggle-btn {
+  position: absolute;
+  top: 18px;
+  left: calc(var(--conversation-sidebar-width) - 52px);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(84, 118, 189, 0.34);
+  background: rgba(8, 18, 41, 0.96);
+  color: rgba(220, 232, 255, 0.92);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+  z-index: 2;
+  box-shadow: 0 10px 24px rgba(3, 10, 28, 0.28);
+}
+
+.sidebar-toggle-btn:hover {
+  background: rgba(109, 167, 255, 0.12);
+  border-color: rgba(109, 167, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.chat-panel.sidebar-collapsed .sidebar-toggle-btn {
+  left: 14px;
+}
+
+.chat-panel.sidebar-collapsed .panel-header {
+  padding-left: 78px;
+}
+
+.chat-panel.sidebar-collapsed .sidebar-toggle-rail {
+  background: rgba(220, 232, 255, 0.92);
+}
+
+.sidebar-toggle-btn:focus-visible {
+  outline: 2px solid rgba(109, 167, 255, 0.65);
+  outline-offset: 2px;
+}
+
+.sidebar-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  transform: translateX(1px);
+}
+
+.sidebar-toggle-rail {
+  width: 2px;
+  height: 16px;
+  border-radius: 999px;
+  background: currentColor;
+  display: block;
+}
+
+.sidebar-toggle-content {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sidebar-toggle-content span {
+  width: 11px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  display: block;
 }
 
 .panel-chip {
@@ -773,11 +868,6 @@ body.booting .app-boot-screen {
 .playbook-card-item[data-scene='routine_check'] .playbook-btn {
   border-color: rgba(67, 130, 245, 0.64);
   background: linear-gradient(120deg, rgba(16, 57, 138, 0.95), rgba(21, 95, 184, 0.9));
-}
-
-.playbook-card-item[data-scene='alert_triage'] .playbook-btn {
-  border-color: rgba(137, 95, 255, 0.64);
-  background: linear-gradient(120deg, rgba(66, 30, 128, 0.95), rgba(107, 47, 180, 0.9));
 }
 
 .playbook-card-item[data-scene='threat_hunting'] .playbook-btn {
@@ -1994,548 +2084,6 @@ body.booting .app-boot-screen {
 
 .threat-report-toast.show {
   opacity: 1;
-}
-
-.playbook-workspace.triage-mode {
-  background: #020617;
-  border-color: rgba(30, 41, 59, 0.92);
-}
-
-.playbook-workspace.triage-mode .playbook-workspace-header {
-  border-bottom-color: rgba(30, 41, 59, 0.96);
-  background: rgba(2, 6, 23, 0.96);
-}
-
-.playbook-workspace-body.triage-mode {
-  padding: 24px;
-}
-
-.alert-triage-card {
-  background: #020617;
-  border: 1px solid rgba(30, 41, 59, 0.94);
-  box-shadow: none;
-  position: relative;
-  overflow: hidden;
-  padding: 24px;
-}
-
-.alert-triage-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 0 0 16px;
-  border-bottom: 1px solid rgba(30, 41, 59, 0.96);
-  margin-bottom: 24px;
-}
-
-.alert-triage-title {
-  margin: 0;
-  color: #f8fbff;
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-
-.alert-triage-meta-row {
-  margin-top: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-}
-
-.alert-triage-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-  font-weight: 700;
-  border: 1px solid rgba(239, 68, 68, 0.45);
-  color: #fecaca;
-  background: rgba(127, 29, 29, 0.3);
-}
-
-.alert-triage-badge.tone-high,
-.alert-triage-badge.tone-medium {
-  border-color: rgba(245, 158, 11, 0.38);
-  color: #fcd34d;
-  background: rgba(120, 53, 15, 0.28);
-}
-
-.alert-triage-badge.tone-low {
-  border-color: rgba(71, 85, 105, 0.62);
-  color: #cbd5e1;
-  background: rgba(15, 23, 42, 0.82);
-}
-
-.alert-triage-event-name {
-  margin-top: 8px;
-  color: #cbd5e1;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.alert-triage-uuid {
-  margin-top: 4px;
-  color: #64748b;
-  font-size: 12px;
-  font-family: "JetBrains Mono", "Fira Code", monospace;
-}
-
-.alert-triage-danger-btn {
-  border: 1px solid rgba(220, 38, 38, 0.56);
-  border-radius: 8px;
-  background: #dc2626;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  padding: 10px 16px;
-  box-shadow: 0 14px 24px rgba(127, 29, 29, 0.34);
-}
-
-.alert-triage-danger-btn:hover {
-  background: #b91c1c;
-}
-
-.alert-triage-danger-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.alert-triage-conclusion {
-  margin-top: 0;
-  border-left: 4px solid #ef4444;
-  border-radius: 0 10px 10px 0;
-  background: rgba(127, 29, 29, 0.22);
-  padding: 16px;
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  margin-bottom: 24px;
-}
-
-.alert-triage-conclusion.tone-medium {
-  border-left-color: #f59e0b;
-  background: rgba(120, 53, 15, 0.2);
-}
-
-.alert-triage-conclusion.tone-low {
-  border-left-color: #475569;
-  background: rgba(15, 23, 42, 0.72);
-}
-
-.alert-triage-conclusion-icon {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #ef4444;
-  font-size: 22px;
-  font-weight: 700;
-  flex: 0 0 auto;
-}
-
-.alert-triage-conclusion.tone-medium .alert-triage-conclusion-icon {
-  color: #fbbf24;
-}
-
-.alert-triage-conclusion.tone-low .alert-triage-conclusion-icon {
-  color: #94a3b8;
-}
-
-.alert-triage-conclusion-body h4 {
-  margin: 0;
-  color: #fda4af;
-  font-size: 19px;
-  font-weight: 800;
-}
-
-.alert-triage-conclusion.tone-medium .alert-triage-conclusion-body h4 {
-  color: #fbbf24;
-}
-
-.alert-triage-conclusion.tone-low .alert-triage-conclusion-body h4 {
-  color: #cbd5e1;
-}
-
-.alert-triage-conclusion-body p {
-  margin: 6px 0 0;
-  color: #e2e8f0;
-  font-size: 14px;
-  line-height: 1.7;
-}
-
-.alert-triage-key-evidence {
-  margin-top: 12px;
-  color: #cbd5e1;
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.alert-triage-conclusion-flags {
-  margin-top: 12px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.alert-triage-flag {
-  border-radius: 999px;
-  padding: 5px 10px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.alert-triage-flag.critical {
-  background: rgba(127, 29, 29, 0.34);
-  color: #fca5a5;
-}
-
-.alert-triage-flag.warning {
-  background: rgba(120, 53, 15, 0.34);
-  color: #fcd34d;
-}
-
-.alert-triage-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 24px;
-  margin-top: 0;
-  margin-bottom: 24px;
-}
-
-.alert-triage-panel {
-  border: 1px solid rgba(30, 41, 59, 0.96);
-  border-radius: 12px;
-  background: #0f172a;
-  padding: 20px;
-  min-width: 0;
-}
-
-.alert-triage-panel-title {
-  color: #f8fafc;
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 16px;
-}
-
-.alert-triage-ip {
-  color: #f8fbff;
-  font-size: 22px;
-  line-height: 1.28;
-  font-family: "JetBrains Mono", "Fira Code", monospace;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-  word-break: break-all;
-}
-
-.alert-triage-sub {
-  margin-top: 6px;
-  color: #94a3b8;
-  font-size: 13px;
-}
-
-.alert-triage-meter {
-  margin-top: 16px;
-}
-
-.alert-triage-meter-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  color: #95aac9;
-  font-size: 12px;
-}
-
-.alert-triage-meter-head strong {
-  color: #f87171;
-  font-size: 14px;
-}
-
-.alert-triage-meter-track {
-  margin-top: 8px;
-  border-radius: 999px;
-  height: 8px;
-  background: rgba(36, 44, 63, 0.96);
-  overflow: hidden;
-}
-
-.alert-triage-meter-bar {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #b91c1c, #ef4444);
-}
-
-.alert-triage-chip-wrap {
-  margin-top: 14px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.alert-triage-chip {
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.alert-triage-chip.attacker,
-.alert-triage-chip.risk {
-  border: 1px solid rgba(185, 28, 28, 0.38);
-  background: rgba(127, 29, 29, 0.24);
-  color: #fecaca;
-}
-
-.alert-triage-chip.mitre {
-  border: 1px solid rgba(71, 85, 105, 0.56);
-  background: rgba(15, 23, 42, 0.82);
-  color: #d7e2f2;
-}
-
-.alert-triage-chip.muted {
-  border: 1px solid rgba(86, 96, 123, 0.4);
-  background: rgba(18, 28, 48, 0.64);
-  color: #8ea1bf;
-}
-
-.alert-triage-note {
-  margin-top: 14px;
-  color: #94a3b8;
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.alert-triage-kv-block .label {
-  color: #8ea1bf;
-  font-size: 12px;
-}
-
-.alert-triage-kv-block .value {
-  margin-top: 8px;
-  color: #f8fbff;
-  font-size: 21px;
-  line-height: 1.28;
-  font-family: "JetBrains Mono", "Fira Code", monospace;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-  word-break: break-all;
-}
-
-.alert-triage-victim-grid {
-  margin-top: 18px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  border: 1px solid rgba(51, 65, 85, 0.82);
-  border-radius: 10px;
-  background: rgba(30, 41, 59, 0.34);
-  padding: 16px;
-}
-
-.alert-triage-victim-grid span {
-  display: block;
-  margin-bottom: 6px;
-  color: #8ea1bf;
-  font-size: 11px;
-}
-
-.alert-triage-victim-grid strong {
-  color: #eef4ff;
-  font-size: 13px;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-}
-
-.alert-triage-impact-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.alert-triage-impact-item {
-  border-radius: 10px;
-  background: rgba(30, 41, 59, 0.5);
-  padding: 14px 12px;
-  text-align: center;
-}
-
-.alert-triage-impact-item span {
-  display: block;
-  color: #8ea1bf;
-  font-size: 11px;
-}
-
-.alert-triage-impact-item strong {
-  display: block;
-  margin-top: 8px;
-  color: #f8fbff;
-  font-size: 24px;
-  font-family: "JetBrains Mono", "Fira Code", monospace;
-  font-weight: 700;
-}
-
-.alert-triage-impact-item strong.warn {
-  color: #fbbf24;
-}
-
-.alert-triage-impact-item.emphasis {
-  grid-column: 1 / -1;
-  border: 1px solid rgba(239, 68, 68, 0.28);
-  background: rgba(127, 29, 29, 0.18);
-}
-
-.alert-triage-impact-item.emphasis strong {
-  color: #ef4444;
-  font-size: 34px;
-}
-
-.alert-triage-tactics {
-  margin-top: 0;
-  border: 1px solid rgba(30, 41, 59, 0.96);
-  border-radius: 12px;
-  overflow: hidden;
-  background: #0f172a;
-}
-
-.alert-triage-tactics-tab {
-  padding: 14px 16px;
-  border-bottom: 1px solid rgba(30, 41, 59, 0.96);
-  color: #68a6ff;
-  font-size: 13px;
-  font-weight: 700;
-  background: rgba(15, 23, 42, 0.55);
-}
-
-.alert-triage-tactics-body {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.alert-triage-tactics-body h4 {
-  margin: 0 0 10px;
-  color: #9fb4d1;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.alert-triage-payload-block {
-  border: 1px solid rgba(30, 41, 59, 0.96);
-  border-radius: 10px;
-  background: rgba(2, 6, 23, 0.96);
-  color: #7ef5b2;
-  font-size: 12px;
-  line-height: 1.7;
-  font-family: "JetBrains Mono", "Fira Code", monospace;
-  padding: 14px;
-}
-
-.alert-triage-payload-comment {
-  color: #64748b;
-  margin-bottom: 8px;
-}
-
-.alert-triage-payload-block pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font: inherit;
-  color: inherit;
-  background: transparent;
-}
-
-.alert-triage-ai-note {
-  margin: 0;
-  color: #8ea1bf;
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.alert-triage-footer-actions {
-  margin-top: 16px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.alert-triage-block-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  z-index: 3;
-}
-
-.alert-triage-block-modal-card {
-  width: min(460px, 100%);
-  border: 1px solid rgba(51, 65, 85, 0.94);
-  border-radius: 12px;
-  background: rgba(15, 23, 42, 0.98);
-  padding: 24px;
-  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.34);
-}
-
-.alert-triage-block-modal-card h4 {
-  margin: 0;
-  color: #f8fbff;
-  font-size: 18px;
-  font-weight: 800;
-}
-
-.alert-triage-block-modal-card p {
-  margin: 10px 0 0;
-  color: #8ea1bf;
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.alert-triage-block-progress {
-  margin-top: 18px;
-  border-radius: 999px;
-  height: 8px;
-  background: rgba(28, 37, 54, 0.92);
-  overflow: hidden;
-}
-
-.alert-triage-block-progress-bar {
-  width: 60%;
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #2563eb, #60a5fa);
-  animation: triage-progress-pulse 1.2s ease-in-out infinite;
-}
-
-.alert-triage-block-progress-text {
-  margin-top: 8px;
-  color: #6f819f;
-  font-size: 11px;
-  text-align: right;
-}
-
-@keyframes triage-progress-pulse {
-  0% {
-    transform: scaleX(0.94);
-    opacity: 0.8;
-  }
-  50% {
-    transform: scaleX(1);
-    opacity: 1;
-  }
-  100% {
-    transform: scaleX(0.94);
-    opacity: 0.8;
-  }
 }
 
 .asset-guard-card {
@@ -3963,6 +3511,46 @@ dialog::backdrop {
   width: min(760px, 94vw);
 }
 
+.playbook-param-dialog {
+  width: min(520px, 92vw);
+}
+
+.playbook-param-desc {
+  margin: 0 0 16px;
+  color: #b8cae8;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.playbook-param-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.playbook-param-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.playbook-param-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: #dce7fb;
+}
+
+.playbook-param-fields input,
+.playbook-param-fields select {
+  width: 100%;
+}
+
+.playbook-param-field-note {
+  font-size: 12px;
+  color: #8ea6ca;
+}
+
 .routine-block-section {
   margin-bottom: 14px;
 }
@@ -4289,14 +3877,6 @@ h4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .alert-triage-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .alert-triage-victim-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .asset-guard-action-card {
     flex-direction: column;
   }
@@ -4378,6 +3958,21 @@ h4 {
 
   .chat-panel {
     grid-template-columns: 1fr;
+  }
+
+  .sidebar-toggle-btn {
+    top: 14px;
+    left: auto;
+    right: 14px;
+  }
+
+  .chat-panel.sidebar-collapsed .sidebar-toggle-btn {
+    left: 14px;
+    right: auto;
+  }
+
+  .chat-panel.sidebar-collapsed .panel-header {
+    padding-left: 68px;
   }
 
   .conversation-sidebar {
@@ -4514,27 +4109,6 @@ h4 {
     grid-template-columns: 1fr;
   }
 
-  .alert-triage-header {
-    flex-direction: column;
-  }
-
-  .alert-triage-title {
-    font-size: 20px;
-  }
-
-  .alert-triage-danger-btn {
-    width: 100%;
-  }
-
-  .alert-triage-victim-grid,
-  .alert-triage-impact-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .alert-triage-impact-item.emphasis {
-    grid-column: auto;
-  }
-
   .asset-guard-card {
     padding: 18px;
   }
@@ -4590,6 +4164,23 @@ h4 {
 }
 
 @media (max-width: 640px) {
+  .sidebar-toggle-btn {
+    top: 12px;
+    left: auto;
+    right: 12px;
+    width: 34px;
+    height: 34px;
+  }
+
+  .chat-panel.sidebar-collapsed .sidebar-toggle-btn {
+    left: 12px;
+    right: auto;
+  }
+
+  .chat-panel.sidebar-collapsed .panel-header {
+    padding-left: 60px;
+  }
+
   .hero-brand {
     font-size: 40px;
   }

@@ -3,6 +3,7 @@ const state = {
   conversationScopeKey: '',
   conversations: [],
   activeConversationId: null,
+  isConversationSidebarCollapsed: false,
   isAuthenticated: false,
   xdrBaseUrl: '',
   playbookTemplates: [],
@@ -22,6 +23,7 @@ const state = {
 
 const CONVERSATION_STORAGE_KEY = 'flux_conversations_v1';
 const CONVERSATION_STORAGE_VERSION = 1;
+const CONVERSATION_SIDEBAR_STORAGE_KEY = 'flux_conversation_sidebar_v1';
 const FORM_SUBMIT_PREFIX = '__FORM_SUBMIT__:';
 const CHAT_WELCOME_TITLE = '系统向导';
 const CHAT_WELCOME_TEXT = `协议握手完成。Flux 智能安全助手已就绪。
@@ -57,14 +59,6 @@ const DEFAULT_PLAYBOOK_SCENES = [
     default_params: { window_hours: 24, sample_size: 3 },
   },
   {
-    id: 'alert_triage',
-    name: '单点告警深度研判',
-    button_label: '🔎 单点告警深度研判',
-    description: '围绕指定事件做实体画像、外部情报和内部影响计数，输出封禁/观察建议。',
-    hint: '可在“事件查询”后按序号研判，或直接输入事件 UUID。',
-    default_params: { window_days: 7, mode: 'analyze' },
-  },
-  {
     id: 'threat_hunting',
     name: '攻击者活动轨迹',
     button_label: '🎯 攻击者活动轨迹',
@@ -90,12 +84,6 @@ const SLASH_COMMANDS = [
     description: '启动今日安全早报自动编排。',
   },
   {
-    id: 'alert_triage',
-    command: '/单点告警深度研判',
-    aliases: ['/alert_triage', '/研判'],
-    description: '围绕指定事件做深度研判并给出处置建议。',
-  },
-  {
     id: 'threat_hunting',
     command: '/攻击者活动轨迹',
     aliases: ['/threat_hunting', '/轨迹'],
@@ -112,24 +100,9 @@ const SLASH_COMMANDS = [
 const PLAYBOOK_STAGE_META = {
   routine_check: {
     node_1_log_count_24h: { title: '统计日志总量', desc: '统计过去窗口期日志体量' },
-    node_2_unhandled_high_events_24h: { title: '检索需要优先关注的威胁', desc: '筛选需要优先关注的时间' },
+    node_2_unhandled_high_events_24h: { title: '检索需要优先关注的威胁', desc: '筛选需要优先关注的事件' },
     node_3_sample_detail_parallel: { title: '并行拉取样本证据', desc: '补充样本事件证据和实体信息' },
     node_4_llm_briefing: { title: '生成早报结论', desc: '输出安全态势的结论与建议' },
-  },
-  alert_triage: {
-    analyze: {
-      node_1_resolve_target: { title: '定位目标事件', desc: '解析事件ID/序号并锁定目标' },
-      node_2_entity_profile: { title: '生成实体画像', desc: '抽取事件关联IP与画像信息' },
-      node_3_proof_enrich: { title: '提取举证特征', desc: '聚合MITRE、漏洞与Payload证据' },
-      node_4_external_intel: { title: '外部情报查询', desc: '补充ThreatBook或本地情报结果' },
-      node_5_internal_impact_count_parallel: { title: '统计内部影响', desc: '计算影响面与风险得分' },
-      node_6_asset_profile: { title: '补全受害画像', desc: '从资产接口提取主机名、角色与价值' },
-      node_7_llm_triage_summary: { title: '输出研判结论', desc: '给出处置建议和优先动作' },
-    },
-    block_ip: {
-      node_1_resolve_target_ip: { title: '解析待封禁IP', desc: '从参数或事件实体定位目标IP' },
-      node_2_build_block_approval: { title: '生成审批卡', desc: '进入高危操作人工审批链路' },
-    },
   },
   threat_hunting: {
     node_1_attack_surface_recon: { title: '线索锁定与攻击面探明', desc: '先按源IP检索，必要时补目的IP并完成攻击面聚合' },
@@ -240,6 +213,9 @@ const el = {
   saveSemanticRuleBtn: document.getElementById('saveSemanticRule'),
 
   newConversationBtn: document.getElementById('newConversationBtn'),
+  chatPanel: document.getElementById('chatPanel'),
+  conversationSidebar: document.getElementById('conversationSidebar'),
+  toggleConversationSidebarBtn: document.getElementById('toggleConversationSidebarBtn'),
   conversationList: document.getElementById('conversationList'),
   activeConversationLabel: document.getElementById('activeConversationLabel'),
   chatForm: document.getElementById('chatForm'),
@@ -257,6 +233,14 @@ const el = {
   dangerDialog: document.getElementById('dangerDialog'),
   dangerText: document.getElementById('dangerText'),
   routineBlockDialog: document.getElementById('routineBlockDialog'),
+  playbookParamDialog: document.getElementById('playbookParamDialog'),
+  playbookParamForm: document.getElementById('playbookParamForm'),
+  playbookParamTitle: document.getElementById('playbookParamTitle'),
+  playbookParamDesc: document.getElementById('playbookParamDesc'),
+  playbookParamFields: document.getElementById('playbookParamFields'),
+  playbookParamHint: document.getElementById('playbookParamHint'),
+  playbookParamCancel: document.getElementById('playbookParamCancel'),
+  playbookParamConfirm: document.getElementById('playbookParamConfirm'),
   routineBlockTitle: document.getElementById('routineBlockTitle'),
   routineBlockTargetLabel: document.getElementById('routineBlockTargetLabel'),
   routineBlockTargetList: document.getElementById('routineBlockTargetList'),
@@ -476,6 +460,49 @@ function writeConversationStore(store) {
   } catch {
     // Ignore localStorage failures and keep the UI usable.
   }
+}
+
+function readConversationSidebarCollapsed() {
+  try {
+    return window.localStorage.getItem(CONVERSATION_SIDEBAR_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeConversationSidebarCollapsed(collapsed) {
+  try {
+    window.localStorage.setItem(CONVERSATION_SIDEBAR_STORAGE_KEY, collapsed ? '1' : '0');
+  } catch {
+    // Ignore localStorage failures and keep the UI usable.
+  }
+}
+
+function updateConversationSidebarToggleButton() {
+  if (!el.toggleConversationSidebarBtn) return;
+  const collapsed = !!state.isConversationSidebarCollapsed;
+  const label = collapsed ? '展开会话列表' : '收起会话列表';
+  el.toggleConversationSidebarBtn.setAttribute('aria-label', label);
+  el.toggleConversationSidebarBtn.setAttribute('aria-expanded', String(!collapsed));
+  el.toggleConversationSidebarBtn.title = label;
+}
+
+function applyConversationSidebarState(collapsed, { persist = true } = {}) {
+  state.isConversationSidebarCollapsed = !!collapsed;
+  if (el.chatPanel) {
+    el.chatPanel.classList.toggle('sidebar-collapsed', state.isConversationSidebarCollapsed);
+  }
+  if (el.conversationSidebar) {
+    el.conversationSidebar.setAttribute('aria-hidden', state.isConversationSidebarCollapsed ? 'true' : 'false');
+  }
+  updateConversationSidebarToggleButton();
+  if (persist) {
+    writeConversationSidebarCollapsed(state.isConversationSidebarCollapsed);
+  }
+}
+
+function toggleConversationSidebar(forceCollapsed = !state.isConversationSidebarCollapsed) {
+  applyConversationSidebarState(forceCollapsed);
 }
 
 function getConversationById(conversationId) {
@@ -1145,6 +1172,182 @@ function closeDialog(dialog) {
   }
   dialog.classList.remove('open');
   dialog.removeAttribute('open');
+}
+
+let activePlaybookParamResolver = null;
+
+function resetPlaybookParamDialog() {
+  if (el.playbookParamTitle) el.playbookParamTitle.textContent = '启动场景';
+  if (el.playbookParamDesc) el.playbookParamDesc.textContent = '';
+  if (el.playbookParamFields) el.playbookParamFields.innerHTML = '';
+  if (el.playbookParamHint) setHint(el.playbookParamHint, '');
+  if (el.playbookParamConfirm) el.playbookParamConfirm.textContent = '启动场景';
+}
+
+function closePlaybookParamDialog(result = null) {
+  if (activePlaybookParamResolver) {
+    const resolve = activePlaybookParamResolver;
+    activePlaybookParamResolver = null;
+    closeDialog(el.playbookParamDialog);
+    resetPlaybookParamDialog();
+    resolve(result);
+    return;
+  }
+  closeDialog(el.playbookParamDialog);
+  resetPlaybookParamDialog();
+}
+
+function createPlaybookParamField({ key, label, type = 'text', value = '', placeholder = '', note = '', listId = '', required = false }) {
+  const wrapper = document.createElement('label');
+  wrapper.setAttribute('for', `playbook-param-${key}`);
+  wrapper.textContent = label;
+
+  const input = document.createElement('input');
+  input.id = `playbook-param-${key}`;
+  input.name = key;
+  input.type = type;
+  input.value = value == null ? '' : String(value);
+  if (placeholder) input.placeholder = placeholder;
+  if (listId) input.setAttribute('list', listId);
+  input.required = !!required;
+  wrapper.appendChild(input);
+
+  if (note) {
+    const noteNode = document.createElement('span');
+    noteNode.className = 'playbook-param-field-note';
+    noteNode.textContent = note;
+    wrapper.appendChild(noteNode);
+  }
+  return wrapper;
+}
+
+function getSceneLaunchLabel(scene) {
+  const buttonLabel = String(scene?.button_label || '').replace(/^[^\u4e00-\u9fa5A-Za-z0-9]+/, '').trim();
+  if (buttonLabel) return buttonLabel;
+  return String(scene?.name || scene?.id || '场景').trim() || '场景';
+}
+
+function buildPlaybookParamDialog(scene) {
+  const base = { ...(scene?.default_params || {}) };
+  if (scene?.id === 'threat_hunting') {
+    return {
+      title: getSceneLaunchLabel(scene) || '攻击者活动轨迹生成',
+      desc: scene.description || '请输入要追踪的攻击者 IP，系统将基于默认窗口回溯攻击轨迹。',
+      fields: [
+        {
+          key: 'ip',
+          label: '攻击者IP',
+          value: '',
+          placeholder: '如：47.110.244.207',
+          note: scene.hint || '请输入合法的 IPv4 地址。',
+          required: true,
+        },
+      ],
+      collect(values) {
+        return { ...base, ip: String(values.ip || '').trim() };
+      },
+    };
+  }
+
+  if (scene?.id === 'asset_guard') {
+    const defaultAsset = state.coreAssets[0] || null;
+    const suggestionId = 'playbook-asset-suggestions';
+    return {
+      title: getSceneLaunchLabel(scene) || '核心资产一键体检',
+      desc: scene.description || '请输入要体检的核心资产 IP，也可以补充资产名称帮助报告识别。',
+      fields: [
+        {
+          key: 'asset_ip',
+          label: '核心资产IP',
+          value: defaultAsset?.asset_ip || '',
+          placeholder: '如：192.168.18.183',
+          note: state.coreAssets.length ? '支持直接输入，也可参考已维护的核心资产清单。' : '请输入合法的 IPv4 地址。',
+          listId: state.coreAssets.length ? suggestionId : '',
+          required: true,
+        },
+        {
+          key: 'asset_name',
+          label: '资产名称',
+          value: defaultAsset?.asset_name || '',
+          placeholder: '如：核心数据库',
+          note: '可选，便于在报告中区分业务对象。',
+          required: false,
+        },
+      ],
+      datalist: state.coreAssets.length ? {
+        id: suggestionId,
+        options: state.coreAssets.map((asset) => ({
+          value: asset.asset_ip,
+          label: asset.asset_name ? `${asset.asset_name} (${asset.asset_ip})` : asset.asset_ip,
+        })),
+      } : null,
+      collect(values) {
+        return {
+          ...base,
+          asset_ip: String(values.asset_ip || '').trim(),
+          asset_name: String(values.asset_name || '').trim() || undefined,
+        };
+      },
+    };
+  }
+
+  return null;
+}
+
+async function openPlaybookParamDialog(scene) {
+  const config = buildPlaybookParamDialog(scene);
+  if (!config || !el.playbookParamDialog || !el.playbookParamFields) {
+    return { ...(scene?.default_params || {}) };
+  }
+  if (activePlaybookParamResolver) {
+    closePlaybookParamDialog(null);
+  }
+
+  resetPlaybookParamDialog();
+  if (el.playbookParamTitle) el.playbookParamTitle.textContent = config.title || '启动场景';
+  if (el.playbookParamDesc) el.playbookParamDesc.textContent = config.desc || '';
+  if (el.playbookParamConfirm) el.playbookParamConfirm.textContent = `启动${getSceneLaunchLabel(scene)}`;
+
+  (config.fields || []).forEach((field) => {
+    el.playbookParamFields.appendChild(createPlaybookParamField(field));
+  });
+  if (config.datalist?.id && Array.isArray(config.datalist.options) && config.datalist.options.length) {
+    const datalist = document.createElement('datalist');
+    datalist.id = config.datalist.id;
+    config.datalist.options.forEach((item) => {
+      const option = document.createElement('option');
+      option.value = item.value;
+      option.label = item.label || item.value;
+      datalist.appendChild(option);
+    });
+    el.playbookParamFields.appendChild(datalist);
+  }
+
+  openDialog(el.playbookParamDialog);
+  window.setTimeout(() => {
+    const firstInput = el.playbookParamFields?.querySelector('input, select, textarea');
+    firstInput?.focus();
+    firstInput?.select?.();
+  }, 0);
+
+  return new Promise((resolve) => {
+    activePlaybookParamResolver = resolve;
+    el.playbookParamForm.onsubmit = (event) => {
+      event.preventDefault();
+      try {
+        const values = {};
+        (config.fields || []).forEach((field) => {
+          const input = el.playbookParamFields.querySelector(`[name="${field.key}"]`);
+          values[field.key] = input?.value ?? '';
+        });
+        const params = config.collect(values);
+        const safeParams = validatePlaybookParams(scene.id, params);
+        closePlaybookParamDialog(safeParams);
+      } catch (err) {
+        setHint(el.playbookParamHint, err.message || '参数校验失败', 'error');
+      }
+    };
+  });
 }
 
 function collectLoginPayload() {
@@ -1976,11 +2179,6 @@ function createPlaybookProgressCard(runId, templateId) {
 }
 
 function getStageMeta(templateId, runData) {
-  const input = runData?.input?.params || {};
-  if (templateId === 'alert_triage') {
-    const mode = input.mode === 'block_ip' ? 'block_ip' : 'analyze';
-    return PLAYBOOK_STAGE_META.alert_triage[mode] || {};
-  }
   return PLAYBOOK_STAGE_META[templateId] || {};
 }
 
@@ -2278,6 +2476,28 @@ function createPlaybookActionButton(action) {
   btn.onclick = async () => {
     try {
       btn.disabled = true;
+      if (action?.action_type === 'block_ips') {
+        const params = action?.params || {};
+        const ips = [];
+        if (isValidIpv4(params.ip)) ips.push(params.ip);
+        if (Array.isArray(params.ips)) {
+          params.ips.forEach((ip) => {
+            if (isValidIpv4(ip)) ips.push(ip);
+          });
+        }
+        const dedupIps = dedupText(ips).filter((ip) => isValidIpv4(ip));
+        const blockTypeRaw = String(params.block_type || params.blockType || 'SRC_IP').toUpperCase();
+        const blockType = blockTypeRaw === 'DST_IP' ? 'DST_IP' : 'SRC_IP';
+        await openRoutineBlockDialog({
+          actionTitle: blockType === 'DST_IP' ? '封锁恶意外联IP' : '封禁恶意攻击源',
+          resultTitle: blockType === 'DST_IP' ? '外联封锁结果' : '网侧封禁结果',
+          blockType,
+          ips: dedupIps,
+          defaultReason: '由 Playbook 建议动作触发',
+          emptyMessage: '当前未提取到可下发封禁的目标 IP。',
+        });
+        return;
+      }
       await runPlaybook(action.template_id, action.params || {}, action.label || action.template_id);
     } catch (err) {
       const errorCard = cardTemplate('Playbook 执行失败');
@@ -3330,7 +3550,7 @@ function renderRoutineCheckCard(runData) {
       blockType: 'SRC_IP',
       ips: vm.sourceIps,
       defaultReason: '由安全早报一键处置触发（攻击源封禁）',
-      emptyMessage: '当前未提取到可封禁的攻击源 IP，请先执行深度研判后再处置。',
+      emptyMessage: '当前未提取到可封禁的攻击源 IP，请先完成告警分析后再处置。',
     });
   };
 
@@ -3967,335 +4187,6 @@ function parseMetricPercent(value, fallback = 0) {
   return Math.max(0, Math.min(100, Math.round(num)));
 }
 
-function buildAlertTriageViewModel(runData) {
-  const result = runData?.result || {};
-  const triageView = result?.triage_view || {};
-  const header = triageView?.header || {};
-  const risk = triageView?.risk || {};
-  const attacker = triageView?.attacker || {};
-  const victim = triageView?.victim || {};
-  const impact = triageView?.impact || {};
-  const tactics = triageView?.tactics || {};
-  const payload = triageView?.payload || {};
-  const actionBlock = triageView?.actions || {};
-  const nextActions = Array.isArray(actionBlock?.next_actions) ? actionBlock.next_actions : (Array.isArray(result?.next_actions) ? result.next_actions : []);
-  const dangerAction = actionBlock?.danger_action || nextActions.find((action) => action?.style === 'danger') || null;
-  const supportActions = nextActions.filter((action) => action && action.style !== 'danger' && (!dangerAction || action.id !== dangerAction.id));
-  const incidentUuid = String(
-    header?.incident_uuid
-    || runData?.input?.params?.incident_uuid
-    || (Array.isArray(runData?.input?.params?.incident_uuids) ? runData.input.params.incident_uuids[0] : '')
-    || '-',
-  ).trim() || '-';
-  const incidentName = String(header?.incident_name || runData?.input?.params?.incident_name || '未知事件').trim() || '未知事件';
-  const summary = String(result?.summary || '').replace(/\*\*/g, '').trim();
-  const confidence = parseMetricPercent(attacker?.confidence, 0);
-  const payloadLines = dedupText(payload?.lines || []);
-  const rawPayloadText = String(payload?.raw_text || payloadLines.join('\n') || '未提取到高置信度原始 Payload 片段。').trim();
-  const attackerTags = dedupText(attacker?.tags || []);
-  const riskTags = dedupText(tactics?.risk_tags || []);
-  const mitreTags = dedupText(tactics?.mitre || []);
-  const title = String(header?.title || 'Playbook 报告 · 单点告警深度研判').trim();
-  const severityLabel = String(header?.severity_label || '深度研判').trim();
-  const conclusionTitle = String(risk?.conclusion_title || '系统研判结论').trim();
-  const conclusionText = String(risk?.conclusion_text || '研判已完成。').replace(/\*\*/g, '').trim();
-  const keyEvidence = String(risk?.key_evidence || '').trim();
-  const dangerLabel = isValidIpv4(attacker?.ip) ? `一键封禁源 IP (${attacker.ip})` : (dangerAction?.label || '执行处置');
-  const attackerHistory = String(attacker?.history_summary || '近7天未检索到同源高危攻击记录').trim();
-  const assetRole = String(victim?.asset_role || victim?.asset_name || '-').trim() || '-';
-  const recommendation = String(risk?.recommendation || '').trim();
-  const authenticityScore = Number(risk?.authenticity_score || 0);
-  const conclusionTone = String(risk?.tone || '').trim() || (authenticityScore >= 88 || recommendation.includes('立即') ? 'critical' : (authenticityScore >= 72 ? 'high' : (authenticityScore >= 40 ? 'medium' : 'low')));
-
-  return {
-    title,
-    incidentName,
-    incidentUuid,
-    severityLabel,
-    conclusionTitle,
-    conclusionText,
-    conclusionTone,
-    keyEvidence,
-    summary,
-    recommendation,
-    breachLabel: String(risk?.recommendation_label || '尚未确认边界突破').trim(),
-    lateralLabel: String(risk?.lateral_label || '当前未观测到高置信横向扩散证据').trim(),
-    boundaryBreached: Boolean(risk?.boundary_breached),
-    lateralMovement: Boolean(risk?.lateral_movement),
-    attacker: {
-      ip: String(attacker?.ip || '-').trim() || '-',
-      location: String(attacker?.location || '未知').trim() || '未知',
-      confidence,
-      tags: attackerTags,
-      history: attackerHistory,
-      severity: String(attacker?.severity || '未知').trim() || '未知',
-    },
-    victim: {
-      ip: String(victim?.ip || '-').trim() || '-',
-      hostName: String(victim?.host_name || '-').trim() || '-',
-      assetRole,
-    },
-    impact: {
-      windowDays: toMetricNumber(impact?.window_days || 7) || 7,
-      totalVisits: toMetricNumber(impact?.total_visits || 0),
-      highRiskVisits: toMetricNumber(impact?.high_risk_visits || 0),
-      successCount: toMetricNumber(impact?.success_count || 0),
-      lateralMovement: Boolean(impact?.lateral_movement),
-    },
-    tactics: {
-      mitre: mitreTags,
-      riskTags,
-      aiResult: String(tactics?.ai_result || '').trim(),
-    },
-    payload: {
-      title: String(payload?.title || '提取的关键恶意 Payload 片段（仅支持WAF类型告警）').trim(),
-      rawText: rawPayloadText,
-    },
-    dangerAction,
-    dangerLabel,
-    supportActions,
-  };
-}
-
-function createAlertTriageActionModal(ip) {
-  const overlay = document.createElement('div');
-  overlay.className = 'alert-triage-block-modal';
-  overlay.innerHTML = `
-    <div class="alert-triage-block-modal-card">
-      <h4>执行 SOAR 处置剧本</h4>
-      <p>正在通过现有处置链路提交针对源 IP ${escapeHtml(ip || '-')} 的封禁动作，请稍候...</p>
-      <div class="alert-triage-block-progress">
-        <div class="alert-triage-block-progress-bar"></div>
-      </div>
-      <div class="alert-triage-block-progress-text">剧本执行中</div>
-    </div>
-  `;
-  return overlay;
-}
-
-function renderAlertTriageCard(runData) {
-  const result = runData?.result || {};
-  if (!result?.triage_view && !result?.summary) {
-    renderPlaybookUnifiedCard(runData);
-    return;
-  }
-  setPlaybookWorkspaceMode('triage');
-  const vm = buildAlertTriageViewModel(runData);
-  const card = cardTemplate('', '');
-  if (runData?.run_id != null) {
-    card.dataset.playbookRunId = String(runData.run_id);
-  }
-  card.dataset.playbookCardType = 'triage-report';
-  card.classList.add('playbook-unified-report', 'playbook-task-card', 'workspace-panel-card', 'alert-triage-card');
-
-  const header = document.createElement('div');
-  header.className = 'alert-triage-header';
-  const headerInfo = document.createElement('div');
-  const title = document.createElement('h3');
-  title.className = 'alert-triage-title';
-  title.textContent = vm.title;
-  headerInfo.appendChild(title);
-  const metaRow = document.createElement('div');
-  metaRow.className = 'alert-triage-meta-row';
-  const badge = document.createElement('span');
-  badge.className = `alert-triage-badge tone-${vm.conclusionTone}`;
-  badge.textContent = vm.severityLabel;
-  metaRow.appendChild(badge);
-  headerInfo.appendChild(metaRow);
-  const incidentName = document.createElement('div');
-  incidentName.className = 'alert-triage-event-name';
-  incidentName.textContent = `事件名称: ${vm.incidentName}`;
-  headerInfo.appendChild(incidentName);
-  const uuid = document.createElement('div');
-  uuid.className = 'alert-triage-uuid';
-  uuid.textContent = `UUID: ${vm.incidentUuid}`;
-  headerInfo.appendChild(uuid);
-  header.appendChild(headerInfo);
-
-  if (vm.dangerAction) {
-    const actionBtn = document.createElement('button');
-    actionBtn.type = 'button';
-    actionBtn.className = 'alert-triage-danger-btn';
-    actionBtn.textContent = vm.dangerLabel;
-    actionBtn.onclick = async () => {
-      const modal = createAlertTriageActionModal(vm.attacker.ip);
-      document.body.appendChild(modal);
-      try {
-        actionBtn.disabled = true;
-        await runPlaybook(vm.dangerAction.template_id, vm.dangerAction.params || {}, vm.dangerAction.label || vm.dangerAction.id || '执行动作');
-      } catch (err) {
-        setHint(el.playbookHint, err.message || '执行动作失败', 'error');
-      } finally {
-        actionBtn.disabled = false;
-        modal.remove();
-      }
-    };
-    header.appendChild(actionBtn);
-  }
-  card.appendChild(header);
-
-  const conclusion = document.createElement('section');
-  conclusion.className = `alert-triage-conclusion tone-${vm.conclusionTone}`;
-  conclusion.innerHTML = `
-    <div class="alert-triage-conclusion-icon">${vm.conclusionTone === 'critical' ? '!' : (vm.conclusionTone === 'low' ? 'i' : '△')}</div>
-    <div class="alert-triage-conclusion-body">
-      <h4>${escapeHtml(vm.conclusionTitle)}</h4>
-      <p>${escapeHtml(vm.conclusionText)}</p>
-      ${vm.keyEvidence ? `<div class="alert-triage-key-evidence">关键证据：${escapeHtml(vm.keyEvidence)}</div>` : ''}
-      <div class="alert-triage-conclusion-flags"></div>
-    </div>
-  `;
-  const flagWrap = conclusion.querySelector('.alert-triage-conclusion-flags');
-  [
-    vm.breachLabel,
-    vm.lateralLabel,
-  ].filter(Boolean).forEach((text, idx) => {
-    const item = document.createElement('span');
-    item.className = `alert-triage-flag ${idx === 0 ? 'critical' : 'warning'}`;
-    item.textContent = text;
-    flagWrap.appendChild(item);
-  });
-  card.appendChild(conclusion);
-
-  const grid = document.createElement('div');
-  grid.className = 'alert-triage-grid';
-
-  const attackerPanel = document.createElement('section');
-  attackerPanel.className = 'alert-triage-panel attacker';
-  attackerPanel.innerHTML = `
-    <div class="alert-triage-panel-title">攻击源画像</div>
-    <div class="alert-triage-ip">${escapeHtml(vm.attacker.ip)}</div>
-    <div class="alert-triage-sub">${escapeHtml(vm.attacker.location)}</div>
-    <div class="alert-triage-meter">
-      <div class="alert-triage-meter-head">
-        <span>情报置信度</span>
-        <strong>${vm.attacker.confidence}%</strong>
-      </div>
-      <div class="alert-triage-meter-track"><div class="alert-triage-meter-bar" style="width:${vm.attacker.confidence}%"></div></div>
-    </div>
-    <div class="alert-triage-chip-wrap"></div>
-    <div class="alert-triage-note">${escapeHtml(vm.attacker.history)}</div>
-  `;
-  const attackerChipWrap = attackerPanel.querySelector('.alert-triage-chip-wrap');
-  vm.attacker.tags.forEach((tag) => {
-    const chip = document.createElement('span');
-    chip.className = 'alert-triage-chip attacker';
-    chip.textContent = tag;
-    attackerChipWrap.appendChild(chip);
-  });
-  if (!vm.attacker.tags.length) {
-    const empty = document.createElement('span');
-    empty.className = 'alert-triage-chip muted';
-    empty.textContent = vm.attacker.severity || '暂无情报标签';
-    attackerChipWrap.appendChild(empty);
-  }
-  grid.appendChild(attackerPanel);
-
-  const victimPanel = document.createElement('section');
-  victimPanel.className = 'alert-triage-panel victim';
-  victimPanel.innerHTML = `
-    <div class="alert-triage-panel-title">受害目标画像</div>
-    <div class="alert-triage-kv-block">
-      <div class="label">受害资产 IP</div>
-      <div class="value">${escapeHtml(vm.victim.ip)}</div>
-    </div>
-    <div class="alert-triage-victim-grid">
-      <div><span>主机名</span><strong>${escapeHtml(vm.victim.hostName)}</strong></div>
-      <div><span>资产角色</span><strong>${escapeHtml(vm.victim.assetRole)}</strong></div>
-    </div>
-  `;
-  grid.appendChild(victimPanel);
-
-  const impactPanel = document.createElement('section');
-  impactPanel.className = 'alert-triage-panel impact';
-  impactPanel.innerHTML = `
-    <div class="alert-triage-panel-title">内部影响面</div>
-    <div class="alert-triage-impact-grid">
-      <div class="alert-triage-impact-item">
-        <span>近${vm.impact.windowDays}天总访问量</span>
-        <strong>${formatMetric(vm.impact.totalVisits)}</strong>
-      </div>
-      <div class="alert-triage-impact-item">
-        <span>高危攻击量</span>
-        <strong class="warn">${formatMetric(vm.impact.highRiskVisits)}</strong>
-      </div>
-      <div class="alert-triage-impact-item emphasis">
-        <span>有效攻击次数 (攻击成功)</span>
-        <strong>${formatMetric(vm.impact.successCount)}</strong>
-      </div>
-    </div>
-  `;
-  grid.appendChild(impactPanel);
-  card.appendChild(grid);
-
-  const tacticsPanel = document.createElement('section');
-  tacticsPanel.className = 'alert-triage-tactics';
-  const tacticsHeader = document.createElement('div');
-  tacticsHeader.className = 'alert-triage-tactics-tab';
-  tacticsHeader.textContent = '攻击手法特征';
-  tacticsPanel.appendChild(tacticsHeader);
-
-  const tacticsBody = document.createElement('div');
-  tacticsBody.className = 'alert-triage-tactics-body';
-  const mitreBlock = document.createElement('div');
-  const mitreTitle = document.createElement('h4');
-  mitreTitle.textContent = '命中 MITRE ATT&CK 战术';
-  mitreBlock.appendChild(mitreTitle);
-  const mitreWrap = document.createElement('div');
-  mitreWrap.className = 'alert-triage-chip-wrap';
-  vm.tactics.mitre.forEach((tag) => {
-    const chip = document.createElement('span');
-    chip.className = 'alert-triage-chip mitre';
-    chip.textContent = tag;
-    mitreWrap.appendChild(chip);
-  });
-  vm.tactics.riskTags.forEach((tag) => {
-    const chip = document.createElement('span');
-    chip.className = 'alert-triage-chip risk';
-    chip.textContent = tag;
-    mitreWrap.appendChild(chip);
-  });
-  if (!vm.tactics.mitre.length && !vm.tactics.riskTags.length) {
-    const chip = document.createElement('span');
-    chip.className = 'alert-triage-chip muted';
-    chip.textContent = '暂无攻击手法标签';
-    mitreWrap.appendChild(chip);
-  }
-  mitreBlock.appendChild(mitreWrap);
-  tacticsBody.appendChild(mitreBlock);
-
-  const payloadBlock = document.createElement('div');
-  const payloadTitle = document.createElement('h4');
-  payloadTitle.textContent = vm.payload.title;
-  payloadBlock.appendChild(payloadTitle);
-  const payloadPre = document.createElement('div');
-  payloadPre.className = 'alert-triage-payload-block';
-  payloadPre.innerHTML = `
-    <div class="alert-triage-payload-comment">// 提取的关键恶意 Payload 片段</div>
-    <pre>${escapeHtml(vm.payload.rawText)}</pre>
-  `;
-  payloadBlock.appendChild(payloadPre);
-  tacticsBody.appendChild(payloadBlock);
-
-  if (vm.tactics.aiResult) {
-    const aiBlock = document.createElement('p');
-    aiBlock.className = 'alert-triage-ai-note';
-    aiBlock.textContent = `AI举证摘要：${vm.tactics.aiResult}`;
-    tacticsBody.appendChild(aiBlock);
-  }
-  tacticsPanel.appendChild(tacticsBody);
-  card.appendChild(tacticsPanel);
-
-  if (vm.supportActions.length) {
-    const footer = document.createElement('div');
-    footer.className = 'alert-triage-footer-actions';
-    vm.supportActions.forEach((action) => footer.appendChild(createPlaybookActionButton(action)));
-    card.appendChild(footer);
-  }
-
-  appendPlaybookWorkspaceCard(card);
-}
-
 function parseAssetGuardTags(value) {
   if (Array.isArray(value)) return dedupText(value);
   const text = String(value || '').trim();
@@ -4352,11 +4243,6 @@ function buildAssetGuardViewModel(runData) {
     toMetricNumber(inboundRow?.event_count || 0),
     toMetricNumber(outboundRow?.event_count || 0),
   );
-  const logMax = Math.max(
-    1,
-    toMetricNumber(inboundRow?.log_count || 0),
-    toMetricNumber(outboundRow?.log_count || 0),
-  );
   const intelRows = intelRowsRaw.map((row) => {
     const severity = normalizeAssetGuardSeverity(row?.severity);
     const confidenceValue = parseMetricPercent(row?.confidence, 0);
@@ -4384,16 +4270,14 @@ function buildAssetGuardViewModel(runData) {
     metrics: {
       inbound: {
         eventCount: toMetricNumber(inboundRow?.event_count || 0),
-        logCount: toMetricNumber(inboundRow?.log_count || 0),
       },
       outbound: {
         eventCount: toMetricNumber(outboundRow?.event_count || 0),
-        logCount: toMetricNumber(outboundRow?.log_count || 0),
       },
       eventMax,
-      logMax,
     },
     trend: {
+      title: String(trend?.title || chartCard?.data?.title || '流量威胁双向评估（最近7个24小时窗口）'),
       labels: trendLabels,
       inbound: trendInbound,
       outbound: trendOutbound,
@@ -4507,7 +4391,7 @@ function renderAssetGuardCard(runData) {
   chartSection.className = 'asset-guard-panel';
   const chartTitle = document.createElement('h4');
   chartTitle.className = 'asset-guard-panel-title with-icon';
-  chartTitle.innerHTML = '<span class="asset-guard-panel-icon">▤</span>流量威胁双向评估 (近7天)';
+  chartTitle.innerHTML = `<span class="asset-guard-panel-icon">▤</span>${escapeHtml(vm.trend.title)}`;
   chartSection.appendChild(chartTitle);
   chartSection.appendChild(buildAssetGuardTrendChart(vm));
   const insightBox = document.createElement('div');
@@ -5159,10 +5043,6 @@ function renderPlaybookResult(runData) {
     renderRoutineCheckCard(runData);
     return;
   }
-  if (runData?.template_id === 'alert_triage') {
-    renderAlertTriageCard(runData);
-    return;
-  }
   if (runData?.template_id === 'asset_guard') {
     renderAssetGuardCard(runData);
     return;
@@ -5174,55 +5054,12 @@ function renderPlaybookResult(runData) {
   renderPlaybookUnifiedCard(runData);
 }
 
-function buildSceneParams(scene) {
+async function buildSceneParams(scene) {
   const base = { ...(scene.default_params || {}) };
-  if (scene.id === 'alert_triage') {
-    const raw = window.prompt('请输入事件序号（如 1）或事件UUID（incident-xxx）：', '');
-    const value = (raw || '').trim();
-    if (!value) return null;
-    if (!/^\d+$/.test(value)) {
-      if (!isValidIncidentUuid(value)) {
-        throw new Error('输入格式错误，请填写事件序号或合法的 incident UUID。');
-      }
-      return { ...base, incident_uuid: value };
-    }
-    const idx = Number(value);
-    if (!Number.isNaN(idx) && idx > 0) {
-      return { ...base, event_index: idx };
-    }
-    throw new Error('输入格式错误，请填写事件序号或 incident UUID。');
-  }
-
-  if (scene.id === 'threat_hunting') {
-    const raw = window.prompt('请输入要追踪的攻击者IP：', '');
-    const value = (raw || '').trim();
-    if (!value) return null;
-    if (!isValidIpv4(value)) {
-      throw new Error('请输入合法的 IPv4 地址。');
-    }
-    return { ...base, ip: value };
-  }
-
-  if (scene.id === 'asset_guard') {
-    const defaultAsset = state.coreAssets[0];
-    const defaultPromptValue = defaultAsset ? `${defaultAsset.asset_name || ''} ${defaultAsset.asset_ip}`.trim() : '';
-    const raw = window.prompt('请输入核心资产IP（可输入“资产名 空格 IP”）：', defaultPromptValue);
-    const value = (raw || '').trim();
-    if (!value) return null;
-
-    let assetIp = '';
-    let assetName = '';
-    const ipMatch = value.match(/(?:\d{1,3}\.){3}\d{1,3}/);
-    if (ipMatch) {
-      assetIp = ipMatch[0];
-      assetName = value.replace(assetIp, '').trim();
-      if (!isValidIpv4(assetIp)) {
-        throw new Error('请输入合法的核心资产 IPv4。');
-      }
-    } else {
-      throw new Error('请输入合法的核心资产IP。');
-    }
-    return { ...base, asset_ip: assetIp, asset_name: assetName || undefined };
+  if (scene.id === 'threat_hunting' || scene.id === 'asset_guard') {
+    const params = await openPlaybookParamDialog(scene);
+    if (!params) return null;
+    return { ...base, ...params };
   }
 
   return base;
@@ -5230,38 +5067,6 @@ function buildSceneParams(scene) {
 
 function validatePlaybookParams(templateId, params = {}) {
   const next = { ...(params || {}) };
-  if (templateId === 'alert_triage') {
-    if (next.incident_uuid && !isValidIncidentUuid(next.incident_uuid)) {
-      throw new Error('incident_uuid 格式不正确。');
-    }
-    if (Array.isArray(next.incident_uuids)) {
-      next.incident_uuids.forEach((item) => {
-        if (!isValidIncidentUuid(item)) {
-          throw new Error(`incident_uuid ${item} 格式不正确。`);
-        }
-      });
-    }
-    if (next.event_index != null && (!(Number(next.event_index) > 0) || !Number.isInteger(Number(next.event_index)))) {
-      throw new Error('event_index 必须是正整数。');
-    }
-    if (Array.isArray(next.event_indexes)) {
-      next.event_indexes.forEach((item) => {
-        if (!(Number(item) > 0) || !Number.isInteger(Number(item))) {
-          throw new Error('event_indexes 必须全部是正整数。');
-        }
-      });
-    }
-    if (next.ip && !isValidIpv4(next.ip)) {
-      throw new Error('ip 必须是合法的 IPv4 地址。');
-    }
-    if (Array.isArray(next.ips)) {
-      next.ips.forEach((item) => {
-        if (!isValidIpv4(item)) {
-          throw new Error(`IP ${item} 不是合法的 IPv4 地址。`);
-        }
-      });
-    }
-  }
   if (templateId === 'threat_hunting') {
     if (!isValidIpv4(next.ip)) {
       throw new Error('攻击者活动轨迹的目标必须是合法的 IPv4 地址。');
@@ -5286,17 +5091,6 @@ function validatePlaybookParams(templateId, params = {}) {
 
 function formatTriggerLabel(templateId, triggerLabel, params) {
   const baseLabel = triggerLabel || templateId;
-  if (templateId === 'alert_triage') {
-    if (params?.incident_uuid) return `触发场景: ${baseLabel}（${params.incident_uuid}）`;
-    if (Array.isArray(params?.incident_uuids) && params.incident_uuids.length) {
-      if (params.incident_uuids.length === 1) return `触发场景: ${baseLabel}（${params.incident_uuids[0]}）`;
-      return `触发场景: ${baseLabel}（${params.incident_uuids[0]} 等${params.incident_uuids.length}条）`;
-    }
-    if (params?.event_index) return `触发场景: ${baseLabel}（序号${params.event_index}）`;
-    if (Array.isArray(params?.event_indexes) && params.event_indexes.length) {
-      return `触发场景: ${baseLabel}（序号${params.event_indexes[0]} 等${params.event_indexes.length}条）`;
-    }
-  }
   if (templateId === 'asset_guard' && params?.asset_ip) {
     return `触发场景: ${baseLabel}（${params.asset_ip}）`;
   }
@@ -5337,7 +5131,7 @@ function renderPlaybookCards(templates) {
     btn.onclick = async () => {
       try {
         btn.disabled = true;
-        const params = buildSceneParams(scene);
+        const params = await buildSceneParams(scene);
         if (!params) return;
         await runPlaybook(scene.id, params, scene.name || scene.id);
       } catch (err) {
@@ -5544,7 +5338,7 @@ async function executeSlashCommand(command) {
     el.chatMessage.focus();
   }
   try {
-    const params = buildSceneParams(scene);
+    const params = await buildSceneParams(scene);
     if (!params) return;
     await runPlaybook(scene.id, params, scene.name || scene.id);
   } catch (err) {
@@ -6285,6 +6079,12 @@ if (el.routineBlockCancel) {
   };
 }
 
+if (el.playbookParamCancel) {
+  el.playbookParamCancel.onclick = () => {
+    closePlaybookParamDialog(null);
+  };
+}
+
 if (el.routineBlockConfirm) {
   el.routineBlockConfirm.onclick = async () => {
     await submitRoutineBlockDialog();
@@ -6305,6 +6105,25 @@ if (el.routineBlockDialog) {
       event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
     if (isOutside) {
       closeRoutineBlockDialog();
+    }
+  });
+}
+
+if (el.playbookParamDialog) {
+  el.playbookParamDialog.addEventListener('click', (event) => {
+    const rect = el.playbookParamDialog.getBoundingClientRect();
+    const isOutside =
+      event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+    if (isOutside) {
+      closePlaybookParamDialog(null);
+    }
+  });
+  el.playbookParamDialog.addEventListener('close', () => {
+    if (activePlaybookParamResolver) {
+      const resolve = activePlaybookParamResolver;
+      activePlaybookParamResolver = null;
+      resetPlaybookParamDialog();
+      resolve(null);
     }
   });
 }
@@ -6598,6 +6417,12 @@ if (el.newConversationBtn) {
   };
 }
 
+if (el.toggleConversationSidebarBtn) {
+  el.toggleConversationSidebarBtn.onclick = () => {
+    toggleConversationSidebar();
+  };
+}
+
 el.chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const message = el.chatMessage.value.trim();
@@ -6618,6 +6443,7 @@ el.chatForm.addEventListener('submit', async (e) => {
 
 (async function init() {
   initProviderUI();
+  applyConversationSidebarState(readConversationSidebarCollapsed(), { persist: false });
   renderPlaybookCards([]);
   try {
     await checkAuthStatus();

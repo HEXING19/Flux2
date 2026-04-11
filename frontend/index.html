@@ -51,7 +51,7 @@
             <div class="feature-icon">🔍</div>
             <div class="feature-text">
               <h3>AI 对话式运营与场景编排</h3>
-              <p>围绕安全早报、深度研判、攻击轨迹与资产透视等场景，以多轮对话完成威胁查看、封禁地址查询与处置，快速产出可执行分析结论。</p>
+              <p>围绕安全早报、攻击轨迹与资产透视等场景，以多轮对话完成威胁查看、封禁地址查询与处置，快速产出可执行分析结论。</p>
             </div>
           </div>
 
@@ -95,20 +95,42 @@
 
     <!-- Main Workspace -->
     <section id="workspaceView" class="workspace-grid hidden">
-      <div class="chat-panel">
-        <aside class="conversation-sidebar">
+      <div id="chatPanel" class="chat-panel">
+        <aside id="conversationSidebar" class="conversation-sidebar">
           <div class="conversation-sidebar-header">
-            <div>
-              <div class="conversation-sidebar-eyebrow">Context Space</div>
-              <h3>会话列表</h3>
+            <div class="conversation-sidebar-header-top">
+              <div>
+                <div class="conversation-sidebar-eyebrow">Context Space</div>
+                <h3>会话列表</h3>
+              </div>
             </div>
             <button id="newConversationBtn" type="button" class="primary-btn">新建会话</button>
           </div>
           <div id="conversationList" class="conversation-list" aria-label="会话列表"></div>
         </aside>
+        <button
+          id="toggleConversationSidebarBtn"
+          class="sidebar-toggle-btn"
+          type="button"
+          aria-label="收起会话列表"
+          aria-controls="conversationSidebar"
+          aria-expanded="true"
+          title="收起会话列表"
+        >
+          <span class="sidebar-toggle-icon" aria-hidden="true">
+            <span class="sidebar-toggle-rail"></span>
+            <span class="sidebar-toggle-content">
+              <span></span>
+              <span></span>
+              <span></span>
+            </span>
+          </span>
+        </button>
         <div class="chat-main">
           <div class="panel-header">
-            <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
+            <div class="panel-header-main">
+              <h3>AI 融合交互终端 (Intelligent Copilot Console)</h3>
+            </div>
             <span id="activeConversationLabel" class="panel-chip"></span>
           </div>
           <div id="chatStream" class="chat-stream" aria-live="polite" aria-busy="false"></div>
@@ -418,6 +440,23 @@
         <button id="routineBlockCancel" class="secondary-btn">取消</button>
         <button id="routineBlockConfirm" class="danger-btn">确认并一键处置</button>
       </div>
+    </div>
+  </dialog>
+
+  <dialog id="playbookParamDialog" class="danger-dialog playbook-param-dialog">
+    <div class="dialog-content">
+      <div class="dialog-header">
+        <h3 id="playbookParamTitle" style="color:var(--brand-blue-l10);">启动场景</h3>
+      </div>
+      <p id="playbookParamDesc" class="playbook-param-desc"></p>
+      <form id="playbookParamForm" class="playbook-param-form">
+        <div id="playbookParamFields" class="playbook-param-fields"></div>
+        <p id="playbookParamHint" class="hint"></p>
+        <div class="action-row" style="justify-content: flex-end;">
+          <button id="playbookParamCancel" type="button" class="secondary-btn">取消</button>
+          <button id="playbookParamConfirm" type="submit" class="primary-btn">启动场景</button>
+        </div>
+      </form>
     </div>
   </dialog>
 

@@ -7,8 +7,6 @@ from pydantic import BaseModel, Field, ValidationError, field_validator, model_v
 from app.core.validation import (
     clean_optional_text,
     clean_text,
-    validate_incident_uuid,
-    validate_incident_uuid_list,
     validate_ipv4,
     validate_ipv4_list,
     validate_time_range,
@@ -35,77 +33,6 @@ class PlaybookTemplateMeta(BaseModel):
 class RoutineCheckParams(BaseModel):
     window_hours: int = Field(default=24, ge=1, le=168)
     sample_size: int = Field(default=3, ge=1, le=10)
-
-
-class AlertTriageParams(BaseModel):
-    incident_uuid: str | None = None
-    incident_uuids: list[str] | None = None
-    event_index: int | None = Field(default=None, ge=1)
-    event_indexes: list[int] | None = None
-    window_days: int = Field(default=7, ge=1, le=30)
-    mode: Literal["analyze", "block_ip"] = "analyze"
-    ip: str | None = None
-    ips: list[str] | None = None
-    session_id: str | None = None
-
-    @field_validator("incident_uuid")
-    @classmethod
-    def validate_incident_uuid_field(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return validate_incident_uuid(value, field_name="incident_uuid")
-
-    @field_validator("incident_uuids")
-    @classmethod
-    def validate_incident_uuid_list_field(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        return validate_incident_uuid_list(value, field_name="incident_uuids", allow_empty=False)
-
-    @field_validator("event_indexes")
-    @classmethod
-    def validate_event_indexes(cls, value: list[int] | None) -> list[int] | None:
-        if value is None:
-            return None
-        normalized: list[int] = []
-        for item in value:
-            if item <= 0:
-                raise ValueError("event_indexes 必须大于 0。")
-            if item not in normalized:
-                normalized.append(item)
-        return normalized or None
-
-    @field_validator("ip")
-    @classmethod
-    def validate_ip(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return validate_ipv4(value, field_name="ip")
-
-    @field_validator("ips")
-    @classmethod
-    def validate_ips(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        return validate_ipv4_list(value, field_name="ips", allow_empty=False)
-
-    @field_validator("session_id", mode="before")
-    @classmethod
-    def normalize_session_id(cls, value: str | None) -> str | None:
-        return clean_optional_text(value)
-
-    @model_validator(mode="after")
-    def validate_required_target(self) -> "AlertTriageParams":
-        has_uuid = bool(self.incident_uuid)
-        has_uuid_list = bool(self.incident_uuids)
-        has_index = bool(self.event_index) or bool(self.event_indexes)
-        has_ip = bool(self.ip)
-        has_ips = bool(self.ips)
-        if self.mode == "analyze" and not (has_uuid or has_uuid_list or has_index):
-            raise ValueError("alert_triage 缺少 incident_uuid 或 event_index 参数。")
-        if self.mode == "block_ip" and not (has_ip or has_ips or has_uuid or has_uuid_list or has_index):
-            raise ValueError("alert_triage(block_ip) 缺少 ip/ips 或事件定位参数。")
-        return self
 
 
 class ThreatHuntingParams(BaseModel):
@@ -163,7 +90,6 @@ class AssetGuardParams(BaseModel):
 
 PLAYBOOK_PARAM_MODELS: dict[str, type[BaseModel]] = {
     "routine_check": RoutineCheckParams,
-    "alert_triage": AlertTriageParams,
     "threat_hunting": ThreatHuntingParams,
     "asset_guard": AssetGuardParams,
 }
@@ -185,7 +111,7 @@ def validate_playbook_params(template_id: str, params: dict[str, Any]) -> dict[s
 
 
 class PlaybookRunRequest(BaseModel):
-    template_id: Literal["routine_check", "alert_triage", "threat_hunting", "asset_guard"]
+    template_id: Literal["routine_check", "threat_hunting", "asset_guard"]
     params: dict[str, Any] = Field(default_factory=dict)
     session_id: str | None = Field(default=None, min_length=1)
 

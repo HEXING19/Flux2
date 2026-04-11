@@ -29,34 +29,6 @@ class PlaybookRegistry:
                     ),
                 ],
             ),
-            "alert_triage": PlaybookTemplateMeta(
-                id="alert_triage",
-                name="单点告警深度研判",
-                description="围绕指定事件进行实体画像、外部情报与内部影响面计数，给出处置建议。",
-                button_label="🔍 一键深度研判",
-                default_params={"window_days": 7, "mode": "analyze"},
-                params=[
-                    PlaybookTemplateParam(
-                        key="incident_uuid",
-                        label="事件UUID",
-                        description="优先使用该参数定位事件。",
-                        required=False,
-                    ),
-                    PlaybookTemplateParam(
-                        key="event_index",
-                        label="事件序号",
-                        description="配合 session_id，从上下文序号映射到事件UUID。",
-                        required=False,
-                    ),
-                    PlaybookTemplateParam(
-                        key="window_days",
-                        label="内部影响统计窗口(天)",
-                        description="默认7天。",
-                        required=False,
-                        default=7,
-                    ),
-                ],
-            ),
             "threat_hunting": PlaybookTemplateMeta(
                 id="threat_hunting",
                 name="攻击者活动轨迹",
