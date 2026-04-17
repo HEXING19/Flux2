@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 
 EVENT_UUID_PATTERN = re.compile(r"^incident-[A-Za-z0-9-]{6,}$")
+ALERT_UUID_PATTERN = re.compile(r"^alert-[A-Za-z0-9-]{6,}$")
 DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?!-)(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}\.?$"
 )
@@ -79,6 +80,33 @@ def validate_incident_uuid_list(values: object, *, field_name: str, allow_empty:
     seen: set[str] = set()
     for idx, item in enumerate(values, start=1):
         uid = validate_incident_uuid(item, field_name=f"{field_name}[{idx}]")
+        if uid in seen:
+            continue
+        seen.add(uid)
+        normalized.append(uid)
+    if not allow_empty and not normalized:
+        raise ValueError(f"{field_name} 不能为空。")
+    return normalized
+
+
+def validate_alert_uuid(value: object, *, field_name: str) -> str:
+    text = clean_text(value)
+    if not text:
+        raise ValueError(f"{field_name} 不能为空。")
+    if not ALERT_UUID_PATTERN.match(text):
+        raise ValueError(f"{field_name} 格式不合法。")
+    return text
+
+
+def validate_alert_uuid_list(values: object, *, field_name: str, allow_empty: bool = False) -> list[str]:
+    if values is None:
+        return []
+    if not isinstance(values, list):
+        raise ValueError(f"{field_name} 必须是数组。")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(values, start=1):
+        uid = validate_alert_uuid(item, field_name=f"{field_name}[{idx}]")
         if uid in seen:
             continue
         seen.add(uid)

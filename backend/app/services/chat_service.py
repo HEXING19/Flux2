@@ -113,6 +113,22 @@ class ChatService:
         )
         return any(token in text for token in keywords)
 
+    @staticmethod
+    def _is_ambiguous_detail_reference(message: str) -> bool:
+        text = message.strip()
+        if not any(token in text for token in ("详情", "举证", "时间线")):
+            return False
+        if any(token in text for token in ("事件", "告警", "incident-", "alert-")):
+            return False
+        return any(token in text for token in ("第", "前", "刚刚", "那个", "这条", "上一条"))
+
+    def _resolve_detail_intent(self, session_id: str, intent: str, message: str) -> str:
+        if intent != "event_detail" or not self._is_ambiguous_detail_reference(message):
+            return intent
+        if context_manager.get_param(session_id, "last_result_namespace") == "alerts":
+            return "alert_detail"
+        return intent
+
     def _inject_playbook_params_if_needed(self, session_id: str, intent: str, params: dict[str, Any], message: str) -> dict[str, Any]:
         merged = dict(params or {})
         if intent != "block_action":
@@ -232,6 +248,7 @@ class ChatService:
                 }
             )
         parsed = self.intent_parser.parse(message, semantic_rules=semantic_rules)
+        parsed.intent = self._resolve_detail_intent(session_id, parsed.intent, message)
         parsed.params = self._inject_playbook_params_if_needed(session_id, parsed.intent, parsed.params, message)
 
         if parsed.intent == "confirm_pending":

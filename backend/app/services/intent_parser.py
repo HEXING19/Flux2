@@ -123,8 +123,13 @@ class IntentParser:
         if any(k in normalized for k in ["实体", "情报", "外网ip", "外网IP"]):
             return ParsedIntent(intent="entity_query", params=self._parse_entity_query(normalized))
 
-        if any(k in normalized for k in ["详情", "举证", "时间线"]) and any(k in normalized for k in ["事件", "告警", "第"]):
-            return ParsedIntent(intent="event_detail", params={"ref_text": normalized})
+        if any(k in normalized for k in ["详情", "举证", "时间线"]):
+            if re.search(r"alert-[A-Za-z0-9-]{6,}", normalized) or "告警" in normalized:
+                return ParsedIntent(intent="alert_detail", params={"ref_text": normalized})
+            if re.search(r"incident-[A-Za-z0-9-]{6,}", normalized) or "事件" in normalized:
+                return ParsedIntent(intent="event_detail", params={"ref_text": normalized})
+            if any(k in normalized for k in ["第", "前", "刚刚", "那个", "这条", "上一条"]):
+                return ParsedIntent(intent="event_detail", params={"ref_text": normalized})
 
         if any(k in normalized for k in ["处置", "标记", "挂起", "接受风险", "遏制"]):
             params = self._parse_event_action(normalized)

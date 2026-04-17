@@ -32,7 +32,10 @@ def _remember_incidents(skill: BaseSkill, session_id: str, rows: list[dict[str, 
     if not uuids:
         return
     skill.context_manager.store_index_mapping(session_id, "events", uuids[:50])
-    skill.context_manager.update_params(session_id, {"last_event_uuid": uuids[0], "last_event_uuids": uuids[:50]})
+    skill.context_manager.update_params(
+        session_id,
+        {"last_event_uuid": uuids[0], "last_event_uuids": uuids[:50], "last_result_namespace": "events"},
+    )
 
 
 def _remember_alerts(skill: BaseSkill, session_id: str, rows: list[dict[str, Any]]) -> None:
@@ -40,7 +43,10 @@ def _remember_alerts(skill: BaseSkill, session_id: str, rows: list[dict[str, Any
     if not uuids:
         return
     skill.context_manager.store_index_mapping(session_id, "alerts", uuids[:50])
-    skill.context_manager.update_params(session_id, {"last_alert_uuid": uuids[0], "last_alert_uuids": uuids[:50]})
+    skill.context_manager.update_params(
+        session_id,
+        {"last_alert_uuid": uuids[0], "last_alert_uuids": uuids[:50], "last_result_namespace": "alerts"},
+    )
 
 
 def _bar_chart_option(*, title: str, rows: list[dict[str, Any]], series_name: str) -> dict[str, Any]:

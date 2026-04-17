@@ -20,6 +20,7 @@ Referenced API docs are under `docs/api-ref/`.
 | EventQuerySkill | `event_query` | `POST /api/xdr/v1/incidents/list` | none (time range defaults supported by API) | text summary + table + `events` index mapping |
 | AlertQuerySkill | `alert_query` | `POST /api/xdr/v1/alerts/list` | none (time range defaults supported by API) | text summary + table + `alerts` index mapping |
 | EventDetailSkill | `event_detail` | `GET /api/xdr/v1/incidents/{uuid}/proof` | `uuids` (direct or resolved from index) | text detail + timeline table |
+| AlertDetailSkill | `alert_detail` | `GET /api/xdr/v1/alerts/{uuid}/proof` | `uuids` (direct or resolved from index) | text detail + proof/original-alert tables |
 | EntityQuerySkill | `entity_query` | `GET /api/xdr/v1/incidents/{uuid}/entities/ip` | `uuid` or resolvable event reference | text summary + entity table |
 | EventActionSkill | `event_action` | `POST /api/xdr/v1/incidents/dealstatus` | `uuids`, `deal_status` | dangerous text result |
 | EventTrendSkill | `event_trend` | `POST /api/xdr/v1/incidents/list` | none (defaults to recent 7 days when omitted) | text summary + 2 charts + trend table |

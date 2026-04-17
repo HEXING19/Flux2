@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.core.context import SkillContextManager
 from app.core.requester import APIRequester
 
-from .alert_skills import AlertQuerySkill
+from .alert_skills import AlertDetailSkill, AlertQuerySkill
 from .block_skills import BlockActionSkill, BlockQuerySkill
 from .entity_skill import EntityQuerySkill
 from .event_skills import EventActionSkill, EventDetailSkill, EventQuerySkill
@@ -23,6 +23,7 @@ class SkillRegistry:
         self._skills = {
             "event_query": EventQuerySkill(requester, context_manager),
             "alert_query": AlertQuerySkill(requester, context_manager),
+            "alert_detail": AlertDetailSkill(requester, context_manager),
             "event_detail": EventDetailSkill(requester, context_manager),
             "event_action": EventActionSkill(requester, context_manager),
             "event_trend": EventTrendSkill(requester, context_manager),

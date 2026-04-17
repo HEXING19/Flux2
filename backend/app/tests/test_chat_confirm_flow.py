@@ -74,12 +74,59 @@ class FakeRequester:
         payload = json_body or {}
         if path == "/api/xdr/v1/incidents/list":
             severity = set(payload.get("severities") or [])
-            items = [row for row in self.incidents if not severity or row["incidentSeverity"] in severity]
+            incident_ids = set(payload.get("uuIds") or [])
+            items = [
+                row
+                for row in self.incidents
+                if (not severity or row["incidentSeverity"] in severity) and (not incident_ids or row["uuId"] in incident_ids)
+            ]
             return {"code": "Success", "message": "成功", "data": {"item": items, "total": len(items), "page": 1, "pageSize": 10}}
         if path == "/api/xdr/v1/alerts/list":
-            return {"code": "Success", "message": "成功", "data": {"item": list(self.alerts), "total": len(self.alerts), "page": 1, "pageSize": 10}}
+            alert_ids = set(payload.get("uuIds") or [])
+            items = [row for row in self.alerts if not alert_ids or row["uuId"] in alert_ids]
+            return {"code": "Success", "message": "成功", "data": {"item": items, "total": len(items), "page": 1, "pageSize": 10}}
         if path == "/api/xdr/v1/incidents/dealstatus":
             return {"code": "Success", "message": "成功", "data": {"total": len(payload.get("uuIds", [])), "succeededNum": 1}}
+        if path.startswith("/api/xdr/v1/alerts/") and path.endswith("/proof"):
+            uid = path.split("/")[-2]
+            return {
+                "code": "Success",
+                "message": "成功",
+                "data": {
+                    "uuId": uid,
+                    "name": f"{uid}-proof",
+                    "severity": 90,
+                    "direction": 2,
+                    "attackResult": 3,
+                    "stage": 40,
+                    "threatDefine": [400],
+                    "threatSubTypeDesc": "命令执行",
+                    "engineName": ["IOA引擎"],
+                    "logCount": 2,
+                    "lastTime": 1739999700,
+                    "srcIp": ["8.8.8.8"],
+                    "srcPort": [443],
+                    "dstIp": ["10.10.0.2"],
+                    "dstPort": [8443],
+                    "devSourceName": ["EDR"],
+                    "dealStatus": 1,
+                    "proofType": ["http", "file"],
+                    "proof": {
+                        "requestHead": "GET /admin HTTP/1.1",
+                        "fileMd5": ["abc123"],
+                        "cmdLine": "whoami",
+                    },
+                    "originalAlert": {
+                        "ruleName": "高危Web攻击规则",
+                        "cmdLine": "whoami",
+                        "name": "sh",
+                        "path": "/bin/sh",
+                        "mitreIds": ["TA0001.T1190"],
+                    },
+                    "gptResult": 115,
+                    "gptResultDescription": "主机失陷活动",
+                },
+            }
         if path.endswith("/proof"):
             uid = path.split("/")[-2]
             return {
@@ -344,6 +391,46 @@ class ChatConfirmFlowTest(unittest.TestCase):
                 self.assertEqual(detail_result[1]["type"], "table")
                 action_result = chat.handle("t6", "把事件ID为incident-real-001标记为已处置")
                 self.assertEqual(action_result[0]["type"], "approval_card")
+
+    def test_alert_detail_uses_alert_proof_after_alert_query(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                chat.handle("alert-detail-ctx", "查看近7天安全告警")
+                result = chat.handle("alert-detail-ctx", "查看第1个告警详情")
+                self.assertEqual([payload["type"] for payload in result], ["text", "table", "table", "table"])
+                self.assertEqual(result[0]["data"]["title"], "告警详情与举证")
+                self.assertIn("主机失陷活动", result[0]["data"]["text"])
+                self.assertEqual(result[2]["data"]["title"], "告警举证关键信息")
+                self.assertTrue(result[2]["data"]["rows"])
+
+    def test_alert_detail_supports_explicit_alert_uuid(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("alert-detail-explicit", "查看告警ID为alert-real-001的举证")
+                self.assertEqual(result[0]["data"]["title"], "告警详情与举证")
+                self.assertEqual(result[1]["data"]["rows"][0]["uuId"], "alert-real-001")
+
+    def test_alert_detail_bootstraps_recent_alerts_without_context(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                result = chat.handle("alert-detail-bootstrap", "查看第1个告警详情")
+                self.assertEqual(result[0]["data"]["title"], "告警详情与举证")
+                self.assertIn("alert-real-001", result[0]["data"]["text"])
+
+    def test_ambiguous_detail_uses_last_result_namespace(self):
+        with Session(engine) as session:
+            with patch("app.services.chat_service.get_requester_from_credential", return_value=FakeRequester()):
+                chat = ChatService(session)
+                chat.handle("detail-alert-first", "查看近7天安全告警")
+                alert_result = chat.handle("detail-alert-first", "查看第1个详情")
+                self.assertEqual(alert_result[0]["data"]["title"], "告警详情与举证")
+
+                chat.handle("detail-event-first", "查看近7天安全事件")
+                event_result = chat.handle("detail-event-first", "查看第1个详情")
+                self.assertEqual(event_result[0]["data"]["title"], "事件详情与举证")
 
     def test_entity_query_compatible_with_variant_response_shape(self):
         with Session(engine) as session:

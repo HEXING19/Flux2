@@ -45,6 +45,37 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
+def _first_dict(data: Any) -> dict[str, Any]:
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
+def _normalize_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if value in (None, ""):
+        return []
+    return [value]
+
+
+def _join_values(value: Any, default: str = "-") -> str:
+    items = [str(item).strip() for item in _normalize_list(value) if str(item).strip()]
+    return "、".join(items) if items else default
+
+
+def _label_from_code(value: Any, mapping: dict[int, str], default: str = "未知") -> str:
+    parsed = _to_int(value)
+    if parsed is None:
+        text = str(value or "").strip()
+        return text or default
+    return mapping.get(parsed, str(parsed))
+
+
 def extract_event_uuids_from_text(text: str) -> list[str]:
     if not text:
         return []
@@ -102,7 +133,7 @@ def extract_entity_items_from_response(response: dict[str, Any]) -> tuple[list[d
 def _looks_like_event_reference(text: str) -> bool:
     if not text:
         return False
-    has_event_word = any(token in text for token in ["事件", "告警"])
+    has_event_word = any(token in text for token in ["事件", "incident-"])
     has_reference = any(token in text for token in ["第", "前", "刚刚", "那个", "这条", "上一条", "全部", "所有", "剩下", "其余"])
     return has_event_word and has_reference
 
@@ -133,8 +164,47 @@ def _load_recent_event_candidates(skill: BaseSkill, session_id: str, limit: int 
     if not uuids:
         return []
     skill.context_manager.store_index_mapping(session_id, "events", uuids)
-    skill.context_manager.update_params(session_id, {"last_event_uuid": uuids[0], "last_event_uuids": uuids})
+    skill.context_manager.update_params(
+        session_id,
+        {"last_event_uuid": uuids[0], "last_event_uuids": uuids, "last_result_namespace": "events"},
+    )
     return items
+
+
+def _normalize_entity_status(value: Any) -> str:
+    if isinstance(value, dict):
+        status = str(value.get("status") or "").strip()
+        permanent = value.get("isPermanent")
+        expire_time = _format_ts(value.get("expireTime")) if value.get("expireTime") else ""
+        parts = [status or "-"]
+        if permanent is not None:
+            parts.append("永久" if permanent else "临时")
+        if expire_time and expire_time != "-":
+            parts.append(f"到期 {expire_time}")
+        return " / ".join(parts)
+    return str(value or "-")
+
+
+def _build_entity_rows(uid: str, entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for entity in entities:
+        rows.append(
+            {
+                "uuId": uid,
+                "ip": _pick(entity, "ip", "IP", "entityIp", "entityIP", "view", default="-"),
+                "port": _pick(entity, "port", default="-"),
+                "threatLevel": _pick(entity, "threatLevel", default="-"),
+                "location": _pick(entity, "location", default="-"),
+                "intelligenceTag": _join_values(_pick(entity, "intelligenceTag"), default="-"),
+                "mappingTag": _pick(entity, "mappingTag", default="-"),
+                "alertRole": _pick(entity, "alertRole", default="-"),
+                "edrDealStatusInfo": _normalize_entity_status(_pick(entity, "edrDealStatusInfo")),
+                "ndrDealStatusInfo": _normalize_entity_status(_pick(entity, "ndrDealStatusInfo")),
+                "dealSuggestion": _pick(entity, "dealSuggestion", default="-"),
+                "businessAffection": _pick(entity, "businessAffection", default="-"),
+            }
+        )
+    return rows
 
 
 def _build_event_candidate_rows(items: list[dict[str, Any]], *, limit: int = 10) -> list[dict[str, Any]]:
@@ -312,7 +382,10 @@ class EventQuerySkill(BaseSkill):
         uuids = [uid for uid in uuids if uid]
         self.context_manager.store_index_mapping(session_id, "events", uuids)
         if uuids:
-            self.context_manager.update_params(session_id, {"last_event_uuid": uuids[0], "last_event_uuids": uuids})
+            self.context_manager.update_params(
+                session_id,
+                {"last_event_uuid": uuids[0], "last_event_uuids": uuids, "last_result_namespace": "events"},
+            )
 
         rows = []
         for idx, item in enumerate(items, start=1):
@@ -359,6 +432,26 @@ class EventDetailSkill(BaseSkill):
     name = "EventDetailSkill"
     __init_schema__ = EventDetailInput
 
+    def _fetch_event_list_detail(self, uuid: str) -> dict[str, Any]:
+        response = self.requester.request(
+            "POST",
+            "/api/xdr/v1/incidents/list",
+            json_body={
+                "page": 1,
+                "pageSize": 5,
+                "uuIds": [uuid],
+                "sort": "endTime:desc,severity:desc",
+                "timeField": "endTime",
+            },
+        )
+        if response.get("code") != "Success":
+            return {}
+        items = response.get("data", {}).get("item", []) if isinstance(response.get("data"), dict) else []
+        for item in items:
+            if isinstance(item, dict) and str(_pick(item, "uuId", "uuid", "incidentId", default="")).strip() == uuid:
+                return item
+        return _first_dict(items)
+
     def execute(self, session_id: str, params: dict[str, Any], user_text: str) -> list[dict[str, Any]]:
         prepared = dict(params)
         ref_text = prepared.get("ref_text") or user_text
@@ -382,42 +475,59 @@ class EventDetailSkill(BaseSkill):
             )
 
         all_rows = []
+        entity_rows = []
         detail_text_chunks = []
         for uid in model.uuids[:5]:
+            list_data = self._fetch_event_list_detail(uid)
             proof_resp = self.requester.request("GET", f"/api/xdr/v1/incidents/{uid}/proof")
             proof_error = None
             if proof_resp.get("code") != "Success":
-                proof_data = {}
+                proof_data = dict(list_data)
                 proof_error = proof_resp.get("message") or "举证信息查询失败"
             else:
-                proof_data = (proof_resp.get("data") or [{}])[0]
+                proof_data = {**list_data, **_first_dict(proof_resp.get("data"))}
             entity_resp = self.requester.request("GET", f"/api/xdr/v1/incidents/{uid}/entities/ip")
             entities, entity_error = extract_entity_items_from_response(entity_resp)
+            entity_rows.extend(_build_entity_rows(uid, entities))
 
-            timelines = proof_data.get("alertTimeLine", [])
+            timelines = []
+            for timeline_key in ("alertTimeLine", "alertTimeline", "incidentTimeLines", "incidentTimeline"):
+                value = proof_data.get(timeline_key)
+                if isinstance(value, list):
+                    timelines = [item for item in value if isinstance(item, dict)]
+                    break
             for event in timelines:
+                proof = event.get("proof") if isinstance(event.get("proof"), dict) else {}
                 all_rows.append(
                     {
                         "uuId": uid,
+                        "alertId": _pick(event, "alertId", "uuId", "uuid", default="-"),
                         "name": event.get("name"),
-                        "severity": event.get("severity"),
+                        "severity": _label_from_code(event.get("severity"), SEVERITY_LABEL, default=str(event.get("severity") or "-")),
                         "stage": event.get("stage"),
                         "lastTime": _format_ts(event.get("lastTime")),
+                        "threatSubTypeDesc": _pick(event, "threatSubTypeDesc", default="-"),
+                        "srcIp": _join_values(_pick(proof, "srcIps", "srcIp", default=_pick(event, "srcIps", "srcIp")), default="-"),
+                        "dstIp": _join_values(_pick(proof, "dstIps", "dstIp", default=_pick(event, "dstIps", "dstIp")), default="-"),
+                        "proofType": _pick(proof, "dataType", "proofType", default="-"),
                     }
                 )
 
             entity_ip = entities[0].get("ip") if entities else ("查询失败" if entity_error else "N/A")
-            risk_tags = proof_data.get("riskTag", [])
-            if isinstance(risk_tags, str):
-                risk_tag_text = risk_tags
-            elif isinstance(risk_tags, list):
-                risk_tag_text = ",".join(str(tag) for tag in risk_tags if tag)
-            else:
-                risk_tag_text = ""
+            risk_tag_text = _join_values(proof_data.get("riskTag"), default="无")
+            severity = _label_from_code(_pick(proof_data, "severity", "incidentSeverity"), SEVERITY_LABEL)
+            status = _label_from_code(_pick(proof_data, "dealStatus", "status"), DEAL_STATUS_LABEL, default="-")
+            recent_time = _format_ts(_pick(proof_data, "endTime", "lastTime", "latestTime", "occurTime", default=0))
+            ai_result = proof_data.get("gptResultDescription", "暂无") if not proof_error else f"查询失败: {proof_error}"
             detail_text_chunks.append(
                 f"事件 {uid}: {_pick(proof_data, 'name', 'incidentName', default='未知')}\n"
-                f"- AI研判: {proof_data.get('gptResultDescription', '暂无') if not proof_error else f'查询失败: {proof_error}'}\n"
-                f"- 风险标签: {risk_tag_text or '无'}\n"
+                f"- 等级/状态: {severity} / {status}\n"
+                f"- 最近发生: {recent_time}\n"
+                f"- 受影响主机: {_pick(proof_data, 'hostIp', 'assetIp', default='-')}\n"
+                f"- 事件定性: {_join_values(_pick(proof_data, 'eventThreatDefine', 'threatDefineName'), default='-')}\n"
+                f"- 风险标签: {risk_tag_text}\n"
+                f"- 数据源: {_join_values(_pick(proof_data, 'dataSource', 'devSourceNames', 'devSourceName'), default='-')}\n"
+                f"- AI研判: {ai_result}\n"
                 f"- 外网IP实体: {entity_ip}"
             )
             if entity_ip != "N/A":
@@ -429,13 +539,37 @@ class EventDetailSkill(BaseSkill):
                 title="事件攻击时间线",
                 columns=[
                     {"key": "uuId", "label": "事件ID"},
+                    {"key": "alertId", "label": "告警ID"},
                     {"key": "name", "label": "告警名称"},
                     {"key": "severity", "label": "告警等级"},
                     {"key": "stage", "label": "阶段"},
                     {"key": "lastTime", "label": "时间"},
+                    {"key": "threatSubTypeDesc", "label": "三级分类"},
+                    {"key": "srcIp", "label": "源IP"},
+                    {"key": "dstIp", "label": "目的IP"},
+                    {"key": "proofType", "label": "举证类型"},
                 ],
                 rows=all_rows,
                 namespace="event_timeline",
+            ),
+            table_payload(
+                title="事件外网实体",
+                columns=[
+                    {"key": "uuId", "label": "事件ID"},
+                    {"key": "ip", "label": "IP"},
+                    {"key": "port", "label": "端口"},
+                    {"key": "threatLevel", "label": "威胁等级"},
+                    {"key": "location", "label": "地理位置"},
+                    {"key": "intelligenceTag", "label": "情报标签"},
+                    {"key": "mappingTag", "label": "测绘标签"},
+                    {"key": "alertRole", "label": "告警角色"},
+                    {"key": "edrDealStatusInfo", "label": "端侧处置"},
+                    {"key": "ndrDealStatusInfo", "label": "网侧处置"},
+                    {"key": "dealSuggestion", "label": "处置建议"},
+                    {"key": "businessAffection", "label": "业务影响"},
+                ],
+                rows=entity_rows,
+                namespace="event_entities",
             ),
         ]
 
