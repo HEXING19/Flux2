@@ -3,6 +3,8 @@ const state = {
   conversationScopeKey: '',
   conversations: [],
   activeConversationId: null,
+  isConversationManageMode: false,
+  selectedConversationIds: new Set(),
   isConversationSidebarCollapsed: false,
   isAuthenticated: false,
   xdrBaseUrl: '',
@@ -213,6 +215,11 @@ const el = {
   saveSemanticRuleBtn: document.getElementById('saveSemanticRule'),
 
   newConversationBtn: document.getElementById('newConversationBtn'),
+  manageConversationsBtn: document.getElementById('manageConversationsBtn'),
+  conversationManagePanel: document.getElementById('conversationManagePanel'),
+  selectedConversationCount: document.getElementById('selectedConversationCount'),
+  clearSelectedConversationsBtn: document.getElementById('clearSelectedConversationsBtn'),
+  clearAllConversationsBtn: document.getElementById('clearAllConversationsBtn'),
   chatPanel: document.getElementById('chatPanel'),
   conversationSidebar: document.getElementById('conversationSidebar'),
   toggleConversationSidebarBtn: document.getElementById('toggleConversationSidebarBtn'),
@@ -513,6 +520,63 @@ function getActiveConversation() {
   return getConversationById(state.activeConversationId);
 }
 
+function getSelectedConversationIds() {
+  return Array.from(state.selectedConversationIds || []);
+}
+
+function pruneSelectedConversations() {
+  const existingIds = new Set(state.conversations.map((conversation) => conversation.id));
+  getSelectedConversationIds().forEach((conversationId) => {
+    if (!existingIds.has(conversationId)) {
+      state.selectedConversationIds.delete(conversationId);
+    }
+  });
+}
+
+function setConversationManageMode(enabled) {
+  state.isConversationManageMode = !!enabled;
+  if (!state.isConversationManageMode) {
+    state.selectedConversationIds.clear();
+  }
+  renderConversationList();
+}
+
+function toggleConversationSelection(conversationId, selected) {
+  if (!conversationId) return;
+  if (selected) {
+    state.selectedConversationIds.add(conversationId);
+  } else {
+    state.selectedConversationIds.delete(conversationId);
+  }
+  renderConversationList();
+}
+
+function updateConversationManageControls() {
+  const inFlight = isChatRequestInFlight();
+  const isDisabled = inFlight || !state.isAuthenticated;
+  const selectedCount = state.selectedConversationIds.size;
+  const totalCount = state.conversations.length;
+  const isManageMode = !!state.isConversationManageMode;
+
+  if (el.manageConversationsBtn) {
+    el.manageConversationsBtn.disabled = isDisabled || !totalCount;
+    el.manageConversationsBtn.textContent = isManageMode ? '完成' : '管理';
+    el.manageConversationsBtn.setAttribute('aria-pressed', String(isManageMode));
+  }
+  if (el.conversationManagePanel) {
+    el.conversationManagePanel.classList.toggle('hidden', !isManageMode);
+  }
+  if (el.selectedConversationCount) {
+    el.selectedConversationCount.textContent = `已选择 ${selectedCount} 个会话，共 ${totalCount} 个`;
+  }
+  if (el.clearSelectedConversationsBtn) {
+    el.clearSelectedConversationsBtn.disabled = isDisabled || !selectedCount;
+  }
+  if (el.clearAllConversationsBtn) {
+    el.clearAllConversationsBtn.disabled = isDisabled || !totalCount;
+  }
+}
+
 function persistConversationScope() {
   if (!state.conversationScopeKey) return;
   const store = readConversationStore();
@@ -589,24 +653,54 @@ function setConversationPlaybookRun(conversationId, runId, opts = {}) {
 }
 
 function buildConversationItem(conversation) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'conversation-item';
-  button.dataset.conversationId = conversation.id;
-  if (conversation.id === state.activeConversationId) {
-    button.classList.add('active');
+  const isManageMode = !!state.isConversationManageMode;
+  const item = document.createElement(isManageMode ? 'label' : 'button');
+  if (!isManageMode) {
+    item.type = 'button';
   }
-  button.disabled = isChatRequestInFlight() || !state.isAuthenticated;
+  item.className = 'conversation-item';
+  item.dataset.conversationId = conversation.id;
+  if (conversation.id === state.activeConversationId) {
+    item.classList.add('active');
+  }
+  if (state.selectedConversationIds.has(conversation.id)) {
+    item.classList.add('selected');
+  }
+
+  const disabled = isChatRequestInFlight() || !state.isAuthenticated;
+  if (isManageMode) {
+    item.classList.add('conversation-item-selectable');
+    item.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    if (disabled) {
+      item.classList.add('disabled');
+    }
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'conversation-item-checkbox';
+    checkbox.checked = state.selectedConversationIds.has(conversation.id);
+    checkbox.disabled = disabled;
+    checkbox.setAttribute('aria-label', `选择会话：${conversation.title}`);
+    checkbox.onchange = () => {
+      toggleConversationSelection(conversation.id, checkbox.checked);
+    };
+    item.appendChild(checkbox);
+  } else {
+    item.disabled = disabled;
+  }
+
+  const body = document.createElement('span');
+  body.className = 'conversation-item-body';
 
   const title = document.createElement('span');
   title.className = 'conversation-item-title';
   title.textContent = conversation.title;
-  button.appendChild(title);
+  body.appendChild(title);
 
   const preview = document.createElement('span');
   preview.className = 'conversation-item-preview';
   preview.textContent = conversation.preview || '等待新的安全运营指令';
-  button.appendChild(preview);
+  body.appendChild(preview);
 
   const meta = document.createElement('div');
   meta.className = 'conversation-item-meta';
@@ -617,9 +711,14 @@ function buildConversationItem(conversation) {
   badge.className = 'conversation-item-badge';
   badge.textContent = conversation.entries.length ? `${conversation.entries.length} 条记录` : '空会话';
   meta.appendChild(badge);
-  button.appendChild(meta);
+  body.appendChild(meta);
+  item.appendChild(body);
 
-  button.onclick = async () => {
+  if (isManageMode) {
+    return item;
+  }
+
+  item.onclick = async () => {
     if (conversation.id === state.activeConversationId) return;
     if (isChatRequestInFlight()) {
       flashChatBusyNotice();
@@ -628,11 +727,12 @@ function buildConversationItem(conversation) {
     await activateConversation(conversation.id);
   };
 
-  return button;
+  return item;
 }
 
 function renderConversationList() {
   if (!el.conversationList) return;
+  pruneSelectedConversations();
   el.conversationList.innerHTML = '';
   state.conversations.forEach((conversation) => {
     el.conversationList.appendChild(buildConversationItem(conversation));
@@ -640,6 +740,7 @@ function renderConversationList() {
   if (el.newConversationBtn) {
     el.newConversationBtn.disabled = isChatRequestInFlight() || !state.isAuthenticated;
   }
+  updateConversationManageControls();
 }
 
 function createWelcomeCard() {
@@ -810,6 +911,80 @@ async function createNewConversation(opts = {}) {
   return conversation;
 }
 
+async function clearBackendConversationSessions(sessionIds) {
+  const normalizedSessionIds = dedupText(sessionIds || []).filter(Boolean);
+  if (!normalizedSessionIds.length) return;
+  await api('/api/chat/sessions/clear', {
+    method: 'POST',
+    body: JSON.stringify({ session_ids: normalizedSessionIds }),
+  });
+}
+
+async function clearConversationsByIds(conversationIds, opts = {}) {
+  if (isChatRequestInFlight()) {
+    flashChatBusyNotice();
+    return false;
+  }
+  if (!state.isAuthenticated) return false;
+
+  const requestedIds = new Set(conversationIds || []);
+  const conversationsToRemove = state.conversations.filter((conversation) => requestedIds.has(conversation.id));
+  if (!conversationsToRemove.length) return false;
+
+  if (opts.confirmMessage) {
+    const confirmed = await openDangerConfirm(opts.confirmMessage, null, {
+      title: '清除会话确认',
+      confirmText: '确认清除',
+      cancelText: '取消',
+    });
+    if (!confirmed) return false;
+  }
+
+  const sessionIds = conversationsToRemove.map((conversation) => conversation.sessionId).filter(Boolean);
+  try {
+    await clearBackendConversationSessions(sessionIds);
+  } catch (err) {
+    window.alert(err.message || '清除会话失败，请稍后重试。');
+    return false;
+  }
+
+  const removedIds = new Set(conversationsToRemove.map((conversation) => conversation.id));
+  state.conversations = sortConversations(state.conversations.filter((conversation) => !removedIds.has(conversation.id)));
+  state.selectedConversationIds.clear();
+  state.isConversationManageMode = false;
+
+  const nextActiveConversation = state.conversations.find((conversation) => conversation.id === state.activeConversationId)
+    || state.conversations[0]
+    || null;
+
+  if (nextActiveConversation) {
+    state.activeConversationId = nextActiveConversation.id;
+    await restoreConversation(nextActiveConversation, { focusInput: false });
+    return true;
+  }
+
+  state.activeConversationId = null;
+  persistConversationScope();
+  await createNewConversation({ focusInput: false });
+  return true;
+}
+
+async function clearSelectedConversations() {
+  const selectedIds = getSelectedConversationIds();
+  if (!selectedIds.length) return false;
+  return clearConversationsByIds(selectedIds, {
+    confirmMessage: `确定要删除选中的 ${selectedIds.length} 个会话吗？该操作不可恢复。`,
+  });
+}
+
+async function clearAllConversations() {
+  const allConversationIds = state.conversations.map((conversation) => conversation.id);
+  if (!allConversationIds.length) return false;
+  return clearConversationsByIds(allConversationIds, {
+    confirmMessage: `确定要清空当前会话列表中的 ${allConversationIds.length} 个会话吗？该操作不可恢复。`,
+  });
+}
+
 async function ensureConversationScope(baseUrl) {
   const scopeKey = normalizeConversationScope(baseUrl);
   const store = readConversationStore();
@@ -822,6 +997,8 @@ async function ensureConversationScope(baseUrl) {
 
   state.conversationScopeKey = scopeKey;
   state.conversations = conversations;
+  state.isConversationManageMode = false;
+  state.selectedConversationIds.clear();
 
   if (!state.conversations.length) {
     await createNewConversation({ focusInput: false });
@@ -840,6 +1017,8 @@ function clearConversationRuntimeState() {
   state.conversationScopeKey = '';
   state.conversations = [];
   state.activeConversationId = null;
+  state.isConversationManageMode = false;
+  state.selectedConversationIds.clear();
   if (el.conversationList) {
     el.conversationList.innerHTML = '';
   }
@@ -5496,19 +5675,40 @@ async function readSSEStream(response, requestState) {
   throw new Error('响应流意外结束，请稍后重试。');
 }
 
-function openDangerConfirm(text, onConfirm) {
-  el.dangerText.textContent = text;
-  openDialog(el.dangerDialog);
+function openDangerConfirm(text, onConfirm, options = {}) {
   const confirmBtn = document.getElementById('dangerConfirm');
   const cancelBtn = document.getElementById('dangerCancel');
+  const titleNode = el.dangerDialog?.querySelector('.dialog-header h3');
+  const defaultTitle = titleNode?.textContent || '特权操作二次熔断确认';
+  const defaultConfirmText = confirmBtn?.textContent || '通过审计并下发执行';
+  const defaultCancelText = cancelBtn?.textContent || '撤销操作指令';
+  const restoreDangerDialogCopy = () => {
+    if (titleNode) titleNode.textContent = defaultTitle;
+    if (confirmBtn) confirmBtn.textContent = defaultConfirmText;
+    if (cancelBtn) cancelBtn.textContent = defaultCancelText;
+  };
 
-  confirmBtn.onclick = async () => {
-    closeDialog(el.dangerDialog);
-    await onConfirm();
-  };
-  cancelBtn.onclick = () => {
-    closeDialog(el.dangerDialog);
-  };
+  if (titleNode) titleNode.textContent = options.title || defaultTitle;
+  if (confirmBtn) confirmBtn.textContent = options.confirmText || defaultConfirmText;
+  if (cancelBtn) cancelBtn.textContent = options.cancelText || defaultCancelText;
+  el.dangerText.textContent = text;
+  openDialog(el.dangerDialog);
+
+  return new Promise((resolve) => {
+    confirmBtn.onclick = async () => {
+      closeDialog(el.dangerDialog);
+      restoreDangerDialogCopy();
+      if (typeof onConfirm === 'function') {
+        await onConfirm();
+      }
+      resolve(true);
+    };
+    cancelBtn.onclick = () => {
+      closeDialog(el.dangerDialog);
+      restoreDangerDialogCopy();
+      resolve(false);
+    };
+  });
 }
 
 function renderList(container, items, render) {
@@ -6413,7 +6613,31 @@ if (el.newConversationBtn) {
       flashChatBusyNotice();
       return;
     }
+    state.isConversationManageMode = false;
+    state.selectedConversationIds.clear();
     await createNewConversation();
+  };
+}
+
+if (el.manageConversationsBtn) {
+  el.manageConversationsBtn.onclick = () => {
+    if (isChatRequestInFlight()) {
+      flashChatBusyNotice();
+      return;
+    }
+    setConversationManageMode(!state.isConversationManageMode);
+  };
+}
+
+if (el.clearSelectedConversationsBtn) {
+  el.clearSelectedConversationsBtn.onclick = async () => {
+    await clearSelectedConversations();
+  };
+}
+
+if (el.clearAllConversationsBtn) {
+  el.clearAllConversationsBtn.onclick = async () => {
+    await clearAllConversations();
   };
 }
 

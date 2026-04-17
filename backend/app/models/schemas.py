@@ -157,6 +157,27 @@ class ChatRequest(BaseModel):
         return text
 
 
+class ChatSessionClearRequest(BaseModel):
+    session_ids: list[str] = Field(min_length=1, max_length=200)
+
+    @field_validator("session_ids")
+    @classmethod
+    def validate_session_ids(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for idx, item in enumerate(value, start=1):
+            session_id = clean_text(item)
+            if not session_id:
+                raise ValueError(f"session_ids[{idx}] 不能为空。")
+            if session_id in seen:
+                continue
+            seen.add(session_id)
+            normalized.append(session_id)
+        if not normalized:
+            raise ValueError("session_ids 不能为空。")
+        return normalized
+
+
 class Payload(BaseModel):
     type: Literal["text", "table", "echarts_graph", "approval_card", "form_card", "quick_actions"]
     data: dict[str, Any]

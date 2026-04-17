@@ -165,6 +165,13 @@ class SkillContextManager:
     def peek_pending_form(self, session_id: str) -> dict[str, Any] | None:
         return self._get_or_create(session_id).pending_form
 
+    def clear_sessions(self, session_ids: list[str]) -> None:
+        if not session_ids:
+            return
+        with self._lock:
+            for session_id in session_ids:
+                self._sessions.pop(session_id, None)
+
     def resolve_indices(self, session_id: str, namespace: str, utterance: str) -> list[str]:
         ids = self.get_index_mapping(session_id, namespace)
         if not ids:

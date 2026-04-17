@@ -104,7 +104,17 @@
                 <h3>会话列表</h3>
               </div>
             </div>
-            <button id="newConversationBtn" type="button" class="primary-btn">新建会话</button>
+            <div class="conversation-sidebar-actions">
+              <button id="newConversationBtn" type="button" class="primary-btn">新建会话</button>
+              <button id="manageConversationsBtn" type="button" class="secondary-btn conversation-manage-toggle">管理</button>
+            </div>
+            <div id="conversationManagePanel" class="conversation-manage-panel hidden" aria-live="polite">
+              <div id="selectedConversationCount" class="conversation-manage-count">已选择 0 个会话</div>
+              <div class="conversation-manage-actions">
+                <button id="clearSelectedConversationsBtn" type="button" class="danger-btn">删除所选</button>
+                <button id="clearAllConversationsBtn" type="button" class="danger-btn">清空全部</button>
+              </div>
+            </div>
           </div>
           <div id="conversationList" class="conversation-list" aria-label="会话列表"></div>
         </aside>
